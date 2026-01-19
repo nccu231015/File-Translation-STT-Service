@@ -1,7 +1,7 @@
 import os
 import shutil
 import tempfile
-from fastapi import FastAPI, UploadFile, File, HTTPException, Body, Response
+from fastapi import FastAPI, UploadFile, File, HTTPException, Body, Response, Form
 from fastapi.middleware.cors import CORSMiddleware
 from app.services.stt_service import stt_service
 from app.services.llm_service import llm_service
@@ -37,18 +37,28 @@ app.add_middleware(
 async def read_root():
     # Serve the React App index.html at the root
     if os.path.exists(os.path.join(frontend_dist, "index.html")):
-        return FileResponse(os.path.join(frontend_dist, "index.html"))
+        response = FileResponse(os.path.join(frontend_dist, "index.html"))
+        # Disable caching to ensure frontend updates are seen immediately
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
     return {"message": "STT Backend is running (Frontend not found)"}
 
 
 @app.post("/stt")
-async def transcribe_audio(file: UploadFile = File(...)):
+async def transcribe_audio(
+    file: UploadFile = File(...), 
+    mode: str = Form("chat")  # Options: "chat", "meeting"
+):
     """
-    Receives an audio file, transcribes it, and then sends the text to LLM for a response.
+    Receives an audio file, transcribes it.
+    - If mode="chat": Sends text to LLM for immediate chat response.
+    - If mode="meeting": Analyzes text for meeting minutes (Summary, Decision, Actions) and returns file.
     """
     # Create a temporary file to save the uploaded audio
     try:
-        print(f"Received file: {file.filename}, Content-Type: {file.content_type}")
+        print(f"Received file: {file.filename}, Mode: {mode}, Content-Type: {file.content_type}")
         with tempfile.NamedTemporaryFile(
             delete=False, suffix=os.path.splitext(file.filename)[1]
         ) as temp_file:
@@ -61,23 +71,54 @@ async def transcribe_audio(file: UploadFile = File(...)):
         # Clean up audio file
         os.remove(temp_file_path)
 
-        # Get LLM response based on the transcribed text
         user_text = stt_result["text"]
-        print(f"Transcription Result: {user_text}")
+        print(f"Transcription Result (First 100 chars): {user_text[:100]}...")
 
         if not user_text.strip():
-            print("Warning: Transcription is empty. Skipping LLM.")
-            llm_response = "（未偵測到語音內容）"
-        else:
-            print("Sending to LLM...")
-            llm_response = llm_service.chat(user_text)
-            print("LLM Response received.")
+            return {"transcription": stt_result, "llm_response": "（未偵測到語音內容）"}
 
-        # Return both transcription and LLM response
-        return {"transcription": stt_result, "llm_response": llm_response}
+        # --- CHAT MODE ---
+        if mode == "chat":
+            print("Mode: Chat - Sending to LLM...")
+            llm_response = llm_service.chat(user_text)
+            return {"transcription": stt_result, "llm_response": llm_response}
+
+        # --- MEETING MODE ---
+        elif mode == "meeting":
+            print("Mode: Meeting - Analyzing Transcript...")
+            analysis = llm_service.analyze_meeting_transcript(user_text)
+            
+            # Create a formatted TXT file response
+            output_filename = f"meeting_minutes_{os.path.splitext(file.filename)[0]}.txt"
+            output_content = (
+                f"=== 會議記錄 ===\n"
+                f"檔案名稱: {file.filename}\n"
+                f"處理模式: 會議錄製\n\n"
+                f"--- 逐字稿 ---\n{user_text}\n\n"
+                f"--- 重點摘要 ---\n{analysis.get('summary', '無')}\n\n"
+                f"--- 決策事項 ---\n" + "\n".join([f"- {d}" for d in analysis.get("decisions", [])]) + "\n\n"
+                f"--- 待辦清單 ---\n" + "\n".join([f"- {a}" for a in analysis.get("action_items", [])])
+            )
+            
+            # Save to a temp location if needed, or just return content directly?
+            # Current frontend expects 'filename' and 'content' for download or display?
+            # Let's match the structure of PDF response slightly for consistency if needed,
+            # or return a specific structure for the new frontend.
+            
+            return {
+                "transcription": stt_result,
+                "analysis": analysis,
+                "file_download": {
+                    "filename": output_filename,
+                    "content": output_content
+                }
+            }
+        
+        else:
+             raise HTTPException(status_code=400, detail=f"Invalid mode: {mode}")
 
     except Exception as e:
-        # Ensure cleanup in case of error
+        # Ensure cleanup
         if "temp_file_path" in locals() and os.path.exists(temp_file_path):
             os.remove(temp_file_path)
         raise HTTPException(status_code=500, detail=str(e))
@@ -193,7 +234,11 @@ if os.path.exists(frontend_dist):
         # Check if index.html exists
         index_path = os.path.join(frontend_dist, "index.html")
         if os.path.exists(index_path):
-            return FileResponse(index_path)
+            response = FileResponse(index_path)
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+            return response
         return Response("Frontend not built or index.html missing", status_code=404)
 else:
     print(

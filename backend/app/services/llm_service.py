@@ -4,6 +4,7 @@ import os
 import json
 from dotenv import load_dotenv
 from opencc import OpenCC
+import re
 
 load_dotenv()
 
@@ -140,6 +141,126 @@ class LLMService:
         except Exception as e:
             print(f"Error communicating with Ollama: {e}")
             return "抱歉，我現在無法連接到語言模型。"
+
+
+
+    def _clean_llm_response(self, text: str) -> str:
+        """
+        Removes common conversational filler prefixes and <think> blocks from LLM output.
+        """
+        # 1. Remove <think>...</think> blocks (common in reasoning models)
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+
+        # 2. Remove localized filler prefixes
+        prefixes_to_remove = [
+            "Here is the result:",
+            "Sure!",
+            "Summary:",
+            "Action Items:",
+            "好的，",
+            "當然，",
+            "這是分析結果：",
+        ]
+
+        cleaned = text.strip()
+        for prefix in prefixes_to_remove:
+            if cleaned.lower().startswith(prefix.lower()):
+                cleaned = cleaned[len(prefix) :].strip()
+
+        return cleaned
+
+    def analyze_meeting_transcript(self, text: str) -> dict:
+        """
+        Analyzes a meeting transcript to extract summary, decisions, and action items.
+        Uses Map-Reduce for long texts.
+        """
+        print("[LLM] Starting meeting analysis...")
+        chunk_size = 3000
+        
+        # Simple case: Short text
+        if len(text) <= chunk_size:
+            return self._analyze_chunk(text, final=True)
+
+        # Long text: Map-Reduce
+        print("[LLM] Transcript is long. Starting Map-Reduce analysis...")
+        chunks = [text[i : i + chunk_size] for i in range(0, len(text), chunk_size)]
+        partial_results = []
+
+        for idx, chunk in enumerate(chunks):
+            print(f"[LLM] Analyzing chunk {idx + 1}/{len(chunks)}...")
+            partial = self._analyze_chunk(chunk, final=False)
+            if partial:
+                partial_results.append(partial)
+
+        # Reduce
+        print("[LLM] Synthesizing final meeting minutes...")
+        combined_text = "\n\n".join([json.dumps(p, ensure_ascii=False) for p in partial_results])
+        final_result = self._analyze_chunk(combined_text, final=True, is_reduce_step=True)
+        
+        return final_result
+
+    def _analyze_chunk(self, text: str, final: bool = False, is_reduce_step: bool = False) -> dict:
+        """
+        Helper to call LLM for meeting analysis. 
+        Returns a dict with 'summary', 'decisions', 'action_items'.
+        """
+        if is_reduce_step:
+            prompt = (
+                "You are an expert meeting secretary. "
+                "Below is a collection of partial meeting analysis results. "
+                "Please synthesize them into a single, cohesive set of meeting minutes in Traditional Chinese (Taiwan, zh-TW).\n"
+                "Structure your response strictly as a JSON object with keys: 'summary', 'decisions', 'action_items'.\n"
+                "1. 'summary': A comprehensive summary of the entire meeting.\n"
+                "2. 'decisions': A consolidated list of key decisions made.\n"
+                "3. 'action_items': A consolidated list of tasks (Who - What - When).\n"
+                "CRITICAL: Output ONLY valid JSON."
+            )
+        else:
+            prompt = (
+                "You are an expert meeting secretary. "
+                "Analyze the following meeting transcript segment in Traditional Chinese (Taiwan, zh-TW).\n"
+                "Extract:\n"
+                "1. Key discussion points (Summary)\n"
+                "2. Decisions made (Decisions)\n"
+                "3. Action items (Tasks)\n"
+                "Structure your response strictly as a JSON object with keys: 'summary', 'decisions', 'action_items'.\n"
+                "CRITICAL: Output ONLY valid JSON."
+            )
+
+        messages = [
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": f"Transcript/Context:\n{text}"}
+        ]
+
+        try:
+            response = self.client.chat(model=self.model, messages=messages, format="json")
+            content = response["message"]["content"]
+            
+            # Clean and Parse JSON
+            # Sometimes models output text before JSON despite format="json"
+            content = self._clean_llm_response(content)
+            
+            try:
+                data = json.loads(content)
+                # Convert to Traditional Chinese
+                if isinstance(data.get("summary"), str):
+                    data["summary"] = self.s2tw.convert(data["summary"])
+                if isinstance(data.get("decisions"), list):
+                    data["decisions"] = [self.s2tw.convert(str(d)) for d in data["decisions"]]
+                if isinstance(data.get("action_items"), list):
+                    data["action_items"] = [self.s2tw.convert(str(a)) for a in data["action_items"]]
+                return data
+            except json.JSONDecodeError:
+                print(f"[LLM] JSON Parse Error: {content[:100]}...")
+                return {
+                    "summary": self.s2tw.convert(content), 
+                    "decisions": [], 
+                    "action_items": []
+                }
+
+        except Exception as e:
+            print(f"[LLM] Analysis error: {e}")
+            return {"summary": "分析失敗", "decisions": [], "action_items": []}
 
 
 # Global instance

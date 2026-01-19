@@ -3,6 +3,7 @@ import React, { useState, useRef } from 'react';
 const InputArea = ({ onSendMessage, onSendAudio, onSendFile }) => {
     const [inputText, setInputText] = useState('');
     const [isRecording, setIsRecording] = useState(false);
+    const [mode, setMode] = useState('chat'); // 'chat' | 'meeting'
     const mediaRecorderRef = useRef(null);
     const audioChunksRef = useRef([]);
 
@@ -53,7 +54,7 @@ const InputArea = ({ onSendMessage, onSendAudio, onSendFile }) => {
                     }
 
                     const audioFile = new File([audioBlob], "recording.webm", { type: 'audio/webm' });
-                    onSendAudio(audioFile);
+                    onSendAudio(audioFile, mode); // Pass current mode
 
                     stream.getTracks().forEach(track => track.stop());
                 };
@@ -75,12 +76,14 @@ const InputArea = ({ onSendMessage, onSendAudio, onSendFile }) => {
         if (file) {
             // Check if PDF
             if (file.type === "application/pdf") {
-                // Propagate up to App.jsx to handle the upload API call
-                // We reuse a new prop or existing one? 
-                // Let's create a new prop onSendFile
                 if (onSendFile) onSendFile(file);
-            } else {
-                alert("Please upload a PDF file.");
+            }
+            // Check if Audio
+            else if (file.type.startsWith("audio/")) {
+                if (onSendFile) onSendFile(file);
+            }
+            else {
+                alert("Please upload a PDF or Audio file.");
             }
         }
     };
@@ -93,7 +96,7 @@ const InputArea = ({ onSendMessage, onSendAudio, onSendFile }) => {
                     type="file"
                     ref={fileInputRef}
                     className="hidden"
-                    accept=".pdf"
+                    accept=".pdf,.mp3,.wav,.m4a"
                     onChange={handleFileChange}
                 />
 
@@ -101,7 +104,7 @@ const InputArea = ({ onSendMessage, onSendAudio, onSendFile }) => {
                 <button
                     onClick={() => fileInputRef.current.click()}
                     className="p-3 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100 transition-colors"
-                    title="Upload PDF for Translation"
+                    title="Upload PDF or Audio File"
                 >
                     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" /></svg>
                 </button>
@@ -144,10 +147,29 @@ const InputArea = ({ onSendMessage, onSendAudio, onSendFile }) => {
                     </button>
                 )}
             </div>
-            <div className="max-w-3xl mx-auto text-center mt-2">
+            <div className="max-w-3xl mx-auto text-center mt-2 flex justify-between items-center px-2">
                 <span className="text-xs text-gray-400">
-                    {isRecording ? "Recording... Click stop to send." : "Click microphone to start recording"}
+                    {mode === 'chat'
+                        ? (isRecording ? "Recording Chat... Click to send." : "Chat Mode: Click mic to speak")
+                        : (isRecording ? "Recording Meeting... Click to analyze." : "Meeting Mode: Records & Generates Minutes")
+                    }
                 </span>
+
+                {/* Mode Switcher */}
+                <div className="bg-gray-100 p-1 rounded-lg flex text-xs font-medium">
+                    <button
+                        onClick={() => setMode('chat')}
+                        className={`px-3 py-1 rounded-md transition-all ${mode === 'chat' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                    >
+                        💬 Chat
+                    </button>
+                    <button
+                        onClick={() => setMode('meeting')}
+                        className={`px-3 py-1 rounded-md transition-all ${mode === 'meeting' ? 'bg-white text-purple-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                    >
+                        📝 Meeting
+                    </button>
+                </div>
             </div>
         </div>
     );

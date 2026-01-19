@@ -35,13 +35,14 @@ function App() {
     }
   };
 
-  const handleSendAudio = async (audioFile) => {
-    console.log("Sending audio to backend...", audioFile);
+  const handleSendAudio = async (audioFile, mode = 'chat') => {
+    console.log(`Sending audio to backend (Mode: ${mode})...`, audioFile);
     setIsLoading(true);
 
     // Create form data
     const formData = new FormData();
     formData.append('file', audioFile);
+    formData.append('mode', mode);
 
     try {
       const response = await fetch('/stt', {
@@ -58,8 +59,42 @@ function App() {
       // 1. Show what the user said (Transcription)
       addMessage(data.transcription.text, 'user', 'audio');
 
-      // 2. Show LLM response
-      addMessage(data.llm_response, 'system');
+      // 2. Handle Response based on Mode
+      if (mode === 'chat') {
+        addMessage(data.llm_response, 'system');
+      } else if (mode === 'meeting') {
+        // Meeting Mode: Show Summary and trigger download
+        const analysis = data.analysis;
+        const downloadInfo = data.file_download;
+
+        // Format for Chat Display
+        const displayContent = `
+📋 **會議重點摘要**
+${analysis.summary}
+
+✅ **決策事項**
+${analysis.decisions.map(d => `- ${d}`).join('\n')}
+
+⚡ **待辦清單**
+${analysis.action_items.map(a => `- ${a}`).join('\n')}
+          `.trim();
+
+        addMessage(displayContent, 'system', 'meeting-result');
+
+        // Trigger Download
+        if (downloadInfo) {
+          const blob = new Blob([downloadInfo.content], { type: 'text/plain' });
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = downloadInfo.filename;
+          document.body.appendChild(a);
+          a.click();
+          window.URL.revokeObjectURL(url);
+          document.body.removeChild(a);
+          addMessage(`📥 會議記錄已自動下載: ${downloadInfo.filename}`, 'system');
+        }
+      }
 
     } catch (error) {
       console.error("Transcription error:", error);
@@ -71,6 +106,18 @@ function App() {
 
   const handleSendFile = async (file) => {
     setIsLoading(true);
+
+    // Check if Audio File -> Route to Meeting Mode
+    if (file.type.startsWith('audio/')) {
+      addMessage(`Uploading Audio for Meeting Analysis: ${file.name}...`, 'user');
+      // Retrieve explicit mode? For file upload, we can assume 'meeting' mode is the primary intent for uploading long audio
+      // or we could inspect the 'mode' state if we passed it up, but usually uploading a file implies full processing.
+      // Let's force 'meeting' mode for uploaded audio files as requested.
+      await handleSendAudio(file, 'meeting');
+      return;
+    }
+
+    // PDF Flow
     addMessage(`Uploading PDF: ${file.name}...`, 'user');
 
     const formData = new FormData();
@@ -130,7 +177,7 @@ function App() {
       <header className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between shadow-sm z-10">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold">A</div>
-          <h1 className="font-semibold text-lg tracking-tight">AI Assistant</h1>
+          <h1 className="font-semibold text-lg tracking-tight">AI Assistant v2.0 (Meeting Mode)</h1>
         </div>
         <div>
           {isLoading && <span className="text-sm text-blue-600 animate-pulse font-medium">Processing...</span>}

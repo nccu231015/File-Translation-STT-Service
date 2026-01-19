@@ -1,41 +1,69 @@
-import mlx_whisper
 import time
-
+from faster_whisper import WhisperModel
+import os
 
 class STTService:
-    def __init__(self, model_size="large-v3"):
-        # mlx-whisper doesn't load a persistent object in the same way,
-        # but we can set the default model here used for transcribing.
-        # "mlx-community/whisper-large-v3-mlx" is the huggingface repo for mlx optimized weights
-        self.model_path = f"mlx-community/whisper-{model_size}-mlx"
-        print(f"STT Service initialized. Using MLX model: {self.model_path}")
+    def __init__(self, model_size="small"):
+        self.model_size = model_size
+        self.model = None
+        
+        force_cpu = os.getenv("FORCE_CPU", "false").lower() == "true"
+        
+        print(f"Initializing STT Service with faster-whisper (Model: {model_size})...")
+        
+        if force_cpu:
+             print("FORCE_CPU is enabled. Skipping CUDA check.")
+             self.model = WhisperModel(model_size, device="cpu", compute_type="int8")
+        else:
+            try:
+                # Try CUDA first
+                # compute_type="float16" is standard for CUDA
+                self.model = WhisperModel(model_size, device="cuda", compute_type="float16")
+                print("Successfully loaded model on GPU (CUDA).")
+            except Exception as e:
+                print(f"Failed to load on GPU ({e}). Falling back to CPU (int8).")
+                # Fallback to CPU with int8 quantization for speed
+                self.model = WhisperModel(model_size, device="cpu", compute_type="int8")
+        
+        print("STT Service initialized.")
 
     def transcribe(self, audio_path: str):
         """
-        Transcribes the given audio file using MLX Whisper (GPU accelerated).
+        Transcribes the given audio file using faster-whisper.
         """
         start_time = time.time()
+        
+        if not self.model:
+            raise RuntimeError("STT Model not initialized")
 
-        # mlx_whisper.transcribe automatically uses Metal (GPU) on Mac
-        # Returns a dict with 'text' and 'segments'
-        result = mlx_whisper.transcribe(
-            audio_path, path_or_hf_repo=self.model_path, verbose=False
-        )
-
+        # beam_size=5 is a good default for accuracy
+        segments, info = self.model.transcribe(audio_path, beam_size=5)
+        
+        # Convert generator to list to consume and get full text
+        # faster-whisper segments usually include necessary spacing in the text itself
+        segment_list = []
+        text_list = []
+        
+        for segment in segments:
+            text_list.append(segment.text)
+            segment_list.append({
+                "start": segment.start,
+                "end": segment.end,
+                "text": segment.text
+            })
+        
+        full_text = "".join(text_list).strip()
+        
         processing_time = time.time() - start_time
-
-        # Format the result to match our previous structure if possible,
-        # though mlx result structure is quite standard (similar to openai whisper)
-
+        
         return {
-            "text": result.get("text", "").strip(),
-            "segments": result.get("segments", []),
-            "language": result.get("language", "unknown"),
+            "text": full_text,
+            "segments": segment_list,
+            "language": info.language,
             "processing_time": processing_time,
         }
 
 
 # Global instance
-# You can change model_size to "base", "small", "medium", "large-v3"
-# Since MLX is fast, "large-v3" might be usable, but "small" or "medium" is safer for speed.
+# Using "small" model as default balancing speed/accuracy
 stt_service = STTService(model_size="small")

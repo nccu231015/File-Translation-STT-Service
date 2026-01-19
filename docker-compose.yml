@@ -1,0 +1,37 @@
+services:
+  app:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: stt-translation-app
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      # Point to host's Ollama or another container. 
+      # host.docker.internal works on Windows/Mac Docker Desktop to reach host machine
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      # Force CPU to avoid CUDA initialization crashes in Docker
+      - FORCE_CPU=true
+    depends_on:
+      - redis
+    # GPU Support (Commented out for compatibility)
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  redis:
+    image: redis:alpine
+    container_name: stt-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+volumes:
+  redis_data:
