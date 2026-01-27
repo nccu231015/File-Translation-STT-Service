@@ -35,15 +35,7 @@ app.add_middleware(
 
 @app.get("/")
 async def read_root():
-    # Serve the React App index.html at the root
-    if os.path.exists(os.path.join(frontend_dist, "index.html")):
-        response = FileResponse(os.path.join(frontend_dist, "index.html"))
-        # Disable caching to ensure frontend updates are seen immediately
-        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-        response.headers["Pragma"] = "no-cache"
-        response.headers["Expires"] = "0"
-        return response
-    return {"message": "STT Backend is running (Frontend not found)"}
+    return {"message": "STT & Translation API Service is Running"}
 
 
 @app.post("/stt")
@@ -90,11 +82,14 @@ async def transcribe_audio(
             
             # Create a formatted TXT file response
             output_filename = f"meeting_minutes_{os.path.splitext(file.filename)[0]}.txt"
+            
+            transcript_section = f"--- 逐字稿 ---\n{user_text}\n"
+            
             output_content = (
                 f"=== 會議記錄 ===\n"
                 f"檔案名稱: {file.filename}\n"
                 f"處理模式: 會議錄製\n\n"
-                f"--- 逐字稿 ---\n{user_text}\n\n"
+                f"{transcript_section}\n"
                 f"--- 重點摘要 ---\n{analysis.get('summary', '無')}\n\n"
                 f"--- 決策事項 ---\n" + "\n".join([f"- {d}" for d in analysis.get("decisions", [])]) + "\n\n"
                 f"--- 待辦清單 ---\n" + "\n".join([f"- {a}" for a in analysis.get("action_items", [])])
@@ -125,7 +120,10 @@ async def transcribe_audio(
 
 
 @app.post("/pdf-translation")
-async def translate_pdf(file: UploadFile = File(...)):
+async def translate_pdf(
+    file: UploadFile = File(...),
+    target_lang: str = Form(None) # Optional, default None to let service auto-detect
+):
     """
     Receives a PDF file, extracts text, translates it, and returns the text content.
     """
@@ -139,8 +137,8 @@ async def translate_pdf(file: UploadFile = File(...)):
             temp_input_path = temp_input.name
 
         # Process
-        print(f"Processing PDF: {file.filename}")
-        pages_data = pdf_service.process_pdf(temp_input_path)
+        print(f"Processing PDF: {file.filename}, Target Lang: {target_lang}")
+        pages_data = pdf_service.process_pdf(temp_input_path, force_target_lang=target_lang)
 
         # Cleanup input
         os.remove(temp_input_path)
@@ -195,52 +193,4 @@ async def chat_text(payload: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# We assume backend is running from 'backend/' dir
-frontend_dist = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "../../frontend/dist")
-)
-print(f"DEBUG: Frontend Dist Path resolved to: {frontend_dist}")
-print(f"DEBUG: Exists? {os.path.exists(frontend_dist)}")
-print(
-    f"DEBUG: Index Exists? {os.path.exists(os.path.join(frontend_dist, 'index.html'))}"
-)
 
-if os.path.exists(frontend_dist):
-    # Mount assets folder
-    # directory=.../frontend/dist/assets
-    assets_dir = os.path.join(frontend_dist, "assets")
-    if os.path.exists(assets_dir):
-        print(f"DEBUG: Mounting /assets to {assets_dir}")
-        app.mount(
-            "/assets", StaticFiles(directory=assets_dir, html=False), name="assets"
-        )
-    else:
-        print(f"WARNING: Assets directory not found at {assets_dir}")
-
-    # Catch-all route to serve index.html for SPA
-    @app.get("/{full_path:path}")
-    async def serve_frontend(full_path: str):
-        # Allow API routes to pass through
-        if full_path.startswith("api"):
-            raise HTTPException(status_code=404, detail="Not found")
-
-        # Do not serve index.html for missing assets (prevent MIME type errors)
-        # If execution reaches here, it means StaticFiles didn't handle it (file missing?)
-        if full_path.startswith("assets"):
-            # Simple 404 for missing assets
-            return Response(status_code=404)
-
-        # Serve index.html for any other route (React Router support)
-        # Check if index.html exists
-        index_path = os.path.join(frontend_dist, "index.html")
-        if os.path.exists(index_path):
-            response = FileResponse(index_path)
-            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-            response.headers["Pragma"] = "no-cache"
-            response.headers["Expires"] = "0"
-            return response
-        return Response("Frontend not built or index.html missing", status_code=404)
-else:
-    print(
-        f"Warning: Frontend build not found at {frontend_dist}. Run 'npm run build' in frontend/."
-    )

@@ -36,15 +36,22 @@ class STTService:
         if not self.model:
             raise RuntimeError("STT Model not initialized")
 
-        # beam_size=5 is a good default for accuracy
-        segments, info = self.model.transcribe(audio_path, beam_size=5)
+        # beam_size=1 to save memory, default is 5
+        print(f"Starting transcription for {audio_path}...")
+        segments, info = self.model.transcribe(audio_path, beam_size=1)
         
         # Convert generator to list to consume and get full text
         # faster-whisper segments usually include necessary spacing in the text itself
         segment_list = []
         text_list = []
         
+        print(f"Detected language '{info.language}' with probability {info.language_probability}")
+
+        count = 0
         for segment in segments:
+            count += 1
+            if count % 10 == 0:
+                print(f"Processed {count} segments...")
             text_list.append(segment.text)
             segment_list.append({
                 "start": segment.start,
@@ -53,6 +60,7 @@ class STTService:
             })
         
         full_text = "".join(text_list).strip()
+        print(f"Transcription complete. Total segments: {count}")
         
         processing_time = time.time() - start_time
         

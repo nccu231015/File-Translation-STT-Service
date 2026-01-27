@@ -65,23 +65,47 @@ class PDFService:
 
         return cleaned
 
-    def _translate_ollama(self, text: str) -> str:
+    def _detect_is_chinese(self, text: str) -> bool:
+        """
+        Detects if the text is primarily Chinese.
+        """
+        if not text:
+            return False
+        # Count Chinese characters
+        chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
+        # If Chinese characters make up more than 5% of the text, treat as Chinese source
+        return (chinese_chars / len(text)) > 0.05
+
+    def _translate_ollama(self, text: str, target_lang: str = "zh-TW") -> str:
         base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         base_url = base_url.rstrip("/")
         api_url = f"{base_url}/api/chat"
 
+        if target_lang == "en":
+            system_prompt = (
+                "You are a professional translator. "
+                "Your ONLY task is to translate the provided text into English.\n"
+                "CRITICAL RULES:\n"
+                "1. Output ONLY the translated English text.\n"
+                "2. DO NOT include the original Chinese text.\n"
+                "3. DO NOT output conversational fillers.\n"
+                "4. Translate accurately and fluently."
+            )
+        else:
+            system_prompt = (
+                "You are a professional translator. "
+                "Your ONLY task is to translate the provided text into Traditional Chinese (Taiwan standard, zh-TW).\n"
+                "CRITICAL RULES:\n"
+                "1. Output ONLY the translated Chinese text.\n"
+                "2. DO NOT include the original English text.\n"
+                "3. DO NOT output conversational fillers.\n"
+                "4. Translate accurately and fluently."
+            )
+
         messages = [
             {
                 "role": "system",
-                "content": (
-                    "You are a professional translator. "
-                    "Your ONLY task is to translate the provided text into Traditional Chinese (Taiwan standard, zh-TW).\n"
-                    "CRITICAL RULES:\n"
-                    "1. Output ONLY the translated Chinese text.\n"
-                    "2. DO NOT include the original English text.\n"
-                    "3. DO NOT output conversational fillers (e.g. 'Here is the translation').\n"
-                    "4. Translate accurately and fluently."
-                ),
+                "content": system_prompt,
             },
             {"role": "user", "content": f"The text to translate is:\n\n{text}"},
         ]
@@ -101,14 +125,16 @@ class PDFService:
             if r.status_code == 200:
                 out = r.json().get("message", {}).get("content", "").strip()
                 cleaned = self._clean_llm_response(out)
-                # Convert simplified Chinese to traditional Chinese (Taiwan)
-                return self.s2tw.convert(cleaned)
+                # Convert to Traditional Chinese only if target is Chinese
+                if target_lang == "zh-TW":
+                    return self.s2tw.convert(cleaned)
+                return cleaned
         except Exception as e:
             print(f"[PDF] Translation error (Ollama): {e}")
 
         return text
 
-    def process_pdf(self, input_pdf_path: str):
+    def process_pdf(self, input_pdf_path: str, force_target_lang: str = None):
         """
         Processes the PDF: Uses Docling to convert PDF to Markdown text, then translate.
         Returns a structured list.
@@ -127,15 +153,23 @@ class PDFService:
             # Export to Markdown (best for LLM understanding)
             md_content = doc.export_to_markdown()
 
-            # DEBUG: Check if extraction worked
-            # print(
-            #    f"\n--- [DEBUG] Docling Extracted Markdown (First 500 chars) ---\n{md_content[:500]}\n------------------------------------------------------------\n"
-            # )
-
             # 2. Extract and Merge Chunks (OPTIMIZATION)
             # Instead of splitting by every new line, we group them into larger logical blocks.
             raw_chunks = [c.strip() for c in md_content.split("\n\n") if c.strip()]
             print(f"[PDF] Raw paragraphs extracted: {len(raw_chunks)}")
+
+            # --- Source Language Detection ---
+            # Sample the first 1000 characters to determine source language
+            sample_text = md_content[:1000]
+            is_chinese_source = self._detect_is_chinese(sample_text)
+            
+            # Determine target language:
+            if force_target_lang:
+                target_lang = force_target_lang
+            else:
+                target_lang = "en" if is_chinese_source else "zh-TW"
+            
+            print(f"[PDF] Detected source: {'Chinese' if is_chinese_source else 'Non-Chinese'}. Target: {target_lang}")
 
             merged_chunks = []
             current_chunk = []
@@ -169,13 +203,13 @@ class PDFService:
 
             for i, chunk in enumerate(merged_chunks):
                 print(f"[PDF] Translating block {i + 1}/{total_chunks}...")
-                translated = self._translate_ollama(chunk)
+                translated = self._translate_ollama(chunk, target_lang=target_lang)
                 translated_paras.append(translated)
 
             # Generate Summary from the full translated text
             print("[PDF] Generating summary...")
             full_translated_text = "\n\n".join(translated_paras)
-            summary = self._generate_summary(full_translated_text)
+            summary = self._generate_summary(full_translated_text, target_lang=target_lang)
             print(f"[PDF] Generated Summary Content (First 200 chars): {summary[:200]}")
 
             return [
@@ -190,13 +224,13 @@ class PDFService:
             print(f"[PDF] Docling processing error: {e}")
             raise e
 
-    def _generate_summary(self, text: str) -> str:
+    def _generate_summary(self, text: str, target_lang: str = "zh-TW") -> str:
         """
         Generates a concise summary using Map-Reduce strategy.
         """
         chunk_size = 3000  # Reduced from 6000 to prevent timeouts on local LLM
         if len(text) <= chunk_size:
-            return self._call_llm_for_summary(text, final=True)
+            return self._call_llm_for_summary(text, final=True, target_lang=target_lang)
 
         # Long document: Map-Reduce
         print("[PDF] Document is long. Starting Map-Reduce summarization...")
@@ -205,19 +239,19 @@ class PDFService:
 
         for idx, chunk in enumerate(chunks):
             print(f"[PDF] Summarizing part {idx + 1}/{len(chunks)}...")
-            partial = self._call_llm_for_summary(chunk, final=False)
+            partial = self._call_llm_for_summary(chunk, final=False, target_lang=target_lang)
             if partial:
                 partial_summaries.append(partial)
 
         if not partial_summaries:
-            return "無法生成摘要。"
+            return "無法生成摘要。" if target_lang == "zh-TW" else "Unable to generate summary."
 
         combined_summary_text = "\n\n".join(partial_summaries)
         print("[PDF] Generating final summary from partials...")
-        final_summary = self._call_llm_for_summary(combined_summary_text, final=True)
+        final_summary = self._call_llm_for_summary(combined_summary_text, final=True, target_lang=target_lang)
         return final_summary
 
-    def _call_llm_for_summary(self, text: str, final: bool = False) -> str:
+    def _call_llm_for_summary(self, text: str, final: bool = False, target_lang: str = "zh-TW") -> str:
         """
         Helper to call LLM for summarization.
         """
@@ -225,10 +259,12 @@ class PDFService:
         base_url = base_url.rstrip("/")
         api_url = f"{base_url}/api/chat"
 
+        lang_instruction = "Traditional Chinese (zh-TW)" if target_lang == "zh-TW" else "English"
+
         if final:
             system_msg = (
                 "You are a helpful AI assistant. "
-                "Please read the following context and provide a comprehensive final summary in Traditional Chinese (zh-TW). "
+                f"Please read the following context and provide a comprehensive final summary in {lang_instruction}. "
                 "Target length: Around 500 words. "
                 "Focus on stitching the narrative together, highlighting key findings, and conclusions."
             )
@@ -236,7 +272,7 @@ class PDFService:
         else:
             system_msg = (
                 "You are a helpful AI assistant. "
-                "Please read the following text segment and list the key points in Traditional Chinese (zh-TW). "
+                f"Please read the following text segment and list the key points in {lang_instruction}. "
                 "Keep it concise (around 100-150 words)."
             )
             user_msg = f"Text Segment:\n{text}"
@@ -260,8 +296,10 @@ class PDFService:
             if r.status_code == 200:
                 out = r.json().get("message", {}).get("content", "").strip()
                 cleaned = self._clean_llm_response(out)
-                # Convert simplified Chinese to traditional Chinese (Taiwan)
-                return self.s2tw.convert(cleaned)
+                # Convert simplified Chinese to traditional Chinese (Taiwan) if target is Chinese
+                if target_lang == "zh-TW":
+                    return self.s2tw.convert(cleaned)
+                return cleaned
         except Exception as e:
             print(f"[PDF] Summary generation error: {e}")
             return ""

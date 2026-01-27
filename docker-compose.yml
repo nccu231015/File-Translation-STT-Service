@@ -14,16 +14,11 @@ services:
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
       # Force CPU to avoid CUDA initialization crashes in Docker
       - FORCE_CPU=true
+    volumes:
+      - ./backend/app:/app/app
+    restart: always
     depends_on:
       - redis
-    # GPU Support (Commented out for compatibility)
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
 
   redis:
     image: redis:alpine
