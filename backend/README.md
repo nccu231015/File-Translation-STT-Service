@@ -7,9 +7,10 @@ This directory contains the Python backend for the File Translation & STT Servic
 
 - **Speech-to-Text (STT)**: Transcribes audio files using faster-whisper (CPU-optimized).
 - **Meeting Analysis**: Analyzes transcribed text to generate summaries, decisions, and action items.
-- **PDF Translation**: Converts PDFs to Markdown (via Docling) and translates them while preserving structure.
+- **Meeting Analysis**: Advanced meeting minutes generation with structured summaries, decisions, action items, and schedule tracking. Supports direct Word (.docx) export.
+- **PDF Translation**: High-fidelity PDF translation preserving layout and structure (via Docling + Qwen 3).
 - **Chat Interface**: Simple RAG/Chat capability using local LLMs.
-- **Redis Integration**: For task queuing and caching.
+- **Robust Output**: Strict type enforcement and sanitization for LLM outputs to prevent frontend crashes.
 
 ## 🛠️ Stack
 
@@ -18,7 +19,7 @@ This directory contains the Python backend for the File Translation & STT Servic
 - **AI/ML**: 
   - `docling` (Document parsing)
   - `faster-whisper` (CPU-optimized STT)
-  - `ollama` (Local LLM inference)
+  - `ollama` (Local LLM inference, default model: **qwen3:8b**)
   - `opencc` (Chinese conversion)
   - `ffmpeg` (Audio processing)
 - **Database/Cache**: Redis
@@ -29,7 +30,7 @@ This directory contains the Python backend for the File Translation & STT Servic
 - Python 3.11+
 - `uv` package manager (`pip install uv`)
 - Redis (running via Docker or locally)
-- Ollama running locally with `qwen2.5:7b` model
+- Ollama running locally with `qwen3:8b` model (Run `ollama pull qwen3:8b`)
 
 ### 2. Environment Variables
 Copy `.env.example` to `.env`:

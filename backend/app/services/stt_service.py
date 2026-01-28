@@ -7,23 +7,24 @@ class STTService:
         self.model_size = model_size
         self.model = None
         
+    def _ensure_model_loaded(self):
+        if self.model:
+            return
+
         force_cpu = os.getenv("FORCE_CPU", "false").lower() == "true"
-        
-        print(f"Initializing STT Service with faster-whisper (Model: {model_size})...")
+        print(f"Initializing STT Service with faster-whisper (Model: {self.model_size})...")
         
         if force_cpu:
              print("FORCE_CPU is enabled. Skipping CUDA check.")
-             self.model = WhisperModel(model_size, device="cpu", compute_type="int8")
+             self.model = WhisperModel(self.model_size, device="cpu", compute_type="int8")
         else:
             try:
                 # Try CUDA first
-                # compute_type="float16" is standard for CUDA
-                self.model = WhisperModel(model_size, device="cuda", compute_type="float16")
+                self.model = WhisperModel(self.model_size, device="cuda", compute_type="float16")
                 print("Successfully loaded model on GPU (CUDA).")
             except Exception as e:
                 print(f"Failed to load on GPU ({e}). Falling back to CPU (int8).")
-                # Fallback to CPU with int8 quantization for speed
-                self.model = WhisperModel(model_size, device="cpu", compute_type="int8")
+                self.model = WhisperModel(self.model_size, device="cpu", compute_type="int8")
         
         print("STT Service initialized.")
 
@@ -32,6 +33,8 @@ class STTService:
         Transcribes the given audio file using faster-whisper.
         """
         start_time = time.time()
+        
+        self._ensure_model_loaded()
         
         if not self.model:
             raise RuntimeError("STT Model not initialized")

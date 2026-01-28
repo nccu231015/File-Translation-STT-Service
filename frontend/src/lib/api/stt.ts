@@ -13,7 +13,9 @@ export interface STTResponse {
     llm_response?: string; // For chat mode
     file_download?: {
         filename: string;
-        content: string;
+        content?: string; // Legacy text content
+        content_base64?: string; // Base64 encoded binary content
+        mime_type?: string; // MIME type for download
     };
 }
 
@@ -22,14 +24,24 @@ export const analyzeMeetingAudio = async (file: File): Promise<STTResponse> => {
     formData.append('file', file);
     formData.append('mode', 'meeting');
 
-    const response = await fetch('/api/stt', {
-        method: 'POST',
-        body: formData,
-    });
+    // Bypass Next.js API route to avoid Node.js fetch timeout
+    // Using direct backend URL
+    const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
-    if (!response.ok) {
-        throw new Error('STT Processing failed');
+    try {
+        const response = await fetch(`${API_URL}/stt`, {
+            method: 'POST',
+            body: formData,
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`STT Processing failed: ${response.status} ${errorText}`);
+        }
+
+        return response.json();
+    } catch (error) {
+        console.error("Direct backend call failed:", error);
+        throw error;
     }
-
-    return response.json();
 };

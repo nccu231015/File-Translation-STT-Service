@@ -34,9 +34,25 @@ export async function POST(req: NextRequest) {
             );
         }
 
-        // Get JSON response from backend
-        const data = await response.json();
-        return NextResponse.json(data);
+        // Backend now returns a PDF file (binary), not JSON
+        // Get the blob and forward it to the client
+        const blob = await response.blob();
+
+        // Get the filename from Content-Disposition header if available
+        const contentDisposition = response.headers.get('content-disposition');
+        let filename = 'translated.pdf';
+        if (contentDisposition) {
+            const match = contentDisposition.match(/filename="?(.+?)"?$/);
+            if (match) filename = match[1];
+        }
+
+        return new NextResponse(blob, {
+            status: 200,
+            headers: {
+                'Content-Type': 'application/pdf',
+                'Content-Disposition': `attachment; filename="${filename}"`,
+            },
+        });
 
     } catch (error: any) {
         console.error('[API Route] Forwarding failed:', error);

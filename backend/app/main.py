@@ -1,11 +1,12 @@
 import os
 import shutil
 import tempfile
-from fastapi import FastAPI, UploadFile, File, HTTPException, Body, Response, Form
+from fastapi import FastAPI, UploadFile, File, HTTPException, Body, Response, Form, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from app.services.stt_service import stt_service
 from app.services.llm_service import llm_service
 from app.services.pdf_service import pdf_service
+from app.services.meeting_minutes_docx import MeetingMinutesDocxService
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -80,32 +81,71 @@ async def transcribe_audio(
             print("Mode: Meeting - Analyzing Transcript...")
             analysis = llm_service.analyze_meeting_transcript(user_text)
             
-            # Create a formatted TXT file response
-            output_filename = f"meeting_minutes_{os.path.splitext(file.filename)[0]}.txt"
+            # 1. Prepare frontend summary and safe lists FIRST
+            # Combine objective and summary for the simplified frontend view
+            frontend_summary = ""
+            if analysis.get('meeting_objective'):
+                frontend_summary += f"【會議目的】\n{analysis.get('meeting_objective')}\n\n"
             
-            transcript_section = f"--- 逐字稿 ---\n{user_text}\n"
+            # Handle discussion_summary if it's a list (some LLMs output lists)
+            disc_sum = analysis.get('discussion_summary', analysis.get('summary', ''))
+            if isinstance(disc_sum, list):
+                try:
+                    disc_text = ""
+                    for item in disc_sum:
+                        if isinstance(item, dict):
+                            disc_text += f"- {item.get('topic', '')}: {item.get('description', '')}\n"
+                        else:
+                            disc_text += f"- {str(item)}\n"
+                    frontend_summary += f"【討論摘要】\n{disc_text}"
+                except:
+                    frontend_summary += f"【討論摘要】\n{str(disc_sum)}"
+            else:
+                frontend_summary += f"【討論摘要】\n{disc_sum}"
+
+            # Ensure lists are strictly lists to avoid bug where strings are iterated by char
+            safe_decisions = analysis.get('decisions', [])
+            if not isinstance(safe_decisions, list):
+                if isinstance(safe_decisions, str):
+                    safe_decisions = [safe_decisions]
+                else:
+                    safe_decisions = []
             
-            output_content = (
-                f"=== 會議記錄 ===\n"
-                f"檔案名稱: {file.filename}\n"
-                f"處理模式: 會議錄製\n\n"
-                f"{transcript_section}\n"
-                f"--- 重點摘要 ---\n{analysis.get('summary', '無')}\n\n"
-                f"--- 決策事項 ---\n" + "\n".join([f"- {d}" for d in analysis.get("decisions", [])]) + "\n\n"
-                f"--- 待辦清單 ---\n" + "\n".join([f"- {a}" for a in analysis.get("action_items", [])])
+            safe_action_items = analysis.get('action_items', [])
+            if not isinstance(safe_action_items, list):
+                safe_action_items = []
+
+            # 2. Generate Word document using SAFE structured data
+            minutes_service = MeetingMinutesDocxService()
+            docx_bytes = minutes_service.generate_minutes(
+                file_name=file.filename,
+                meeting_objective=analysis.get('meeting_objective', ''),
+                discussion_summary=disc_sum,  # Pass original structure, formatter handles it
+                decisions=safe_decisions,     # Pass SAFE list
+                action_items=safe_action_items, # Pass SAFE list
+                attendees=analysis.get('attendees', []),
+                schedule_notes=analysis.get('schedule_notes', '')
             )
             
-            # Save to a temp location if needed, or just return content directly?
-            # Current frontend expects 'filename' and 'content' for download or display?
-            # Let's match the structure of PDF response slightly for consistency if needed,
-            # or return a specific structure for the new frontend.
+            output_filename = f"meeting_minutes_{os.path.splitext(file.filename)[0]}.docx"
             
+            # Return base64 encoded Word file for frontend download
+            import base64
+            docx_base64 = base64.b64encode(docx_bytes).decode('utf-8')
+            
+            frontend_analysis = {
+                "summary": frontend_summary,
+                "decisions": safe_decisions,
+                "action_items": safe_action_items
+            }
+
             return {
                 "transcription": stt_result,
-                "analysis": analysis,
+                "analysis": frontend_analysis,
                 "file_download": {
                     "filename": output_filename,
-                    "content": output_content
+                    "content_base64": docx_base64,
+                    "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 }
             }
         
@@ -121,15 +161,19 @@ async def transcribe_audio(
 
 @app.post("/pdf-translation")
 async def translate_pdf(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     target_lang: str = Form(None) # Optional, default None to let service auto-detect
 ):
     """
-    Receives a PDF file, extracts text, translates it, and returns the text content.
+    Receives a PDF file, extracts text, translates it, and returns the translated PDF file.
     """
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="File must be a PDF")
 
+    temp_input_path = None
+    # No verify path here yet as it comes from service result
+    
     try:
         # Save uploaded PDF temp
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_input:
@@ -138,40 +182,28 @@ async def translate_pdf(
 
         # Process
         print(f"Processing PDF: {file.filename}, Target Lang: {target_lang}")
-        pages_data = pdf_service.process_pdf(temp_input_path, force_target_lang=target_lang)
+        result_list = pdf_service.process_pdf(temp_input_path, force_target_lang=target_lang)
+        
+        # The service returns a list with one item containing the file_path
+        output_pdf_path = result_list[0]["file_path"]
+        
+        # Determine filename for download
+        filename_only = os.path.splitext(file.filename)[0]
+        download_filename = f"{filename_only}_translated.pdf"
+        
+        # Add cleanup tasks
+        background_tasks.add_task(os.remove, temp_input_path)
+        background_tasks.add_task(os.remove, output_pdf_path)
 
-        # Cleanup input
-        os.remove(temp_input_path)
-
-        # Build full text content and extract summary
-        full_text = ""
-        summary = ""
-
-        # Check if we have summary in the response (our new structure puts it in the first item)
-        if pages_data and "summary" in pages_data[0]:
-            summary = pages_data[0]["summary"]
-            print(f"Got Summary for {file.filename}")
-
-            # Add summary to LLM context
-            llm_service.add_document_context(file.filename, summary)
-
-        for page in pages_data:
-            # page['page'] might be string "Full Document" now
-            if page["page"] != "Full Document":
-                full_text += f"=== PAGE {page['page']} ===\n"
-
-            for para in page["paragraphs"]:
-                full_text += para + "\n\n"
-
-        return {
-            "filename": f"{os.path.splitext(file.filename)[0]}_translated.txt",
-            "content": full_text,
-            "summary": summary,
-        }
+        return FileResponse(
+            output_pdf_path, 
+            media_type="application/pdf", 
+            filename=download_filename
+        )
 
     except Exception as e:
-        # Cleanup
-        if "temp_input_path" in locals() and os.path.exists(temp_input_path):
+        # Immediate cleanup if failure
+        if temp_input_path and os.path.exists(temp_input_path):
             os.remove(temp_input_path)
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -13,14 +13,11 @@ WORKDIR /app
 RUN pip install uv
 ENV UV_HTTP_TIMEOUT=300
 
-# Set UV to use CPU-only torch index as fallback
-ENV UV_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cpu
-
-# Copy ONLY pyproject.toml FIRST to resolve dependencies for CPU
+# Copy ONLY pyproject.toml FIRST
 COPY backend/pyproject.toml ./
 
-# Install dependencies (Fresh resolve for CPU, allow searching all indexes)
-RUN uv sync --index-strategy unsafe-best-match
+# Install dependencies
+RUN uv sync
 
 # Copy Backend Source Code
 COPY backend/app ./app
@@ -31,4 +28,4 @@ EXPOSE 8000
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 
-CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--timeout-keep-alive", "3600"]

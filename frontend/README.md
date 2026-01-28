@@ -7,7 +7,12 @@ This is the user interface for the AI Productivity Suite. It is a modern web app
 
 - **Dashboard**: Central hub for all AI tools
 - **Document Translation**: Upload PDFs and get them translated (EN ↔ ZH) with formatting preserved
-- **Voice Intelligence**: Upload meeting recordings for automatic transcription and summarization
+- **Voice Intelligence**: Powerful meeting analysis dashboard with:
+  - Automatic transcription and speaker-aware summarization
+  - Structured "Decisions" and "Action Items" extraction
+  - Persistent record storage (via LocalStorage)
+  - One-click export to professionally formatted Word (.docx) minutes
+  - Improved file upload experience with reset capability
 - **Report Generation**: (Mock) Generate visual analytics reports for production data
 - **QA Interface**: RAG-based question answering system
 

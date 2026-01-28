@@ -15,28 +15,16 @@ import {
     CheckCircle2,
     AlertCircle,
     X,
-    FileCheck
+    Trash2,
+    FileCheck,
+    Maximize2
 } from 'lucide-react';
-import { Alert, AlertDescription } from '@/components/ui/alert'; // Import from shadcn equivalent
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { toast } from 'sonner';
-import ReactMarkdown from 'react-markdown';
-
-interface TranslationFile {
-    id: string;
-    name: string;
-    size: number;
-    sourceLang: string;
-    targetLang: string;
-    status: 'uploading' | 'processing' | 'completed' | 'error';
-    progress: number;
-    uploadedAt: Date;
-    downloadUrl?: string; // Add download URL
-    summary?: string;     // Add summary
-    content?: string;     // Add full content
-}
+import { useTranslation } from '@/context/translation-context';
 
 export function DocumentTranslation() {
-    const [files, setFiles] = useState<TranslationFile[]>([]);
+    const { files, addFiles, removeFile } = useTranslation();
     const [sourceLang, setSourceLang] = useState('');
     const [targetLang, setTargetLang] = useState('');
     const [isDragging, setIsDragging] = useState(false);
@@ -72,94 +60,24 @@ export function DocumentTranslation() {
     };
 
     const processFiles = (fileList: File[]) => {
-        // Only require targetLang. Source lang is optional (auto-detect).
         if (!targetLang) {
             toast.warning("請先選擇目標語言");
             return;
         }
 
-        // Filter PDF
         const pdfFiles = fileList.filter(file => file.type === 'application/pdf');
         if (pdfFiles.length === 0 && fileList.length > 0) {
             toast.error("僅支援 PDF 檔案");
+            return;
         }
 
-        pdfFiles.forEach(file => {
-            const newFile: TranslationFile = {
-                id: Date.now().toString() + Math.random(),
-                name: file.name,
-                size: file.size,
-                sourceLang,
-                targetLang,
-                status: 'uploading',
-                progress: 0,
-                uploadedAt: new Date()
-            };
-
-            setFiles(prev => [newFile, ...prev]);
-            uploadAndTranslate(newFile, file);
-        });
-    };
-
-    const uploadAndTranslate = async (fileRecord: TranslationFile, fileObj: File) => {
-        // 1. Uploading
-        updateFileStatus(fileRecord.id, { status: 'uploading', progress: 30 });
-
-        const formData = new FormData();
-        formData.append('file', fileObj);
-        // Pass selected target language to backend if backend supports it
-        formData.append('target_lang', fileRecord.targetLang);
-        // formData.append('sourceLang', fileRecord.sourceLang); // Backend currently auto-detects
-        // formData.append('targetLang', fileRecord.targetLang); 
-
-        try {
-            updateFileStatus(fileRecord.id, { status: 'processing', progress: 60 });
-
-            const res = await fetch('/api/pdf-translation', {
-                method: 'POST',
-                body: formData
-            });
-
-            if (!res.ok) throw new Error('Translation failed');
-
-            const data = await res.json();
-
-            // Blob for download
-            const blob = new Blob([data.content], { type: 'text/plain' });
-            const url = URL.createObjectURL(blob);
-
-            updateFileStatus(fileRecord.id, {
-                status: 'completed',
-                progress: 100,
-                downloadUrl: url,
-                summary: data.summary,
-                content: data.content
-            });
-            toast.success(`${fileRecord.name} 翻譯完成`);
-
-        } catch (error) {
-            console.error(error);
-            updateFileStatus(fileRecord.id, { status: 'error', progress: 0 });
-            toast.error(`${fileRecord.name} 翻譯失敗`);
-        }
-    };
-
-    const updateFileStatus = (id: string, updates: Partial<TranslationFile>) => {
-        setFiles(prev => prev.map(f => f.id === id ? { ...f, ...updates } : f));
-    };
-
-    const removeFile = (fileId: string) => {
-        setFiles(prev => prev.filter(f => f.id !== fileId));
+        addFiles(pdfFiles, sourceLang, targetLang);
     };
 
     const formatFileSize = (bytes: number) => {
         if (bytes < 1024) return bytes + ' B';
         if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
         return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-    };
-
-    const getLanguageLabel = (code: string) => {
-        return languages.find(l => l.value === code)?.label || code;
     };
 
     return (
@@ -222,7 +140,7 @@ export function DocumentTranslation() {
                         <Upload className="size-5" />
                         上傳 PDF 文件
                     </CardTitle>
-                    <CardDescription>支援拖放上傳</CardDescription>
+                    <CardDescription>支援拖放上傳，系統將自動翻譯並保留原始排版格式</CardDescription>
                 </CardHeader>
                 <CardContent>
                     <div
@@ -241,11 +159,8 @@ export function DocumentTranslation() {
                             }
             `}
                         onClick={(e) => {
-                            // Prevent triggering if clicking on the actual input (if it wasn't hidden)
-                            // or distinct logic
                             e.stopPropagation();
                             if (targetLang) {
-                                console.log("Triggering file input click");
                                 fileInputRef.current?.click();
                             } else {
                                 toast.warning("請先選擇目標語言");
@@ -259,9 +174,7 @@ export function DocumentTranslation() {
                             multiple
                             className="hidden"
                             onChange={(e) => {
-                                console.log("File input changed", e.target.files);
                                 handleFileSelect(e);
-                                // Reset value to allow selecting same file again
                                 e.target.value = '';
                             }}
                             disabled={!targetLang}
@@ -284,93 +197,110 @@ export function DocumentTranslation() {
             </Card>
 
             {files.length > 0 && (
-                <Card>
-                    <CardHeader>
-                        <CardTitle>翻譯任務列表</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                        <div className="space-y-3">
-                            {files.map((file) => (
-                                <div key={file.id} className="p-4 border rounded-lg space-y-3">
-                                    <div className="flex items-start justify-between">
-                                        <div className="flex items-start gap-3 flex-1">
-                                            <div className={`p-2 rounded-lg ${file.status === 'completed' ? 'bg-green-100' :
-                                                file.status === 'error' ? 'bg-red-100' : 'bg-blue-100'
-                                                }`}>
-                                                <FileText className={`size-5 ${file.status === 'completed' ? 'text-green-600' :
-                                                    file.status === 'error' ? 'text-red-600' : 'text-blue-600'
-                                                    }`} />
+                <div className="space-y-4">
+                    <h3 className="text-lg font-semibold flex items-center gap-2">
+                        <FileCheck className="size-5" />
+                        翻譯任務列表
+                    </h3>
+                    <div className="space-y-6">
+                        {files.map((file) => (
+                            <Card key={file.id} className="overflow-hidden">
+                                <CardHeader className="bg-slate-50 border-b py-3 px-4">
+                                    <div className="flex items-center justify-between">
+                                        <div className="flex items-center gap-3">
+                                            <div className={`p-2 rounded-full ${file.status === 'completed' ? 'bg-green-100' : 'bg-blue-100'}`}>
+                                                <FileText className={`size-4 ${file.status === 'completed' ? 'text-green-600' : 'text-blue-600'}`} />
                                             </div>
-                                            <div className="flex-1 min-w-0">
-                                                <h4 className="font-semibold truncate">{file.name}</h4>
-                                                {/* Status Badges */}
-                                                <div className="flex gap-2 text-xs mt-1">
-                                                    <Badge variant="outline">{formatFileSize(file.size)}</Badge>
-                                                    <Badge variant="secondary">{file.status}</Badge>
+                                            <div>
+                                                <h4 className="font-medium text-sm">{file.name}</h4>
+                                                <div className="flex gap-2 text-xs mt-0.5">
+                                                    <Badge variant="outline" className="text-[10px] h-5">{formatFileSize(file.size)}</Badge>
+                                                    <Badge variant={file.status === 'completed' ? 'default' : 'secondary'} className="text-[10px] h-5">
+                                                        {file.status === 'uploading' ? '上傳中' :
+                                                            file.status === 'processing' ? '翻譯處理中' :
+                                                                file.status === 'completed' ? '翻譯完成' : '失敗'}
+                                                    </Badge>
                                                 </div>
                                             </div>
                                         </div>
                                         <div className="flex items-center gap-2">
                                             {file.status === 'completed' && file.downloadUrl && (
-                                                <a href={file.downloadUrl} download={`translated_${file.name.replace('.pdf', '.txt')}`}>
-                                                    <Button variant="outline" size="sm">
-                                                        <Download className="size-4 mr-2" />
-                                                        下載
+                                                <a href={file.downloadUrl} download={`translated_${file.name}`}>
+                                                    <Button size="sm" variant="outline" className="h-8">
+                                                        <Download className="size-3.5 mr-2" />
+                                                        下載翻譯檔
                                                     </Button>
                                                 </a>
                                             )}
-                                            {file.status !== 'processing' && (
-                                                <Button variant="ghost" size="sm" onClick={() => removeFile(file.id)}>
-                                                    <X className="size-4" />
-                                                </Button>
-                                            )}
+                                            <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50"
+                                                onClick={() => {
+                                                    if (confirm('確定要刪除此筆翻譯記錄嗎？')) {
+                                                        removeFile(file.id);
+                                                    }
+                                                }}
+                                            >
+                                                <Trash2 className="size-4" />
+                                            </Button>
                                         </div>
                                     </div>
-
                                     {(file.status === 'uploading' || file.status === 'processing') && (
-                                        <div className="space-y-2">
-                                            <div className="flex justify-between text-xs text-slate-500">
-                                                <span>{file.status === 'uploading' ? '上傳中' : '翻譯處理中 (這可能需要幾分鐘)...'}</span>
-                                                <span>{file.progress}%</span>
-                                            </div>
-                                            <Progress value={file.progress} className="h-2" />
+                                        <div className="flex items-center justify-center p-4 text-slate-500">
+                                            <Loader2 className="animate-spin mr-2 h-4 w-4" />
+                                            <span className="text-sm">
+                                                {file.status === 'uploading' ? '正在上傳...' : '正在翻譯中，這可能需要幾分鐘...'}
+                                            </span>
                                         </div>
                                     )}
+                                </CardHeader>
 
-                                    {file.status === 'completed' && (
-                                        <div className="mt-4 space-y-4">
-                                            {file.summary && (
-                                                <div className="bg-slate-50 p-4 rounded-lg text-sm border border-slate-200">
-                                                    <h5 className="font-semibold mb-2 flex items-center gap-2">
-                                                        <FileText className="size-4" />
-                                                        文件摘要
-                                                    </h5>
-                                                    <div className="prose prose-sm max-w-none text-slate-700">
-                                                        <ReactMarkdown>{file.summary}</ReactMarkdown>
-                                                    </div>
+                                {file.status === 'completed' && (
+                                    <CardContent className="p-0">
+                                        <div className="grid grid-cols-2 h-[600px] divide-x">
+                                            {/* Left: Original */}
+                                            <div className="flex flex-col h-full bg-slate-100">
+                                                <div className="p-2 text-xs font-medium text-center bg-white border-b sticky top-0 z-10 text-slate-500">
+                                                    原始文件
                                                 </div>
-                                            )}
+                                                <div className="flex-1 w-full h-full relative">
+                                                    {file.originalUrl ? (
+                                                        <iframe
+                                                            src={`${file.originalUrl}#toolbar=0&view=FitH`}
+                                                            className="w-full h-full border-none"
+                                                            title="Original PDF"
+                                                        />
+                                                    ) : (
+                                                        <div className="flex items-center justify-center h-full text-slate-400">無法預覽</div>
+                                                    )}
+                                                </div>
+                                            </div>
 
-                                            {file.content && (
-                                                <details className="group">
-                                                    <summary className="flex items-center gap-2 cursor-pointer font-medium text-blue-600 hover:text-blue-700 p-2 hover:bg-blue-50 rounded select-none">
-                                                        <span>查看完整翻譯內容</span>
-                                                        <span className="text-xs text-slate-500 font-normal ml-auto transition-transform group-open:rotate-180">▼</span>
-                                                    </summary>
-                                                    <div className="mt-2 p-4 bg-white border rounded-lg shadow-inner max-h-96 overflow-y-auto">
-                                                        <article className="prose prose-slate max-w-none prose-sm prose-headings:font-bold prose-h1:text-xl prose-h2:text-lg prose-p:leading-relaxed">
-                                                            <ReactMarkdown>{file.content}</ReactMarkdown>
-                                                        </article>
-                                                    </div>
-                                                </details>
-                                            )}
+                                            {/* Right: Translated */}
+                                            <div className="flex flex-col h-full bg-slate-100">
+                                                <div className="p-2 text-xs font-medium text-center bg-white border-b sticky top-0 z-10 text-blue-600">
+                                                    翻譯結果
+                                                </div>
+                                                <div className="flex-1 w-full h-full relative">
+                                                    {file.downloadUrl ? (
+                                                        <iframe
+                                                            src={`${file.downloadUrl}#toolbar=0&view=FitH`}
+                                                            className="w-full h-full border-none"
+                                                            title="Translated PDF"
+                                                        />
+                                                    ) : (
+                                                        <div className="flex items-center justify-center h-full text-slate-400">無法預覽</div>
+                                                    )}
+                                                </div>
+                                            </div>
                                         </div>
-                                    )}
-                                </div>
-                            ))}
-                        </div>
-                    </CardContent>
-                </Card>
+                                    </CardContent>
+                                )}
+                            </Card>
+                        ))}
+                    </div>
+                </div>
             )}
         </div>
     );

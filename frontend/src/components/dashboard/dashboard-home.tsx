@@ -30,7 +30,6 @@ export function DashboardHome({ user, onNavigate }: DashboardHomeProps) {
             description: '基於企業資料與專業知識的 AI 問答系統',
             icon: MessageSquare,
             color: 'from-blue-500 to-cyan-500',
-            stats: { label: '本月查詢', value: '1,247' },
             features: ['自然語言查詢', '多語言支援', '資料來源可追溯']
         },
         {
@@ -39,7 +38,6 @@ export function DashboardHome({ user, onNavigate }: DashboardHomeProps) {
             description: '自動化資料分析與視覺化報表產出',
             icon: FileBarChart,
             color: 'from-green-500 to-emerald-500',
-            stats: { label: '已生成報表', value: '384' },
             features: ['一鍵生成', '多種圖表', '遵循語義層定義']
         },
         {
@@ -48,7 +46,6 @@ export function DashboardHome({ user, onNavigate }: DashboardHomeProps) {
             description: '專業文件翻譯與多語言轉換服務',
             icon: Languages,
             color: 'from-orange-500 to-red-500',
-            stats: { label: '已翻譯文件', value: '128' },
             features: ['PDF 支援', '專業術語庫', '地端處理']
         },
         {
@@ -57,7 +54,6 @@ export function DashboardHome({ user, onNavigate }: DashboardHomeProps) {
             description: '語音轉文字與智能會議紀錄整理',
             icon: Mic,
             color: 'from-purple-500 to-pink-500',
-            stats: { label: '處理時數', value: '156' },
             features: ['中文辨識', '說話人分離', '自動摘要']
         }
     ];
@@ -127,17 +123,11 @@ export function DashboardHome({ user, onNavigate }: DashboardHomeProps) {
                                     <div className={`w-12 h-12 rounded-lg bg-gradient-to-br ${feature.color} flex items-center justify-center mb-3`}>
                                         <Icon className="size-6 text-white" />
                                     </div>
-                                    <CardTitle className="flex items-center justify-between">
-                                        {feature.title}
-                                        <Badge variant="secondary">{feature.stats.label}</Badge>
-                                    </CardTitle>
+                                    <CardTitle>{feature.title}</CardTitle>
                                     <CardDescription>{feature.description}</CardDescription>
                                 </CardHeader>
                                 <CardContent>
                                     <div className="space-y-3 mb-4">
-                                        <div className="text-2xl font-bold text-slate-900">
-                                            {feature.stats.value}
-                                        </div>
                                         <div className="space-y-1.5">
                                             {feature.features.map((item, idx) => (
                                                 <div key={idx} className="flex items-center gap-2 text-sm text-slate-600">

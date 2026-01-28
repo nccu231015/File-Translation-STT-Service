@@ -1,323 +1,165 @@
 import os
 import requests
 import re
-from docling.document_converter import DocumentConverter, PdfFormatOption
-from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
 from opencc import OpenCC
-
+from .pdf_layout_service import PDFLayoutPreservingService
 
 class PDFService:
     def __init__(self, engine="ollama", target_lang="zh-TW"):
-        self.engine = "ollama"  # Enforce Ollama
+        self.engine = "ollama"
         self.target_lang = target_lang
-        self.ollama_model = "qwen2.5:7b"  # Default Ollama model
-
-        # Initialize OpenCC for simplified to traditional Chinese conversion
-        self.s2tw = OpenCC("s2tw")  # Simplified to Traditional (Taiwan standard)
-
-        # Configure Docling to be more aggressive with tables but respectful of speed
-        pipeline_options = PdfPipelineOptions()
-        pipeline_options.do_ocr = False  # Disable forced OCR to speed up processing
-        pipeline_options.do_table_structure = (
-            True  # Explicitly enable table structure recognition
-        )
-        pipeline_options.table_structure_options.mode = (
-            TableFormerMode.ACCURATE
-        )  # Use more accurate model
-
-        self.converter = DocumentConverter(
-            format_options={PdfFormatOption: pipeline_options}
+        self.ollama_model = "qwen3:8b"
+        self.s2tw = OpenCC("s2tw")
+        
+        self.layout_translator = PDFLayoutPreservingService(
+            translate_func=self._translate_ollama
         )
 
     def _clean_llm_response(self, text: str) -> str:
         """
         Removes common conversational filler prefixes and <think> blocks from LLM output.
         """
-        # 1. Remove <think>...</think> blocks (common in reasoning models)
         text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
-
-        # 2. Remove localized filler prefixes
         prefixes_to_remove = [
-            "Here is the translation:",
-            "SURE, here is the translation:",
-            "I'm ready to help.",
-            "Translation:",
-            "Sure!",
-            "Here's the translation in Traditional Chinese:",
-            "Here is the summary:",
-            "Key points:",
-            # ... existing ...
-            "Summary:",
-            "Final Summary:",
-            "好的，",
-            "當然，",
-            "這是翻譯：",
-            "翻譯如下：",
-            "以下是翻譯：",
-            "摘要如下：",
-            "總結：",
+            "Here is the translation:", "Here is the translation of the TARGET TEXT:", 
+            "Here's the translation:", "SURE, here is the translation:", "I'm ready to help.",
+            "Translation:", "Sure!", "Here's the translation in Traditional Chinese:",
+            "Here is the translated text:", "The translation is:", "I understand.",
+            "Here is the summary:", "Key points:", "Summary:", "Final Summary:",
+            "好的，", "當然，", "這是翻譯：", "翻譯如下：", "以下是翻譯：", "摘要如下：", "總結："
         ]
 
         cleaned = text.strip()
-        for prefix in prefixes_to_remove:
-            if cleaned.lower().startswith(prefix.lower()):
-                cleaned = cleaned[len(prefix) :].strip()
+        
+        changed = True
+        max_iterations = 5
+        iteration = 0
+        while changed and iteration < max_iterations:
+            changed = False
+            iteration += 1
+            for prefix in prefixes_to_remove:
+                if cleaned.lower().startswith(prefix.lower()):
+                    cleaned = cleaned[len(prefix):].strip()
+                    changed = True
+                    break
 
         return cleaned
 
     def _detect_is_chinese(self, text: str) -> bool:
-        """
-        Detects if the text is primarily Chinese.
-        """
+        """Detects if the text is primarily Chinese."""
         if not text:
             return False
-        # Count Chinese characters
         chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
-        # If Chinese characters make up more than 5% of the text, treat as Chinese source
-        return (chinese_chars / len(text)) > 0.05
+        return (chinese_chars / (len(text) + 1)) > 0.05
 
-    def _translate_ollama(self, text: str, target_lang: str = "zh-TW") -> str:
+    def _translate_ollama(self, text: str, target_lang: str = "zh-TW", context: str = "") -> str:
         base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         base_url = base_url.rstrip("/")
         api_url = f"{base_url}/api/chat"
 
-        if target_lang == "en":
+
+        is_cn_to_en = target_lang.lower() in ['en', 'en-us', 'en-gb']
+        
+        if is_cn_to_en:
             system_prompt = (
-                "You are a professional translator. "
-                "Your ONLY task is to translate the provided text into English.\n"
+                "You are a professional translator for formal business and academic documents. "
+                "Translate the Chinese text segment into professional, fluent English.\n\n"
                 "CRITICAL RULES:\n"
-                "1. Output ONLY the translated English text.\n"
-                "2. DO NOT include the original Chinese text.\n"
-                "3. DO NOT output conversational fillers.\n"
-                "4. Translate accurately and fluently."
+                "1. COMPLETE TRANSLATION: You MUST translate ALL Chinese text. Do NOT leave ANY Chinese characters untranslated.\n"
+                "2. PROPER NOUNS: Only keep Chinese for organization names if they don't have English equivalents. Translate everything else.\n"
+                "3. NATURALNESS: Produce natural, fluent English that reads like a native document.\n"
+                "4. NO EXPLANATIONS: Output ONLY the translated English text.\n"
+                "5. CONTEXT: Use the PAGE CONTEXT below to understand the full meaning, but ONLY translate the 'TARGET TEXT'.\n\n"
+                f"=== PAGE CONTEXT (For Reference) ===\n{context[:8000]}\n=== END CONTEXT ===\n"
             )
         else:
             system_prompt = (
-                "You are a professional translator. "
-                "Your ONLY task is to translate the provided text into Traditional Chinese (Taiwan standard, zh-TW).\n"
+                "You are a professional translator for formal business and academic documents. "
+                "Translate the English text segment into professional Traditional Chinese (Taiwan, zh-TW).\n\n"
                 "CRITICAL RULES:\n"
-                "1. Output ONLY the translated Chinese text.\n"
-                "2. DO NOT include the original English text.\n"
-                "3. DO NOT output conversational fillers.\n"
-                "4. Translate accurately and fluently."
+                "1. FULL TRANSLATION: Translate ALL English content. Do NOT leave English words unless they are proper nouns or acronyms.\n"
+                "2. NATURALNESS: Produce natural, fluent Traditional Chinese.\n"
+                "3. NO EXPLANATIONS: Output ONLY the translated text.\n"
+                "4. CONTEXT: Use the PAGE CONTEXT to understand meaning, but ONLY translate the 'TARGET TEXT'.\n\n"
+                f"=== PAGE CONTEXT (For Reference) ===\n{context[:8000]}\n=== END CONTEXT ===\n"
             )
 
         messages = [
-            {
-                "role": "system",
-                "content": system_prompt,
-            },
-            {"role": "user", "content": f"The text to translate is:\n\n{text}"},
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"TARGET TEXT:\n{text}"},
         ]
 
-        try:
-            r = requests.post(
-                api_url,
-                json={
-                    "model": self.ollama_model,
-                    "messages": messages,
-                    "stream": False,
-                    "options": {"temperature": 0.1},
-                },
-                timeout=300,
-            )
+        if text.strip().isdigit():
+            return text
 
-            if r.status_code == 200:
-                out = r.json().get("message", {}).get("content", "").strip()
-                cleaned = self._clean_llm_response(out)
-                # Convert to Traditional Chinese only if target is Chinese
-                if target_lang == "zh-TW":
-                    return self.s2tw.convert(cleaned)
-                return cleaned
-        except Exception as e:
-            print(f"[PDF] Translation error (Ollama): {e}")
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                r = requests.post(
+                    api_url,
+                    json={
+                        "model": self.ollama_model,
+                        "messages": messages,
+                        "stream": False,
+                        "options": {
+                            "temperature": 0.3,
+                            "top_p": 0.9,
+                            "top_k": 40,
+                        },
+                    },
+                    timeout=300,
+                )
+
+                if r.status_code == 200:
+                    out = r.json().get("message", {}).get("content", "").strip()
+                    cleaned = self._clean_llm_response(out)
+                    if target_lang == "zh-TW":
+                        return self.s2tw.convert(cleaned)
+                    return cleaned
+                else:
+                    print(f"[PDF] Translation failed (Attempt {attempt+1}): Status {r.status_code}")
+            except Exception as e:
+                print(f"[PDF] Translation error (Attempt {attempt+1}): {e}")
+        
+        print(f"[PDF] All retries failed for text: {text[:20]}...")
 
         return text
 
     def process_pdf(self, input_pdf_path: str, force_target_lang: str = None):
         """
-        Processes the PDF: Uses Docling to convert PDF to Markdown text, then translate.
-        Returns a structured list.
+        Processes the PDF: Uses PyMuPDF to preserve layout and translation.
+        Returns a structured response, but now points to the translated PDF file.
         """
         if not os.path.exists(input_pdf_path):
             raise FileNotFoundError(f"File not found: {input_pdf_path}")
 
         print(f"[PDF] processing: {input_pdf_path}")
-        print("[PDF] Attempting Docling conversion...")
-
+        
+        target_lang = force_target_lang or "zh-TW"
+        
+        dir_name = os.path.dirname(input_pdf_path)
+        base_name = os.path.splitext(os.path.basename(input_pdf_path))[0]
+        output_pdf_path = os.path.join(dir_name, f"{base_name}_translated.pdf")
+        
         try:
-            # 1. Convert PDF to Docling Document
-            result = self.converter.convert(input_pdf_path)
-            doc = result.document
-
-            # Export to Markdown (best for LLM understanding)
-            md_content = doc.export_to_markdown()
-
-            # 2. Extract and Merge Chunks (OPTIMIZATION)
-            # Instead of splitting by every new line, we group them into larger logical blocks.
-            raw_chunks = [c.strip() for c in md_content.split("\n\n") if c.strip()]
-            print(f"[PDF] Raw paragraphs extracted: {len(raw_chunks)}")
-
-            # --- Source Language Detection ---
-            # Sample the first 1000 characters to determine source language
-            sample_text = md_content[:1000]
-            is_chinese_source = self._detect_is_chinese(sample_text)
-            
-            # Determine target language:
-            if force_target_lang:
-                target_lang = force_target_lang
-            else:
-                target_lang = "en" if is_chinese_source else "zh-TW"
-            
-            print(f"[PDF] Detected source: {'Chinese' if is_chinese_source else 'Non-Chinese'}. Target: {target_lang}")
-
-            merged_chunks = []
-            current_chunk = []
-            current_size = 0
-            MAX_CHUNK_SIZE = (
-                1500  # Reduced slightly to be safe with translation context
+            self.layout_translator.translate_pdf(
+                input_path=input_pdf_path,
+                output_path=output_pdf_path,
+                target_lang=target_lang
             )
-
-            for p in raw_chunks:
-                if len(p) < 2:
-                    continue  # Skip noise
-
-                # If adding this paragraph exceeds limit, save current chunk and start new one
-                if current_size + len(p) > MAX_CHUNK_SIZE and current_chunk:
-                    merged_chunks.append("\n\n".join(current_chunk))
-                    current_chunk = []
-                    current_size = 0
-
-                current_chunk.append(p)
-                current_size += len(p)
-
-            if current_chunk:
-                merged_chunks.append("\n\n".join(current_chunk))
-
-            print(
-                f"[PDF] Merged into {len(merged_chunks)} translation blocks (Optimization)."
-            )
-
-            translated_paras = []
-            total_chunks = len(merged_chunks)
-
-            for i, chunk in enumerate(merged_chunks):
-                print(f"[PDF] Translating block {i + 1}/{total_chunks}...")
-                translated = self._translate_ollama(chunk, target_lang=target_lang)
-                translated_paras.append(translated)
-
-            # Generate Summary from the full translated text
-            print("[PDF] Generating summary...")
-            full_translated_text = "\n\n".join(translated_paras)
-            summary = self._generate_summary(full_translated_text, target_lang=target_lang)
-            print(f"[PDF] Generated Summary Content (First 200 chars): {summary[:200]}")
-
+            
             return [
                 {
                     "page": "Full Document",
-                    "paragraphs": translated_paras,
-                    "summary": summary,
+                    "file_path": output_pdf_path, 
+                    "summary": "Summary generation disabled.",
+                    "paragraphs": ["Content is inside the translated PDF file."]
                 }
             ]
 
         except Exception as e:
-            print(f"[PDF] Docling processing error: {e}")
+            print(f"[PDF] Processing error: {e}")
             raise e
 
-    def _generate_summary(self, text: str, target_lang: str = "zh-TW") -> str:
-        """
-        Generates a concise summary using Map-Reduce strategy.
-        """
-        chunk_size = 3000  # Reduced from 6000 to prevent timeouts on local LLM
-        if len(text) <= chunk_size:
-            return self._call_llm_for_summary(text, final=True, target_lang=target_lang)
-
-        # Long document: Map-Reduce
-        print("[PDF] Document is long. Starting Map-Reduce summarization...")
-        chunks = [text[i : i + chunk_size] for i in range(0, len(text), chunk_size)]
-        partial_summaries = []
-
-        for idx, chunk in enumerate(chunks):
-            print(f"[PDF] Summarizing part {idx + 1}/{len(chunks)}...")
-            partial = self._call_llm_for_summary(chunk, final=False, target_lang=target_lang)
-            if partial:
-                partial_summaries.append(partial)
-
-        if not partial_summaries:
-            return "無法生成摘要。" if target_lang == "zh-TW" else "Unable to generate summary."
-
-        combined_summary_text = "\n\n".join(partial_summaries)
-        print("[PDF] Generating final summary from partials...")
-        final_summary = self._call_llm_for_summary(combined_summary_text, final=True, target_lang=target_lang)
-        return final_summary
-
-    def _call_llm_for_summary(self, text: str, final: bool = False, target_lang: str = "zh-TW") -> str:
-        """
-        Helper to call LLM for summarization.
-        """
-        base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-        base_url = base_url.rstrip("/")
-        api_url = f"{base_url}/api/chat"
-
-        lang_instruction = "Traditional Chinese (zh-TW)" if target_lang == "zh-TW" else "English"
-
-        if final:
-            system_msg = (
-                "You are a helpful AI assistant. "
-                f"Please read the following context and provide a comprehensive final summary in {lang_instruction}. "
-                "Target length: Around 500 words. "
-                "Focus on stitching the narrative together, highlighting key findings, and conclusions."
-            )
-            user_msg = f"Context:\n{text}"
-        else:
-            system_msg = (
-                "You are a helpful AI assistant. "
-                f"Please read the following text segment and list the key points in {lang_instruction}. "
-                "Keep it concise (around 100-150 words)."
-            )
-            user_msg = f"Text Segment:\n{text}"
-
-        messages = [
-            {"role": "system", "content": system_msg},
-            {"role": "user", "content": user_msg},
-        ]
-
-        try:
-            r = requests.post(
-                api_url,
-                json={
-                    "model": self.ollama_model,
-                    "messages": messages,
-                    "stream": False,
-                    "options": {"temperature": 0.2},
-                },
-                timeout=300,
-            )
-            if r.status_code == 200:
-                out = r.json().get("message", {}).get("content", "").strip()
-                cleaned = self._clean_llm_response(out)
-                # Convert simplified Chinese to traditional Chinese (Taiwan) if target is Chinese
-                if target_lang == "zh-TW":
-                    return self.s2tw.convert(cleaned)
-                return cleaned
-        except Exception as e:
-            print(f"[PDF] Summary generation error: {e}")
-            return ""
-        return ""
-
-    def save_to_txt(self, pages_data, output_path):
-        """
-        Saves the processed data to a TXT file.
-        """
-        with open(output_path, "w", encoding="utf-8") as f:
-            for page in pages_data:
-                f.write(f"=== PAGE {page['page']} ===\n")
-                for para in page["paragraphs"]:
-                    f.write(para + "\n\n")
-        return output_path
-
-
 # Global instance
-pdf_service = PDFService(
-    engine="ollama"
-)  # Defaulting to Ollama as requested implicitly by context, or google if preferred
+pdf_service = PDFService(engine="ollama")

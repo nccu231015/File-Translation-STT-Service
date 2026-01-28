@@ -10,7 +10,7 @@ load_dotenv()
 
 
 class LLMService:
-    def __init__(self, model="qwen2.5:7b"):
+    def __init__(self, model="qwen3:8b"):
         self.model = model
         print(f"LLM Service initialized with model: {self.model}")
 
@@ -206,25 +206,35 @@ class LLMService:
         """
         if is_reduce_step:
             prompt = (
-                "You are an expert meeting secretary. "
-                "Below is a collection of partial meeting analysis results. "
-                "Please synthesize them into a single, cohesive set of meeting minutes in Traditional Chinese (Taiwan, zh-TW).\n"
-                "Structure your response strictly as a JSON object with keys: 'summary', 'decisions', 'action_items'.\n"
-                "1. 'summary': A comprehensive summary of the entire meeting.\n"
-                "2. 'decisions': A consolidated list of key decisions made.\n"
-                "3. 'action_items': A consolidated list of tasks (Who - What - When).\n"
-                "CRITICAL: Output ONLY valid JSON."
+                "Expert meeting secretary. Synthesize partial results into DETAILED meeting minutes (Traditional Chinese, zh-TW).\n\n"
+                "Context: Meeting between 業主方 (Client) and PM方 (PM Team).\n\n"
+                "Output JSON with keys:\n"
+                "- attendees: List of participant names/roles (in Traditional Chinese)\n"
+                "- meeting_objective: Detailed explanation of purpose (Translate to Traditional Chinese)\n"
+                "- discussion_summary: COMPREHENSIVE summary in Traditional Chinese. Organize by topics. Include specific arguments and numbers.\n"
+                "- schedule_notes: Detailed timeline and deadlines (Translate to Traditional Chinese)\n"
+                "- decisions: All conclusive decisions made (Translate to Traditional Chinese). Be specific.\n"
+                "- action_items: [{'task': 'Task in Traditional Chinese', 'owner': 'Name/Role (Chinese)', 'deadline': 'Date'}]\n\n"
+                "Rules:\n"
+                "- OUTPUT LANGUAGE: MUST BE TRADITIONAL CHINESE (Taiwan) ONLY. Do not output English unless it's a specific technical term.\n"
+                "- RETAIN DETAILS: Do not omit important technical details.\n"
+                "- Output ONLY valid JSON"
             )
         else:
             prompt = (
-                "You are an expert meeting secretary. "
-                "Analyze the following meeting transcript segment in Traditional Chinese (Taiwan, zh-TW).\n"
-                "Extract:\n"
-                "1. Key discussion points (Summary)\n"
-                "2. Decisions made (Decisions)\n"
-                "3. Action items (Tasks)\n"
-                "Structure your response strictly as a JSON object with keys: 'summary', 'decisions', 'action_items'.\n"
-                "CRITICAL: Output ONLY valid JSON."
+                "Expert meeting secretary. Analyze transcript segment (Traditional Chinese, zh-TW).\n\n"
+                "Context: Meeting between 業主方 (Client) and PM方 (PM Team).\n\n"
+                "Output JSON with keys:\n"
+                "- attendees: List of names/roles (in Traditional Chinese)\n"
+                "- meeting_objective: Discussed purpose (Translate to Traditional Chinese)\n"
+                "- discussion_summary: DETAILED summary in Traditional Chinese. Capture requirements and issues.\n"
+                "- schedule_notes: Timeline info (Translate to Traditional Chinese)\n"
+                "- decisions: Clear decisions ONLY (Translate to Traditional Chinese)\n"
+                "- action_items: [{'task': 'Task in Chinese', 'owner': 'Name (Chinese)', 'deadline': '...'}]\n\n"
+                "Rules:\n"
+                "- OUTPUT LANGUAGE: MUST BE TRADITIONAL CHINESE (Taiwan) ONLY.\n"
+                "- Focus on SUBSTANCE and DETAILS.\n"
+                "- Output ONLY valid JSON"
             )
 
         messages = [
@@ -248,7 +258,19 @@ class LLMService:
                 if isinstance(data.get("decisions"), list):
                     data["decisions"] = [self.s2tw.convert(str(d)) for d in data["decisions"]]
                 if isinstance(data.get("action_items"), list):
-                    data["action_items"] = [self.s2tw.convert(str(a)) for a in data["action_items"]]
+                    new_actions = []
+                    for item in data["action_items"]:
+                        if isinstance(item, dict):
+                            # Convert fields inside dict
+                            new_item = item.copy()
+                            if "task" in item: new_item["task"] = self.s2tw.convert(item["task"])
+                            if "owner" in item: new_item["owner"] = self.s2tw.convert(item["owner"])
+                            if "deadline" in item:  new_item["deadline"] = self.s2tw.convert(item["deadline"])
+                            new_actions.append(new_item)
+                        else:
+                            # Fallback for string items
+                            new_actions.append(self.s2tw.convert(str(item)))
+                    data["action_items"] = new_actions
                 return data
             except json.JSONDecodeError:
                 print(f"[LLM] JSON Parse Error: {content[:100]}...")
