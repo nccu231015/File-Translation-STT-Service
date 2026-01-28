@@ -8,7 +8,7 @@ class PDFService:
     def __init__(self, engine="ollama", target_lang="zh-TW"):
         self.engine = "ollama"
         self.target_lang = target_lang
-        self.ollama_model = "qwen3:8b"
+        self.ollama_model = "qwen2.5:7b"
         self.s2tw = OpenCC("s2tw")
         
         self.layout_translator = PDFLayoutPreservingService(

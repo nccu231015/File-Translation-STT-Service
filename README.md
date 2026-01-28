@@ -22,7 +22,7 @@ A full-stack AI productivity suite featuring **Document Translation**, **Speech-
 ### 💬 AI Chat Interface
 - RAG-based document Q&A
 - Context-aware responses using uploaded document content
-- Powered by local Ollama models (**Default: qwen3:8b**)
+- Powered by local Ollama models (**Default: qwen2.5:7b**)
 
 ## 🏗️ Architecture
 
@@ -52,9 +52,9 @@ File-Translation-STT-Service/
 ### Prerequisites
 - **Docker Desktop** (for backend)
 - **Node.js 20+** (for frontend)
-- **Ollama** running locally with `qwen3:8b` model
+- **Ollama** running locally with `qwen2.5:7b` model
   ```bash
-  ollama pull qwen3:8b
+  ollama pull qwen2.5:7b
   ```
 
 ### 1️⃣ Start Backend (Docker)

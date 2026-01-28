@@ -19,7 +19,7 @@ This directory contains the Python backend for the File Translation & STT Servic
 - **AI/ML**: 
   - `docling` (Document parsing)
   - `faster-whisper` (CPU-optimized STT)
-  - `ollama` (Local LLM inference, default model: **qwen3:8b**)
+  - `ollama` (Local LLM inference, default model: **qwen2.5:7b**)
   - `opencc` (Chinese conversion)
   - `ffmpeg` (Audio processing)
 - **Database/Cache**: Redis
@@ -30,7 +30,7 @@ This directory contains the Python backend for the File Translation & STT Servic
 - Python 3.11+
 - `uv` package manager (`pip install uv`)
 - Redis (running via Docker or locally)
-- Ollama running locally with `qwen3:8b` model (Run `ollama pull qwen3:8b`)
+- Ollama running locally with `qwen2.5:7b` model (Run `ollama pull qwen2.5:7b`)
 
 ### 2. Environment Variables
 Copy `.env.example` to `.env`:

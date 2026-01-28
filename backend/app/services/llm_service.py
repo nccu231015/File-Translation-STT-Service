@@ -10,7 +10,7 @@ load_dotenv()
 
 
 class LLMService:
-    def __init__(self, model="qwen3:8b"):
+    def __init__(self, model="qwen2.5:7b"):
         self.model = model
         print(f"LLM Service initialized with model: {self.model}")
 
