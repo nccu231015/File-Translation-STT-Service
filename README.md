@@ -11,17 +11,18 @@ A full-stack AI productivity suite featuring **Document Translation**, **Speech-
 - Powered by **Docling** for accurate PDF parsing
 - Utilizes local LLM (Ollama) for context-aware translation
 
-### 🎙️ Speech-to-Text (STT)
+### 🎙️ Speech-to-Text (STT) & Meeting Intelligence
 - Transcribe audio files (WAV, MP3, M4A, etc.)
-- Two modes:
-  - **Chat Mode**: Interactive voice-to-text with AI responses
-  - **Meeting Mode**: Generate meeting minutes with summaries, decisions, and action items
+- **Advanced Meeting Analysis**:
+  - Structured output: Summary, Decisions, Action Items, Schedule
+  - Professional Word (.docx) export
+  - Strict type enforcement for reliability
 - CPU-optimized for stability on standard hardware
 
 ### 💬 AI Chat Interface
 - RAG-based document Q&A
 - Context-aware responses using uploaded document content
-- Powered by local Ollama models
+- Powered by local Ollama models (**Default: qwen3:8b**)
 
 ## 🏗️ Architecture
 
@@ -33,7 +34,8 @@ File-Translation-STT-Service/
 │   │   └── services/
 │   │       ├── pdf_service.py
 │   │       ├── stt_service.py
-│   │       └── llm_service.py
+│   │       ├── llm_service.py
+│   │       └── meeting_minutes_docx.py
 │   └── pyproject.toml
 ├── frontend/         # Next.js 16 dashboard (npm)
 │   ├── src/
@@ -50,9 +52,9 @@ File-Translation-STT-Service/
 ### Prerequisites
 - **Docker Desktop** (for backend)
 - **Node.js 20+** (for frontend)
-- **Ollama** running locally with `qwen2.5:7b` model
+- **Ollama** running locally with `qwen3:8b` model
   ```bash
-  ollama pull qwen2.5:7b
+  ollama pull qwen3:8b
   ```
 
 ### 1️⃣ Start Backend (Docker)
