@@ -21,6 +21,10 @@ backend/uploads/
 *.wav
 *.pdf
 
+# Allow sample files for testing
+!samples/*.wav
+!samples/*.pdf
+
 # Node / Frontend
 node_modules/
 frontend/node_modules/
