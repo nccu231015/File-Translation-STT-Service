@@ -45,6 +45,9 @@ class PDFLayoutPreservingService:
                 if debug_mode:
                     print(f"[PDF Layout] Debug mode enabled. Drawing {len(layout_blocks)} blocks.")
                     
+                    if len(layout_blocks) == 0:
+                        print(f"[PDF Layout] WARNING: No layout blocks detected on page {page_num + 1}")
+                    
                     # Color mapping for different block types (RGB tuples)
                     color_map = {
                         "Text": (1, 0, 0),      # Red
@@ -55,30 +58,48 @@ class PDFLayoutPreservingService:
                     }
                     default_color = (0.5, 0.5, 0.5) # Grey for unknown
 
-                    for block in layout_blocks:
-                        # Get color based on type
-                        color = color_map.get(block.type, default_color)
+                    for idx, block in enumerate(layout_blocks):
+                        try:
+                            # Validation
+                            if block.page_width == 0 or block.page_height == 0:
+                                print(f"[PDF Layout] WARNING: Block {idx} has invalid dimensions, skipping")
+                                continue
+                            
+                            # Get color based on type
+                            color = color_map.get(block.type, default_color)
 
-                        # Convert pixel bbox to PDF pdf_rect
-                        pdf_rect = self.layout_detector.pixel_to_pdf_rect(
-                            block.bbox, page, block.page_width, block.page_height
-                        )
+                            # Convert pixel bbox to PDF pdf_rect
+                            pdf_rect = self.layout_detector.pixel_to_pdf_rect(
+                                block.bbox, page, block.page_width, block.page_height
+                            )
+                            
+                            # Validate rect
+                            if pdf_rect.is_empty or pdf_rect.width < 1 or pdf_rect.height < 1:
+                                print(f"[PDF Layout] WARNING: Block {idx} produced invalid rect, skipping")
+                                continue
 
-                        # Draw Box with specific color
-                        page.draw_rect(pdf_rect, color=color, width=1.5)
-                        
-                        # Draw Label (Type + Confidence)
-                        label = f"{block.type} ({block.confidence:.2f})"
-                        # Ensure text is slightly above or inside if at top
-                        text_point = (pdf_rect.x0, pdf_rect.y0 - 5 if pdf_rect.y0 > 10 else pdf_rect.y0 + 10)
-                        
-                        page.insert_text(
-                            text_point,
-                            label, 
-                            fontsize=8, 
-                            color=color
-                        )
+                            # Draw Box with specific color
+                            page.draw_rect(pdf_rect, color=color, width=1.5)
+                            
+                            # Draw Label (Type + Confidence)
+                            label = f"{block.type} ({block.confidence:.2f})"
+                            # Ensure text is slightly above or inside if at top
+                            text_point = (pdf_rect.x0, pdf_rect.y0 - 5 if pdf_rect.y0 > 10 else pdf_rect.y0 + 10)
+                            
+                            page.insert_text(
+                                text_point,
+                                label, 
+                                fontsize=8, 
+                                color=color
+                            )
+                            
+                        except Exception as block_err:
+                            print(f"[PDF Layout] ERROR drawing block {idx}: {block_err}")
+                            continue
+                    
+                    print(f"[PDF Layout] Debug visualization completed for page {page_num + 1}")
                     continue # Skip to next page (no translation in debug mode)
+                
                 
                 # Filter logic
                 
