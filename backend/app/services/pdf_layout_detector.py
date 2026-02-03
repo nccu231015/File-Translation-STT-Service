@@ -76,6 +76,7 @@ class PDFLayoutDetector:
         from PIL import Image
         import io
         
+        print(f"[PDF Layout Detector] Page {page_num+1}: Rendering image (300 DPI)...", flush=True)
         doc = fitz.open(pdf_path)
         page = doc[page_num]
         
@@ -83,10 +84,13 @@ class PDFLayoutDetector:
         pix = page.get_pixmap(dpi=300)
         img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
         img_array = np.array(img)
+        print(f"[PDF Layout Detector] Page {page_num+1}: Image rendered ({img.size[0]}x{img.size[1]})", flush=True)
         
         # Inference
+        print(f"[PDF Layout Detector] Page {page_num+1}: Running Detectron2 inference...", flush=True)
         # LayoutParser returns a Layout object (list of TextBlock)
         layout = self.model.detect(img_array)
+        print(f"[PDF Layout Detector] Page {page_num+1}: AI found {len(layout)} raw blocks", flush=True)
         
         # 1. AI Predictions (Semantic Layer)
         if not isinstance(layout, lp.Layout):
@@ -104,6 +108,7 @@ class PDFLayoutDetector:
             
         # 2. PyMuPDF Extraction (Recall Layer & Text Content)
         # Get raw text blocks from PDF engine (guaranteed text presence)
+        print(f"[PDF Layout Detector] Page {page_num+1}: Extracting text blocks via PyMuPDF...", flush=True)
         pdf_blocks = []
         raw_pdf_blocks = page.get_text("dict")["blocks"]
         
@@ -132,6 +137,7 @@ class PDFLayoutDetector:
                 })
 
         # 3. Smart Merge Strategy
+        print(f"[PDF Layout Detector] Page {page_num+1}: Merging AI + PDF blocks...", flush=True)
         final_blocks = []
         
         for p_block in pdf_blocks:
@@ -201,7 +207,8 @@ class PDFLayoutDetector:
                     page_height=page_height
                 ))
 
-        print(f"[PDF Layout Detector] Detectron2+Hybrid found {len(final_blocks)} blocks")
+        doc.close()
+        print(f"[PDF Layout Detector] Page {page_num+1} Success: {len(final_blocks)} final blocks", flush=True)
         return final_blocks
     
     def _detect_layout_pymupdf(self, pdf_path: str, page_num: int) -> List[LayoutBlock]:

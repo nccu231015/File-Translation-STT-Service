@@ -34,11 +34,11 @@ class PDFLayoutPreservingService:
         print(f"[PDF Layout] Target language: {target_lang} (Debug Mode: {debug_mode})")
 
         for page_num, page in enumerate(doc):
-            print(f"\n[PDF Layout] ===== Processing page {page_num + 1}/{total_pages} =====")
+            print(f"\n[PDF Layout] ===== Processing page {page_num + 1}/{total_pages} =====", flush=True)
             
             try:
                 # STEP 1: Layout Detection
-                print(f"[PDF Layout] Step 1: Detecting layout...")
+                print(f"[PDF Layout] Step 1: Detecting layout...", flush=True)
                 layout_blocks = self.layout_detector.detect_layout(input_path, page_num, page.rect.width, page.rect.height)
 
                 # --- DEBUG MODE VISUALIZATION ---
