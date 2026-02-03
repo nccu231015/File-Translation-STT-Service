@@ -42,9 +42,8 @@ COPY backend/.env.example ./.env
 # --- Install PyTorch with CUDA 12.1 support ---
 RUN uv pip install --system torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
-# --- Install Detectron2 (Pre-built for CUDA 12.1 + Torch 2.X) ---
-# Installing directly from Facebook's wheel to avoid slow compilation
-RUN python -m pip install detectron2 -f https://dl.fbaipublicfiles.com/detectron2/wheels/cu121/torch2.1/index.html
+# --- Install Detectron2 from source (works with any CUDA/PyTorch combo) ---
+RUN python -m pip install 'git+https://github.com/facebookresearch/detectron2.git'
 
 # --- Install LayoutParser with Detectron2 backend ---
 RUN uv pip install --system opencv-python-headless && \
