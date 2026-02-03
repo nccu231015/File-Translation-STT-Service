@@ -9,9 +9,9 @@ load_dotenv()
 
 
 class LLMService:
-    def __init__(self, model="qwen3:32b"):
+    def __init__(self, model="gpt-oss:20b"):
         self.model = model
-        print(f"LLM Service initialized with model: {self.model}")
+        print(f"LLM Service initialized with model: {self.model}", flush=True)
 
         # Initialize OpenCC for simplified to traditional Chinese conversion
         self.s2tw = OpenCC("s2tw")  # Simplified to Traditional (Taiwan standard)

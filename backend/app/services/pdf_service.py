@@ -69,7 +69,7 @@ class PDFService:
 
     def _translate_ollama(self, text: str, target_lang: str = "zh-TW", context: str = "") -> str:
         """
-        Smart chunked translation: automatically splits long text to prevent incomplete translations.
+        Smart chunked translation with optimized parameters for speed.
         """
         base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         base_url = base_url.rstrip("/")
@@ -87,10 +87,9 @@ class PDFService:
             return self._translate_with_chunking(text, target_lang, context, api_url)
         
         # --- SINGLE CHUNK ---
+        system_prompt = "Translator. Output translation only. Natural Traditional Chinese."
         if is_cn_to_en:
-            system_prompt = "Professional translator. Chinese to English. Output translation only."
-        else:
-            system_prompt = "Professional translator. English to Traditional Chinese (Taiwan). Output translation only."
+            system_prompt = "Translator. Output translation only. Fluent English."
 
         messages = [
             {"role": "system", "content": system_prompt},
@@ -107,19 +106,23 @@ class PDFService:
                         "model": self.ollama_model,
                         "messages": messages,
                         "stream": False,
-                        "options": {"temperature": 0.2},
+                        "options": {
+                            "temperature": 0.1,  # Lower temperature = faster search
+                            "num_predict": 1024, # Safety cap
+                            "top_p": 0.9,
+                        },
                     },
-                    timeout=180, # 3 minutes timeout
+                    timeout=120, # Reduced to 2 minutes
                 )
 
                 if r.status_code == 200:
                     out = r.json().get("message", {}).get("content", "").strip()
                     cleaned = self._clean_llm_response(out)
                     result = self.s2tw.convert(cleaned) if target_lang == "zh-TW" else cleaned
-                    print(f"  [Ollama] Success! (Attempt {attempt+1})", flush=True)
+                    print(f"  [Ollama] Success! Result: '{result[:30]}...'", flush=True)
                     return result
                 else:
-                    print(f"  [Ollama] Failed: Status {r.status_code} ({r.text[:100]})", flush=True)
+                    print(f"  [Ollama] Failed: Status {r.status_code}", flush=True)
             except Exception as e:
                 print(f"  [Ollama] Error (Attempt {attempt+1}): {e}", flush=True)
         
@@ -189,15 +192,19 @@ class PDFService:
             
             for attempt in range(max_retries):
                 try:
+                    print(f"  [Ollama-Chunk] Sending chunk {idx+1}/{len(combined_chunks)} to {self.ollama_model}...", flush=True)
                     r = requests.post(
                         api_url,
                         json={
                             "model": self.ollama_model,
                             "messages": messages,
                             "stream": False,
-                            "options": {"temperature": 0.3},
+                            "options": {
+                                "temperature": 0.1,
+                                "num_predict": 1024
+                            },
                         },
-                        timeout=180,
+                        timeout=120,
                     )
 
                     if r.status_code == 200:
@@ -205,9 +212,10 @@ class PDFService:
                         chunk_translation = self._clean_llm_response(out)
                         if target_lang == "zh-TW":
                             chunk_translation = self.s2tw.convert(chunk_translation)
+                        print(f"  [Ollama-Chunk] Success! ({len(chunk_translation)} chars)", flush=True)
                         break
                 except Exception as e:
-                    print(f"[PDF] Chunk {idx+1} translation error: {e}")
+                    print(f"  [Ollama-Chunk] Chunk {idx+1} error: {e}", flush=True)
             
             if chunk_translation:
                 translated_chunks.append(chunk_translation)
