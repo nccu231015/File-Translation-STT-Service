@@ -57,7 +57,7 @@ class PDFLayoutDetector:
                 config_path='tf_efficientdet_d0',  # Built-in model architecture name
                 model_path=model_path,              # PubLayNet-specific weights (5 classes)
                 label_map={1: "Text", 2: "Title", 3: "List", 4: "Table", 5: "Figure"},
-                extra_config={"CONFIDENCE_THRESHOLD": 0.3}
+                extra_config={"CONFIDENCE_THRESHOLD": 0.25}
             )
             
             # Check if running on GPU
@@ -92,7 +92,8 @@ class PDFLayoutDetector:
         page = doc[page_num]
         
         # High DPI for better detection (LayoutParser expects good resolution)
-        pix = page.get_pixmap(dpi=200)
+        # 300 DPI is standard for document analysis; 200 might be too blurry
+        pix = page.get_pixmap(dpi=300)
         img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
         img_array = np.array(img)
         
@@ -109,7 +110,7 @@ class PDFLayoutDetector:
             # block.score is confidence
             
             # Filter low confidence predictions
-            if block.score < 0.3:
+            if block.score < 0.25:
                 continue
                 
             rect = block.coordinates
