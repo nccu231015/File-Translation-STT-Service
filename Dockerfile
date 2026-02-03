@@ -48,8 +48,11 @@ RUN uv pip install --system opencv-python-headless && \
 
 # --- Pre-download EfficientDet model (avoid runtime download issues) ---
 RUN mkdir -p /root/.cache/torch/hub/checkpoints && \
-    wget -q "https://github.com/rwightman/efficientdet-pytorch/releases/download/v0.1/tf_efficientdet_d0-d92fd44f.pth" \
-         -O /root/.cache/torch/hub/checkpoints/tf_efficientdet_d0-d92fd44f.pth
+    (wget -q --timeout=10 "https://github.com/rwightman/efficientdet-pytorch/releases/download/v0.1/tf_efficientdet_d0_34-f153e0cf.pth" \
+         -O /root/.cache/torch/hub/checkpoints/tf_efficientdet_d0_34-f153e0cf.pth || \
+     wget -q "https://ghproxy.com/https://github.com/rwightman/efficientdet-pytorch/releases/download/v0.1/tf_efficientdet_d0_34-f153e0cf.pth" \
+         -O /root/.cache/torch/hub/checkpoints/tf_efficientdet_d0_34-f153e0cf.pth || \
+     echo "WARNING: Model download failed, will retry at runtime")
 
 # Verify installation
 RUN python -c "import layoutparser as lp; import torch; print(f'✓ LayoutParser + EfficientDet ready (CUDA: {torch.cuda.is_available()})')"
