@@ -32,6 +32,7 @@ RUN pip install uv
 COPY backend/pyproject.toml ./
 
 # Install app dependencies
+ENV UV_HTTP_TIMEOUT=500
 RUN uv pip install --system -r pyproject.toml
 
 # Copy Code
