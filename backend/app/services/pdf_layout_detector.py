@@ -103,65 +103,114 @@ class PDFLayoutDetector:
         # LayoutParser returns a Layout object (list of TextBlock)
         layout = self.model.detect(img_array)
         
-        # Apply Non-Maximum Suppression (NMS) properly
-        # Note: Some versions of LP return a list, so we wrap it just in case
+        # 1. AI Predictions (Semantic Layer)
         if not isinstance(layout, lp.Layout):
             layout = lp.Layout(layout)
+            
+        # NMS with standard threshold (0.5) to avoid removing adjacent blocks
+        layout = layout.nms(iou_threshold=0.5)
         
-        # Use global NMS function if method missing, or ensure it's filtered
-        # Trying the most robust way:
-        layout = lp.Layout([b for b in layout if b.score > 0.15]) # Pre-filter
-        # Use simple recursion NMS from layoutparser
-        # Note: If layout.nms() fails, we skip it or hand-roll it, but let's try strict wrapping
-        try:
-             # Standard LP NMS
-             layout = layout.nms(iou_threshold=0.1)
-        except AttributeError:
-             # Fallback if method doesn't exist in installed version
-             pass
+        raw_ai_blocks = []
+        for block in layout:
+            if block.score < 0.15:
+                continue
+            r = block.coordinates
+            raw_ai_blocks.append({
+                "type": block.type,
+                "bbox": [r[0], r[1], r[2], r[3]], # x1,y1,x2,y2
+                "area": (r[2]-r[0]) * (r[3]-r[1]),
+                "score": block.score
+            })
+            
+        # --- Containment Suppression (Fix Red/Green Overlap) ---
+        # If a small block is inside a large block (e.g., Text inside List), drop the small one.
+        indices_to_drop = set()
+        for i, b1 in enumerate(raw_ai_blocks):
+            for j, b2 in enumerate(raw_ai_blocks):
+                if i == j: continue
+                # Check if b1 is inside b2
+                if (b1["bbox"][0] >= b2["bbox"][0] and b1["bbox"][1] >= b2["bbox"][1] and 
+                    b1["bbox"][2] <= b2["bbox"][2] and b1["bbox"][3] <= b2["bbox"][3]):
+                    # b1 is inside b2. Keep the larger semantic block (List/Table) usually.
+                    # Unless b2 is just "Text" and b1 is "Title"? No, usually bigger is container.
+                    indices_to_drop.add(i)
         
-        blocks = []
-        for idx, block in enumerate(layout):
-            # block.block_1, block_2 ... are coordinates [x1, y1, x2, y2]
-            # block.type is the label string
-            # block.score is confidence
+        ai_blocks = [b for i, b in enumerate(raw_ai_blocks) if i not in indices_to_drop]
+
+        # 2. PyMuPDF Extraction (Recall Layer)
+        # Get raw text blocks from PDF engine (guaranteed text presence)
+        pdf_blocks = []
+        raw_pdf_blocks = page.get_text("dict")["blocks"]
+        
+        # Scale PyMuPDF coordinates to Image coordinates
+        pdf_w, pdf_h = page.rect.width, page.rect.height
+        scale_x = page_width / pdf_w
+        scale_y = page_height / pdf_h
+        
+        for b in raw_pdf_blocks:
+            if b["type"] == 0: # Text block
+                r = b["bbox"]
+                # Scale to image px
+                img_bbox = [r[0] * scale_x, r[1] * scale_y, r[2] * scale_x, r[3] * scale_y]
+                pdf_blocks.append({
+                    "bbox": img_bbox,
+                    "text_len": len(b.get("lines", [])),
+                    "original_bbox": r
+                })
+
+        # 3. Merge Strategy (The "Hybrid" Fix)
+        final_blocks = []
+        
+        # For each PDF text block, check if it falls inside an AI block
+        for p_block in pdf_blocks:
+            px1, py1, px2, py2 = p_block["bbox"]
+            p_center = ((px1+px2)/2, (py1+py2)/2)
             
-            rect = block.coordinates
+            matched_type = "Text" # Default to Text (Recall Guarantee)
+            max_score = 0.0
+            matched_ai = False
             
-            # --- Heuristic Correction (Hybrid Mode) ---
-            # AI sometimes mistakes Title for Text. Let's fix it using geometry/content.
-            b_type = block.type
+            for ai_b in ai_blocks:
+                ax1, ay1, ax2, ay2 = ai_b["bbox"]
+                
+                # Check center containment
+                if (ax1 < p_center[0] < ax2) and (ay1 < p_center[1] < ay2):
+                    matched_ai = True
+                    # If AI says it's Title/Table/List/Figure -> Trust it
+                    if ai_b["score"] > max_score:
+                        matched_type = ai_b["type"]
+                        max_score = ai_b["score"]
             
-            # 1. Title Correction: Short text at top of page or large font (requires text content check, 
-            #    but here we only have boxes. We can infer by aspect ratio/position).
-            #    Simple rule: If near top and is "Text", usually Title.
-            y_center = (rect[1] + rect[3]) / 2
-            if b_type == "Text" and y_center < page_height * 0.15 and (rect[2] - rect[0]) < page_width * 0.8:
-                 # It's at the very top and not full width -> Likely a Title/Header
-                 b_type = "Title"
-            
-            blocks.append(LayoutBlock(
-                type=b_type, # Used corrected type
-                bbox=(rect[0], rect[1], rect[2], rect[3]),
-                confidence=block.score,
+            # Heuristic: Fix AI mistaking Title for Text
+            if matched_type == "Text":
+                 # If near top and short -> Title
+                 if p_center[1] < page_height * 0.15 and (px2 - px1) < page_width * 0.85:
+                     matched_type = "Title"
+
+            final_blocks.append(LayoutBlock(
+                type=matched_type,
+                bbox=(px1, py1, px2, py2), # Use precise PyMuPDF coordinates
+                confidence=max_score if matched_ai else 1.0,
                 page_width=page_width,
                 page_height=page_height
             ))
             
-            # Debug: Print block type to diagnose classification issues
-            print(f"[PDF Layout Detector] Block {idx}: type={block.type}, confidence={block.score:.2f}")
-            
-            blocks.append(LayoutBlock(
-                type=block.type, # 'Text', 'Title', etc.
-                bbox=(rect[0], rect[1], rect[2], rect[3]),
-                confidence=block.score,
-                page_width=page_width,
-                page_height=page_height
-            ))
-        
+        # 4. Add AI blocks that are NOT text (Figures/Images) 
+        # because PyMuPDF get_text("dict") text blocks don't cover images well
+        for ai_b in ai_blocks:
+            if ai_b["type"] in ["Figure", "Table", "Image"]:
+                # Add them (potential overlap with text inside table is acceptable for layout visualization)
+                final_blocks.append(LayoutBlock(
+                    type=ai_b["type"],
+                    bbox=tuple(ai_b["bbox"]),
+                    confidence=ai_b["score"],
+                    page_width=page_width,
+                    page_height=page_height
+                ))
+
         doc.close()
-        print(f"[PDF Layout Detector] LayoutParser found {len(blocks)} blocks")
-        return blocks
+        print(f"[PDF Layout Detector] Hybrid Merge: {len(ai_blocks)} AI blocks + {len(pdf_blocks)} PDF blocks -> {len(final_blocks)} final blocks")
+        return final_blocks
     
     def _detect_layout_pymupdf(self, pdf_path: str, page_num: int) -> List[LayoutBlock]:
         """Heuristic fallback using PyMuPDF"""
