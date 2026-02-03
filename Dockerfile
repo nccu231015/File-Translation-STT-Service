@@ -1,13 +1,16 @@
-# Use NVIDIA CUDA base image for GPU support
-FROM nvidia/cuda:12.6.0-cudnn-runtime-ubuntu22.04
+# Use NVIDIA CUDA DEVEL image (Required for compiling Detectron2/CUDA extensions)
+FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
 
 # Prevent interactive prompts during installation
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install system dependencies
+# Install system dependencies (including build tools for Detectron2)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.10 \
     python3-pip \
+    python3-dev \
+    build-essential \
+    ninja-build \
     ffmpeg \
     git \
     wget \
@@ -39,27 +42,20 @@ RUN uv pip install --system -r pyproject.toml
 COPY backend/app ./app
 COPY backend/.env.example ./.env
 
-# --- Install PyTorch with CUDA 12.6 support ---
-RUN uv pip install --system torch torchvision --index-url https://download.pytorch.org/whl/cu126
+# --- Install PyTorch with CUDA 11.8 support (Matches Base Image) ---
+# Detectron2 requires matching CUDA versions between System and PyTorch
+RUN uv pip install --system torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 
-# --- Install LayoutParser with EfficientDet ---
+# --- Install Detectron2 from Source ---
+# Using the main branch which supports PyTorch 2.x+
+RUN python -m pip install 'git+https://github.com/facebookresearch/detectron2.git'
+
+# --- Install LayoutParser with Detectron2 support ---
 RUN uv pip install --system opencv-python-headless && \
-    uv pip install --system "layoutparser[effdet]" && \
-    uv pip install --system timm
-
-# --- Pre-download PubLayNet EfficientDet model (official 5-class model) ---
-RUN mkdir -p /root/.cache/layoutparser/models && \
-    (wget -q --timeout=30 "https://www.dropbox.com/s/ukbw5s673633hsw/publaynet-tf_efficientdet_d0.pth.tar?dl=1" \
-         -O /tmp/publaynet-tf_efficientdet_d0.pth.tar || \
-     wget -q "https://ghproxy.com/https://www.dropbox.com/s/ukbw5s673633hsw/publaynet-tf_efficientdet_d0.pth.tar?dl=1" \
-         -O /tmp/publaynet-tf_efficientdet_d0.pth.tar) && \
-    (tar -xf /tmp/publaynet-tf_efficientdet_d0.pth.tar -C /root/.cache/layoutparser/models/ 2>/dev/null || \
-     cp /tmp/publaynet-tf_efficientdet_d0.pth.tar /root/.cache/layoutparser/models/publaynet-tf_efficientdet_d0.pth) && \
-    rm -f /tmp/publaynet-tf_efficientdet_d0.pth.tar || \
-    echo "WARNING: PubLayNet model download/extraction failed"
+    uv pip install --system "layoutparser[detectron2]"
 
 # Verify installation
-RUN python -c "import layoutparser as lp; import torch; print(f'✓ LayoutParser + EfficientDet ready (CUDA: {torch.cuda.is_available()})')"
+RUN python -c "import detectron2; import layoutparser as lp; print(f'✓ LayoutParser + Detectron2 ready')"
 
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
