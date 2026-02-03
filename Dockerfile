@@ -1,5 +1,5 @@
-# Use NVIDIA CUDA base image (Using 12.1 for better PyTorch/Detectron2 compatibility)
-FROM nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
+# Use NVIDIA CUDA base image (Using 11.8 for best library compatibility)
+FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
 
 # Prevent interactive prompts during installation
 ENV DEBIAN_FRONTEND=noninteractive
@@ -16,8 +16,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxext6 \
     libxrender-dev \
     fonts-noto-cjk \
-    build-essential \
-    ninja-build \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -39,11 +37,11 @@ RUN uv pip install --system -r pyproject.toml
 COPY backend/app ./app
 COPY backend/.env.example ./.env
 
-# --- Install PyTorch with CUDA 12.1 support ---
-RUN uv pip install --system torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# --- Install PyTorch with CUDA 11.8 support ---
+RUN uv pip install --system torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 
-# --- Install Detectron2 from source (works with any CUDA/PyTorch combo) ---
-RUN python -m pip install 'git+https://github.com/facebookresearch/detectron2.git'
+# --- Install Detectron2 (Prebuilt for CUDA 11.8) ---
+RUN python -m pip install detectron2 -f https://dl.fbaipublicfiles.com/detectron2/wheels/cu118/torch2.1/index.html
 
 # --- Install LayoutParser with Detectron2 backend ---
 RUN uv pip install --system opencv-python-headless && \
