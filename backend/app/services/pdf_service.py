@@ -81,7 +81,9 @@ class PDFService:
         is_cn_to_en = target_lang.lower() in ['en', 'en-us', 'en-gb']
         
         # --- SMART CHUNKING ---
-        MAX_CHUNK_SIZE = 800 # Increased for 20b model performance
+        # Drastically increased to 3000 to prevent unnecessary splitting.
+        # Modern models (gpt-oss:20b) can handle 4k+ tokens easily.
+        MAX_CHUNK_SIZE = 3000 
         if len(text) > MAX_CHUNK_SIZE:
             print(f"[PDF] Long text ({len(text)} chars). Chunking...", flush=True)
             return self._translate_with_chunking(text, target_lang, context, api_url)
