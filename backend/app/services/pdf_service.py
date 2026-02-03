@@ -110,16 +110,27 @@ class PDFService:
                         "stream": False,
                         "options": {
                             "temperature": 0.1,  # Lower temperature = faster search
-                            "num_predict": 1024, # Safety cap
+                            "num_predict": 4096, # Increased to prevent truncation for large blocks
                             "top_p": 0.9,
                         },
                     },
-                    timeout=120, # Reduced to 2 minutes
+                    timeout=180, 
                 )
 
                 if r.status_code == 200:
-                    out = r.json().get("message", {}).get("content", "").strip()
-                    cleaned = self._clean_llm_response(out)
+                    raw_out = r.json().get("message", {}).get("content", "").strip()
+                    # Debug log to see WHAT the model actually returned
+                    # print(f"  [Ollama] RAW Response: {raw_out[:100]}...", flush=True)
+                    
+                    cleaned = self._clean_llm_response(raw_out)
+                    
+                    if not cleaned and raw_out:
+                         print(f"  [Ollama] WARNING: Response empty after cleaning! Raw was: {len(raw_out)} chars.", flush=True)
+
+                    if not cleaned: 
+                         print(f"  [Ollama] Empty response (Attempt {attempt+1})", flush=True)
+                         continue
+                         
                     result = self.s2tw.convert(cleaned) if target_lang == "zh-TW" else cleaned
                     print(f"  [Ollama] Success! Result: '{result[:30]}...'", flush=True)
                     return result
