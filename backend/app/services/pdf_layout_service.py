@@ -167,7 +167,7 @@ class PDFLayoutPreservingService:
                 text_blocks = unique_blocks
                 # -----------------------------------------------------
 
-                print(f"[PDF Layout] Page {page_num+1}: Found {len(text_blocks)} translatable blocks")
+                print(f"[PDF Layout] Page {page_num+1}: Found {len(text_blocks)} translatable blocks", flush=True)
                 
                 # Collect full page context for better translation
                 page_context = page.get_text()
@@ -192,12 +192,12 @@ class PDFLayoutPreservingService:
                         if is_numeric and block.type.lower() != 'title':
                             continue
 
-                        # Extract formatting (pass block type to decide strategy)
+                        # Extract formatting
                         format_info = self._extract_format_info(page, pdf_rect, block_type=block.type)
                         
-                        print(f"[PDF Layout] Block {idx+1}/{len(text_blocks)}: '{block_text[:30]}...' ({block.type} | Size: {format_info['fontsize']})")
+                        print(f"[PDF Layout] Page {page_num+1} | Block {idx+1}/{len(text_blocks)}: Translating '{block_text[:20]}...'", flush=True)
                         
-                        # STEP 3: Translation
+                        # STEP 3: Translation (This is where it usually 'sits' for a while)
                         translated_text = self.translate_func(block_text, target_lang, page_context)
                         
                         if not translated_text or translated_text.strip() == block_text:
@@ -208,19 +208,20 @@ class PDFLayoutPreservingService:
                         self._insert_text_adaptive(page, pdf_rect, translated_text, target_lang, format_info)
                         
                     except Exception as block_error:
-                        print(f"[PDF Layout] ERROR processing block {idx+1}: {block_error}")
+                        print(f"[PDF Layout] ERROR processing block {idx+1}: {block_error}", flush=True)
                         continue
                 
-                print(f"[PDF Layout] Page {page_num + 1} completed successfully")
+                print(f"[PDF Layout] Page {page_num + 1} completed successfully", flush=True)
                 
             except Exception as page_error:
-                print(f"[PDF Layout] ERROR processing page {page_num + 1}: {page_error}")
+                print(f"[PDF Layout] ERROR processing page {page_num + 1}: {page_error}", flush=True)
                 continue
 
         # Save translated PDF
+        print(f"[PDF Layout] Saving finalized PDF to {output_path}...", flush=True)
         doc.save(output_path, garbage=4, deflate=True)
         doc.close()
-        print(f"\n[PDF Layout] Translation completed. Saved to {output_path}")
+        print(f"\n[PDF Layout] Success! Translation saved to {output_path}", flush=True)
 
     def _extract_format_info(self, page: fitz.Page, rect: fitz.Rect, block_type: str = "text") -> dict:
         """
