@@ -186,8 +186,8 @@ class PDFLayoutPreservingService:
                         
                         is_numeric = re.match(r'^[\d\s\.,\-\/%$€]+$', block_text)
                         
-                        if len(block_text) < 3 and not any('\u4e00' <= c <= '\u9fff' for c in block_text):
-                            if not block_text.isupper(): continue
+                        # if len(block_text) < 3 and not any('\u4e00' <= c <= '\u9fff' for c in block_text):
+                        #     if not block_text.isupper(): continue
                         
                         if is_numeric and block.type.lower() != 'title':
                             continue
