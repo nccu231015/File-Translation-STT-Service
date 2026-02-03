@@ -4,29 +4,32 @@ import os
 
 class STTService:
     def __init__(self, model_size="small"):
+        import threading
         self.model_size = model_size
         self.model = None
+        self.lock = threading.Lock() # Protect model inference
         
     def _ensure_model_loaded(self):
-        if self.model:
-            return
+        with self.lock:
+            if self.model:
+                return
 
-        force_cpu = os.getenv("FORCE_CPU", "false").lower() == "true"
-        print(f"Initializing STT Service with faster-whisper (Model: {self.model_size})...")
-        
-        if force_cpu:
-             print("FORCE_CPU is enabled. Skipping CUDA check.")
-             self.model = WhisperModel(self.model_size, device="cpu", compute_type="int8")
-        else:
-            try:
-                # Try CUDA first
-                self.model = WhisperModel(self.model_size, device="cuda", compute_type="float16")
-                print("Successfully loaded model on GPU (CUDA).")
-            except Exception as e:
-                print(f"Failed to load on GPU ({e}). Falling back to CPU (int8).")
-                self.model = WhisperModel(self.model_size, device="cpu", compute_type="int8")
-        
-        print("STT Service initialized.")
+            force_cpu = os.getenv("FORCE_CPU", "false").lower() == "true"
+            print(f"Initializing STT Service with faster-whisper (Model: {self.model_size})...")
+            
+            if force_cpu:
+                 print("FORCE_CPU is enabled. Skipping CUDA check.")
+                 self.model = WhisperModel(self.model_size, device="cpu", compute_type="int8")
+            else:
+                try:
+                    # Try CUDA first
+                    self.model = WhisperModel(self.model_size, device="cuda", compute_type="float16")
+                    print("Successfully loaded model on GPU (CUDA).")
+                except Exception as e:
+                    print(f"Failed to load on GPU ({e}). Falling back to CPU (int8).")
+                    self.model = WhisperModel(self.model_size, device="cpu", compute_type="int8")
+            
+            print("STT Service initialized.")
 
     def transcribe(self, audio_path: str):
         """
@@ -41,7 +44,12 @@ class STTService:
 
         # beam_size=1 to save memory, default is 5
         print(f"Starting transcription for {audio_path}...")
-        segments, info = self.model.transcribe(audio_path, beam_size=1)
+        
+        # Protect inference call
+        with self.lock:
+             segments, info = self.model.transcribe(audio_path, beam_size=1)
+        
+        # Convert generator to list to consume and get full text
         
         # Convert generator to list to consume and get full text
         # faster-whisper segments usually include necessary spacing in the text itself

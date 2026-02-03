@@ -58,8 +58,10 @@ async def transcribe_audio(
             shutil.copyfileobj(file.file, temp_file)
             temp_file_path = temp_file.name
 
-        # Transcribe
-        stt_result = stt_service.transcribe(temp_file_path)
+        # Transcribe (Run in threadpool to allow PDF/Chat to run simultaneously)
+        from fastapi.concurrency import run_in_threadpool
+        print(f"Mode: {mode} - Transcribing audio...", flush=True)
+        stt_result = await run_in_threadpool(stt_service.transcribe, temp_file_path)
 
         # Clean up audio file
         os.remove(temp_file_path)
