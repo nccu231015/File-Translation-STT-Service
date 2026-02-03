@@ -25,6 +25,8 @@ class PDFLayoutDetector:
     
     def __init__(self):
         """Initialize LayoutParser with Detectron2 backend (Faster R-CNN)"""
+        import threading
+        self.lock = threading.Lock() # Prevent GPU inference collision
         try:
             import layoutparser as lp
             import torch
@@ -86,10 +88,11 @@ class PDFLayoutDetector:
         img_array = np.array(img)
         print(f"[PDF Layout Detector] Page {page_num+1}: Image rendered ({img.size[0]}x{img.size[1]})", flush=True)
         
-        # Inference
+        # Inference (Protected by lock)
         print(f"[PDF Layout Detector] Page {page_num+1}: Running Detectron2 inference...", flush=True)
         # LayoutParser returns a Layout object (list of TextBlock)
-        layout = self.model.detect(img_array)
+        with self.lock:
+            layout = self.model.detect(img_array)
         print(f"[PDF Layout Detector] Page {page_num+1}: AI found {len(layout)} raw blocks", flush=True)
         
         # 1. AI Predictions (Semantic Layer)

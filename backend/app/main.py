@@ -183,8 +183,12 @@ async def translate_pdf(
             temp_input_path = temp_input.name
 
         # Process
+        # Process (Run in threadpool to enforce non-blocking behavior for concurrent users)
+        from fastapi.concurrency import run_in_threadpool
         print(f"Processing PDF: {file.filename}, Target Lang: {target_lang}, Debug: {debug}")
-        result_list = pdf_service.process_pdf(
+        
+        result_list = await run_in_threadpool(
+            pdf_service.process_pdf,
             temp_input_path, 
             force_target_lang=target_lang,
             debug_mode=debug
