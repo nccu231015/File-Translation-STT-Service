@@ -27,20 +27,36 @@ class PDFLayoutDetector:
         try:
             from layoutparser.models import EfficientDetLayoutModel
             import os
+            import glob
             
-            # Using local pre-downloaded model to avoid network issues
-            model_path = "/root/.cache/torch/hub/checkpoints/tf_efficientdet_d0_34-f153e0cf.pth"
+            # Find the downloaded PubLayNet model (could be .pth or .pth.tar after extraction)
+            model_dir = "/root/.cache/layoutparser/models/"
+            possible_paths = [
+                model_dir + "publaynet-tf_efficientdet_d0.pth.tar",
+                model_dir + "publaynet-tf_efficientdet_d0.pth",
+            ]
+            # Also check for extracted files
+            possible_paths.extend(glob.glob(model_dir + "*.pth"))
             
-            if not os.path.exists(model_path):
-                raise FileNotFoundError(f"Model file not found: {model_path}")
+            model_path = None
+            for path in possible_paths:
+                if os.path.exists(path):
+                    model_path = path
+                    break
             
-            print(f"[PDF Layout Detector] Initializing EfficientDet with local model...")
+            if not model_path:
+                raise FileNotFoundError(f"PubLayNet model not found in {model_dir}. Available files: {os.listdir(model_dir) if os.path.exists(model_dir) else 'directory does not exist'}")
             
-            # Direct initialization with explicit parameters (no network needed)
+            print(f"[PDF Layout Detector] Found model: {model_path}")
+            
+            print(f"[PDF Layout Detector] Initializing EfficientDet with PubLayNet model...")
+            
+            # Direct initialization with PubLayNet-specific model
+            # NOTE: EfficientDet label_map in LayoutParser starts from 1, not 0
             self.model = EfficientDetLayoutModel(
                 config_path='tf_efficientdet_d0',  # Built-in model architecture name
-                model_path=model_path,              # Pre-downloaded weights
-                label_map={0: "Text", 1: "Title", 2: "List", 3: "Table", 4: "Figure"},
+                model_path=model_path,              # PubLayNet-specific weights (5 classes)
+                label_map={1: "Text", 2: "Title", 3: "List", 4: "Table", 5: "Figure"},
                 extra_config={"CONFIDENCE_THRESHOLD": 0.5}
             )
             

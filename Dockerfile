@@ -46,13 +46,16 @@ RUN uv pip install --system opencv-python-headless && \
     uv pip install --system "layoutparser[effdet]" && \
     uv pip install --system timm
 
-# --- Pre-download EfficientDet model (avoid runtime download issues) ---
-RUN mkdir -p /root/.cache/torch/hub/checkpoints && \
-    (wget -q --timeout=10 "https://github.com/rwightman/efficientdet-pytorch/releases/download/v0.1/tf_efficientdet_d0_34-f153e0cf.pth" \
-         -O /root/.cache/torch/hub/checkpoints/tf_efficientdet_d0_34-f153e0cf.pth || \
-     wget -q "https://ghproxy.com/https://github.com/rwightman/efficientdet-pytorch/releases/download/v0.1/tf_efficientdet_d0_34-f153e0cf.pth" \
-         -O /root/.cache/torch/hub/checkpoints/tf_efficientdet_d0_34-f153e0cf.pth || \
-     echo "WARNING: Model download failed, will retry at runtime")
+# --- Pre-download PubLayNet EfficientDet model (official 5-class model) ---
+RUN mkdir -p /root/.cache/layoutparser/models && \
+    (wget -q --timeout=30 "https://www.dropbox.com/s/ukbw5s673633hsw/publaynet-tf_efficientdet_d0.pth.tar?dl=1" \
+         -O /tmp/publaynet-tf_efficientdet_d0.pth.tar || \
+     wget -q "https://ghproxy.com/https://www.dropbox.com/s/ukbw5s673633hsw/publaynet-tf_efficientdet_d0.pth.tar?dl=1" \
+         -O /tmp/publaynet-tf_efficientdet_d0.pth.tar) && \
+    (tar -xf /tmp/publaynet-tf_efficientdet_d0.pth.tar -C /root/.cache/layoutparser/models/ 2>/dev/null || \
+     cp /tmp/publaynet-tf_efficientdet_d0.pth.tar /root/.cache/layoutparser/models/publaynet-tf_efficientdet_d0.pth) && \
+    rm -f /tmp/publaynet-tf_efficientdet_d0.pth.tar || \
+    echo "WARNING: PubLayNet model download/extraction failed"
 
 # Verify installation
 RUN python -c "import layoutparser as lp; import torch; print(f'✓ LayoutParser + EfficientDet ready (CUDA: {torch.cuda.is_available()})')"
