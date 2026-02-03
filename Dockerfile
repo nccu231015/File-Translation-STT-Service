@@ -1,5 +1,5 @@
-# Use NVIDIA CUDA DEVEL image (Required for compiling Detectron2/CUDA extensions)
-FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
+# Use NVIDIA CUDA 12.1 DEVEL image (Required for Faster-Whisper/CUDA 12 and compiling Detectron2)
+FROM nvidia/cuda:12.1.0-cudnn8-devel-ubuntu22.04
 
 # Prevent interactive prompts during installation
 ENV DEBIAN_FRONTEND=noninteractive
@@ -43,9 +43,9 @@ RUN uv pip install --system -r pyproject.toml
 COPY backend/app ./app
 COPY backend/.env.example ./.env
 
-# --- Install PyTorch with CUDA 11.8 support (Matches Base Image) ---
+# --- Install PyTorch with CUDA 12.1 support (Matches Base Image) ---
 # Detectron2 requires matching CUDA versions between System and PyTorch
-RUN uv pip install --system torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+RUN uv pip install --system torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
 # --- Install Detectron2 from Source ---
 # Using the main branch which supports PyTorch 2.x+
