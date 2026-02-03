@@ -119,8 +119,11 @@ class PDFService:
 
                 if r.status_code == 200:
                     raw_out = r.json().get("message", {}).get("content", "").strip()
-                    # Debug log to see WHAT the model actually returned
-                    # print(f"  [Ollama] RAW Response: {raw_out[:100]}...", flush=True)
+                    # Enabled debug log to see EXACTLY what the model returned
+                    if not raw_out:
+                        print(f"  [Ollama] DEBUG: Model returned literally nothing.", flush=True)
+                    else:
+                        print(f"  [Ollama] RAW Response (first 100 chars): {raw_out[:100].replace('\n', ' ')}...", flush=True)
                     
                     cleaned = self._clean_llm_response(raw_out)
                     
