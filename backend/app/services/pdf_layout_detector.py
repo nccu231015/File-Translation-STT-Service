@@ -26,10 +26,9 @@ class PDFLayoutDetector:
         """Initialize LayoutParser with EfficientDet backend (GPU-accelerated)"""
         try:
             # Using EfficientDet D0 model with PubLayNet
-            # Note: Do NOT override label_map - the model uses correct built-in mapping:
-            # 0=Background, 1=Text, 2=Title, 3=List, 4=Table, 5=Figure
+            # Official Model Zoo Path: https://layout-parser.readthedocs.io/en/latest/notes/modelzoo.html
             self.model = lp.AutoLayoutModel(
-                'lp://efficientdet/PubLayNet',
+                'lp://PubLayNet/tf_efficientdet_d0',
                 extra_config={"CONFIDENCE_THRESHOLD": 0.5}
             )
             
