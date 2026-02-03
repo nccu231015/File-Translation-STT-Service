@@ -8,8 +8,8 @@ class PDFService:
     def __init__(self, engine="ollama", target_lang="zh-TW"):
         self.engine = "ollama"
         self.target_lang = target_lang
-        # Default model, can be overridden via environment variable
-        self.ollama_model = os.getenv("OLLAMA_MODEL", "qwen3:32b")
+        # Default model is now gpt-oss:20b
+        self.ollama_model = os.getenv("OLLAMA_MODEL", "gpt-oss:20b")
         self.s2tw = OpenCC("s2tw")
         
         self.layout_translator = PDFLayoutPreservingService(
