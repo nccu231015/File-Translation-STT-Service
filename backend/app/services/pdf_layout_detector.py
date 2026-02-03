@@ -91,9 +91,6 @@ class PDFLayoutDetector:
         # 1. AI Predictions (Semantic Layer)
         if not isinstance(layout, lp.Layout):
             layout = lp.Layout(layout)
-            
-        # NMS with standard threshold
-        layout = layout.nms(iou_threshold=0.5)
         
         ai_blocks = []
         for block in layout:
