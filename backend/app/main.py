@@ -80,8 +80,8 @@ async def transcribe_audio(
 
         # --- MEETING MODE ---
         elif mode == "meeting":
-            print("Mode: Meeting - Analyzing Transcript...")
-            analysis = llm_service.analyze_meeting_transcript(user_text)
+            print("Mode: Meeting - Analyzing Transcript in background...", flush=True)
+            analysis = await run_in_threadpool(llm_service.analyze_meeting_transcript, user_text)
             
             # 1. Prepare frontend summary and safe lists FIRST
             # Combine objective and summary for the simplified frontend view

@@ -43,35 +43,30 @@ class STTService:
             raise RuntimeError("STT Model not initialized")
 
         # beam_size=1 to save memory, default is 5
-        print(f"Starting transcription for {audio_path}...")
+        print(f"Starting transcription for {audio_path}...", flush=True)
         
-        # Protect inference call
-        with self.lock:
-             segments, info = self.model.transcribe(audio_path, beam_size=1)
-        
-        # Convert generator to list to consume and get full text
-        
-        # Convert generator to list to consume and get full text
-        # faster-whisper segments usually include necessary spacing in the text itself
         segment_list = []
         text_list = []
         
-        print(f"Detected language '{info.language}' with probability {info.language_probability}")
+        # Protect the ENTIRE inference and iteration process within the lock
+        with self.lock:
+             segments, info = self.model.transcribe(audio_path, beam_size=1)
+             print(f"Detected language '{info.language}' with probability {info.language_probability}", flush=True)
 
-        count = 0
-        for segment in segments:
-            count += 1
-            if count % 10 == 0:
-                print(f"Processed {count} segments...")
-            text_list.append(segment.text)
-            segment_list.append({
-                "start": segment.start,
-                "end": segment.end,
-                "text": segment.text
-            })
+             count = 0
+             for segment in segments:
+                 count += 1
+                 if count % 10 == 0:
+                     print(f"Processed {count} segments...", flush=True)
+                 text_list.append(segment.text)
+                 segment_list.append({
+                     "start": segment.start,
+                     "end": segment.end,
+                     "text": segment.text
+                 })
         
         full_text = "".join(text_list).strip()
-        print(f"Transcription complete. Total segments: {count}")
+        print(f"Transcription complete. Total segments: {count}", flush=True)
         
         processing_time = time.time() - start_time
         
