@@ -23,14 +23,24 @@ class PDFLayoutDetector:
     """
     
     def __init__(self):
-        """Initialize LayoutParser with EfficientDet backend"""
+        """Initialize LayoutParser with EfficientDet backend (local model)"""
         try:
-            # Using EfficientDet D0 model with PubLayNet
-            # Model weights are pre-downloaded in Docker image to avoid runtime issues
-            print(f"[PDF Layout Detector] Initializing EfficientDet model...")
+            from layoutparser.models import EfficientDetLayoutModel
+            import os
             
-            self.model = lp.AutoLayoutModel(
-                'lp://PubLayNet/tf_efficientdet_d0',
+            # Using local pre-downloaded model to avoid network issues
+            model_path = "/root/.cache/torch/hub/checkpoints/tf_efficientdet_d0_34-f153e0cf.pth"
+            
+            if not os.path.exists(model_path):
+                raise FileNotFoundError(f"Model file not found: {model_path}")
+            
+            print(f"[PDF Layout Detector] Initializing EfficientDet with local model...")
+            
+            # Direct initialization with explicit parameters (no network needed)
+            self.model = EfficientDetLayoutModel(
+                config_path='tf_efficientdet_d0',  # Built-in model architecture name
+                model_path=model_path,              # Pre-downloaded weights
+                label_map={0: "Text", 1: "Title", 2: "List", 3: "Table", 4: "Figure"},
                 extra_config={"CONFIDENCE_THRESHOLD": 0.5}
             )
             
@@ -40,6 +50,9 @@ class PDFLayoutDetector:
             print(f"[PDF Layout Detector] LayoutParser (EfficientDet/PubLayNet) initialized on {device}")
             
         except Exception as e:
+            import traceback
+            print(f"[PDF Layout Detector] Full error:")
+            traceback.print_exc()
             print(f"[PDF Layout Detector] WARNING: LayoutParser initialization failed ({e}). Switching to PyMuPDF heuristic mode.")
             self.model = None
     
