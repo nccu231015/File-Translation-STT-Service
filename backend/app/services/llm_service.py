@@ -154,8 +154,8 @@ class LLMService:
         Uses Map-Reduce for long texts.
         """
         print("[LLM] Starting meeting analysis...")
-        # Qwen 2.5 7B generally supports 32k context (~100k chars).
-        # We increase chunk size to 15000 to reduce fragmentation while staying safe.
+        # DeepSeek/gpt-oss models support large context windows.
+        # We use a 15000 character chunk size to balance detail and stability.
         chunk_size = 15000
         
         # Simple case: Short text (fits in one chunk)

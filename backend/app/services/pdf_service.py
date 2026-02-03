@@ -144,24 +144,19 @@ class PDFService:
     def _translate_with_chunking(self, text: str, target_lang: str, context: str, api_url: str) -> str:
         """
         Split long text into chunks at natural boundaries and translate separately.
+        Used only for exceptionally long blocks (>3000 chars).
         """
-        # Smart split at sentence boundaries
-        # Priority: 。 (Chinese period) > \n (newline) > ； (semicolon) > ， (comma)
         import re
         
-        # Split by periods, semicolons, or newlines
-        # Keep the delimiter with the chunk
+        # Split by periods, semicolons, or newlines while keeping separators
         chunks = re.split(r'([。\n；])', text)
         
-        # Recombine chunks with their delimiters
-        # Combine chunks aggressively to fill context window
         combined_chunks = []
         current_chunk = ""
-        # Increase target chunk size for 20b model (it can handle 1k-2k chars easily)
-        TARGET_CHUNK_SIZE = 600 
+        # 20b model handles 1k+ chars easily
+        TARGET_CHUNK_SIZE = 1000 
         
         for part in chunks:
-            # If adding this part exceeds limit, save current chunk and start new one
             if len(current_chunk) + len(part) > TARGET_CHUNK_SIZE:
                 if current_chunk.strip():
                     combined_chunks.append(current_chunk)
@@ -172,7 +167,6 @@ class PDFService:
         if current_chunk.strip():
             combined_chunks.append(current_chunk)
         
-        # Fallback: if somehow empty or weird split
         if not combined_chunks and text.strip():
             combined_chunks = [text]
             
@@ -186,28 +180,19 @@ class PDFService:
             if not chunk.strip():
                 continue
                 
+            system_prompt = "Translator. Output translation only. Natural Traditional Chinese."
             if is_cn_to_en:
-                system_prompt = (
-                    "Professional translator. Translate Chinese to English.\n"
-                    "MUST translate every character. NO omissions.\n"
-                )
-                if previous_translation:
-                    # Increased context window from 200 to 500 chars for Qwen3 32B
-                    system_prompt += f"\nPREVIOUS CONTEXT:\n{previous_translation[-500:]}\n"
-            else:
-                system_prompt = (
-                    "Professional translator. Translate English to Traditional Chinese.\n"
-                    "MUST translate every word. NO omissions.\n"
-                )
-                if previous_translation:
-                    system_prompt += f"\nPREVIOUS CONTEXT:\n{previous_translation[-500:]}\n"
+                system_prompt = "Translator. Output translation only. Fluent English."
+            
+            if previous_translation:
+                system_prompt += f"\nContext: {previous_translation[-200:]}..."
 
             messages = [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Translate this part ({idx+1}/{len(combined_chunks)}):\n{chunk}"},
+                {"role": "user", "content": f"Text:\n{chunk}"},
             ]
 
-            max_retries = 2
+            max_retries = 3
             chunk_translation = None
             
             for attempt in range(max_retries):
@@ -221,19 +206,27 @@ class PDFService:
                             "stream": False,
                             "options": {
                                 "temperature": 0.1,
-                                "num_predict": 1024
+                                "num_predict": 4096,
+                                "top_p": 0.9,
                             },
                         },
-                        timeout=120,
+                        timeout=180,
                     )
 
                     if r.status_code == 200:
-                        out = r.json().get("message", {}).get("content", "").strip()
-                        chunk_translation = self._clean_llm_response(out)
-                        if target_lang == "zh-TW":
-                            chunk_translation = self.s2tw.convert(chunk_translation)
-                        print(f"  [Ollama-Chunk] Success! ({len(chunk_translation)} chars)", flush=True)
-                        break
+                        raw_out = r.json().get("message", {}).get("content", "").strip()
+                        chunk_translation = self._clean_llm_response(raw_out)
+                        
+                        if chunk_translation:
+                            if target_lang == "zh-TW":
+                                chunk_translation = self.s2tw.convert(chunk_translation)
+                            print(f"  [Ollama-Chunk] Success! ({len(chunk_translation)} chars)", flush=True)
+                            break
+                        else:
+                             print(f"  [Ollama-Chunk] Empty response (Attempt {attempt+1})", flush=True)
+                    else:
+                         print(f"  [Ollama-Chunk] Failed: {r.status_code}", flush=True)
+
                 except Exception as e:
                     print(f"  [Ollama-Chunk] Chunk {idx+1} error: {e}", flush=True)
             
@@ -241,12 +234,11 @@ class PDFService:
                 translated_chunks.append(chunk_translation)
                 previous_translation = chunk_translation
             else:
-                # Fallback: use original text if translation fails
+                print(f"  [Ollama-Chunk] FAILED chunk {idx+1}. Using original.", flush=True)
                 translated_chunks.append(chunk)
         
-        # Merge all translated chunks
         final_translation = " ".join(translated_chunks)
-        print(f"[PDF] Chunked translation complete. Original: {len(text)} chars -> Translated: {len(final_translation)} chars")
+        print(f"[PDF] Chunked translation complete. Original: {len(text)} chars -> Translated: {len(final_translation)} chars", flush=True)
         return final_translation
 
     def process_pdf(self, input_pdf_path: str, force_target_lang: str = None, debug_mode: bool = False):
