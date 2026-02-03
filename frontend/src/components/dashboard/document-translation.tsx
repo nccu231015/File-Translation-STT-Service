@@ -17,18 +17,52 @@ import {
     X,
     Trash2,
     FileCheck,
-    Maximize2
+    Maximize2,
+    Bug // Import Bug icon
 } from 'lucide-react';
+import { Switch } from '@/components/ui/switch'; // Import Switch
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { toast } from 'sonner';
 import { useTranslation } from '@/context/translation-context';
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
 
 export function DocumentTranslation() {
     const { files, addFiles, removeFile } = useTranslation();
     const [sourceLang, setSourceLang] = useState('');
     const [targetLang, setTargetLang] = useState('');
     const [isDragging, setIsDragging] = useState(false);
+    const [debugMode, setDebugMode] = useState(false); // Add debug state
+    const [showPasswordDialog, setShowPasswordDialog] = useState(false);
+    const [password, setPassword] = useState('');
     const fileInputRef = useRef<HTMLInputElement>(null);
+
+    const handleDebugToggle = (checked: boolean) => {
+        if (checked) {
+            setShowPasswordDialog(true);
+        } else {
+            setDebugMode(false);
+        }
+    };
+
+    const verifyPassword = () => {
+        if (password === '123') {
+            setDebugMode(true);
+            setShowPasswordDialog(false);
+            setPassword('');
+            toast.success("Debug 模式已啟用");
+        } else {
+            toast.error("密碼錯誤");
+            setPassword('');
+        }
+    };
 
     const languages = [
         { value: 'zh-TW', label: '繁體中文' },
@@ -71,7 +105,7 @@ export function DocumentTranslation() {
             return;
         }
 
-        addFiles(pdfFiles, sourceLang, targetLang);
+        addFiles(pdfFiles, sourceLang, targetLang, debugMode);
     };
 
     const formatFileSize = (bytes: number) => {
@@ -131,6 +165,49 @@ export function DocumentTranslation() {
                             </Select>
                         </div>
                     </div>
+
+                    <div className="flex items-center space-x-2 pt-6 border-t mt-4">
+                        <Switch
+                            id="debug-mode"
+                            checked={debugMode}
+                            onCheckedChange={handleDebugToggle}
+                        />
+                        <Label htmlFor="debug-mode" className="flex items-center gap-2 cursor-pointer text-slate-700">
+                            <Bug className="size-4 text-orange-500" />
+                            <span>開啟排版偵測預覽模式 <span className="text-xs text-slate-500 font-normal">(標記偵測區域，不進行翻譯)</span></span>
+                        </Label>
+                    </div>
+
+                    <Dialog open={showPasswordDialog} onOpenChange={setShowPasswordDialog}>
+                        <DialogContent>
+                            <DialogHeader>
+                                <DialogTitle>開啟 Debug 模式</DialogTitle>
+                                <DialogDescription>
+                                    請輸入密碼以啟用開發者預覽模式。
+                                </DialogDescription>
+                            </DialogHeader>
+                            <div className="space-y-4 py-4">
+                                <div className="space-y-2">
+                                    <Label htmlFor="password">密碼</Label>
+                                    <Input
+                                        id="password"
+                                        type="password"
+                                        value={password}
+                                        onChange={(e) => setPassword(e.target.value)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                                verifyPassword();
+                                            }
+                                        }}
+                                    />
+                                </div>
+                            </div>
+                            <DialogFooter>
+                                <Button variant="outline" onClick={() => setShowPasswordDialog(false)}>取消</Button>
+                                <Button onClick={verifyPassword}>確認</Button>
+                            </DialogFooter>
+                        </DialogContent>
+                    </Dialog>
                 </CardContent>
             </Card>
 

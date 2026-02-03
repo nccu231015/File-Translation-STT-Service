@@ -18,7 +18,7 @@ export interface TranslationFile {
 
 interface TranslationContextType {
     files: TranslationFile[];
-    addFiles: (fileList: File[], sourceLang: string, targetLang: string) => void;
+    addFiles: (fileList: File[], sourceLang: string, targetLang: string, debug?: boolean) => void;
     removeFile: (fileId: string) => void;
 }
 
@@ -56,17 +56,17 @@ export function TranslationProvider({ children }: { children: ReactNode }) {
         setFiles(prev => prev.map(f => f.id === id ? { ...f, ...updates } : f));
     };
 
-    const uploadAndTranslate = async (fileRecord: TranslationFile, fileObj: File) => {
+    const uploadAndTranslate = async (fileRecord: TranslationFile, fileObj: File, debug: boolean = false) => {
         updateFileStatus(fileRecord.id, { status: 'uploading', progress: 30 });
 
         const formData = new FormData();
         formData.append('file', fileObj);
         formData.append('target_lang', fileRecord.targetLang);
+        formData.append('debug', debug.toString());
 
         try {
             updateFileStatus(fileRecord.id, { status: 'processing', progress: 60 });
-
-            // Bypass Next.js API route to avoid Node.js fetch timeout
+            // ... (rest of function)
             const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
             const res = await fetch(`${API_URL}/pdf-translation`, {
@@ -85,7 +85,7 @@ export function TranslationProvider({ children }: { children: ReactNode }) {
                 progress: 100,
                 downloadUrl: url
             });
-            toast.success(`${fileRecord.name} 翻譯完成`);
+            toast.success(`${fileRecord.name} ${debug ? 'Debug 預覽' : '翻譯'}完成`);
 
         } catch (error) {
             console.error(error);
@@ -94,11 +94,8 @@ export function TranslationProvider({ children }: { children: ReactNode }) {
         }
     };
 
-    const addFiles = (fileList: File[], sourceLang: string, targetLang: string) => {
+    const addFiles = (fileList: File[], sourceLang: string, targetLang: string, debug: boolean = false) => {
         const pdfFiles = fileList.filter(file => file.type === 'application/pdf');
-
-        // Note: Error handling for non-pdfs can be done here or in UI. 
-        // For simplicity we handle valid files.
 
         pdfFiles.forEach(file => {
             const originalUrl = URL.createObjectURL(file);
@@ -116,8 +113,8 @@ export function TranslationProvider({ children }: { children: ReactNode }) {
             };
 
             setFiles(prev => [newFile, ...prev]);
-            // Fire and forget (it is attached to this context instance which is persistent)
-            uploadAndTranslate(newFile, file);
+            // Fire and forget
+            uploadAndTranslate(newFile, file, debug);
         });
     };
 

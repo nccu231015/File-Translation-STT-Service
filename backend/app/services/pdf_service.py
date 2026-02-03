@@ -8,7 +8,8 @@ class PDFService:
     def __init__(self, engine="ollama", target_lang="zh-TW"):
         self.engine = "ollama"
         self.target_lang = target_lang
-        self.ollama_model = "qwen2.5:7b"
+        # Default model, can be overridden via environment variable
+        self.ollama_model = os.getenv("OLLAMA_MODEL", "qwen3:32b")
         self.s2tw = OpenCC("s2tw")
         
         self.layout_translator = PDFLayoutPreservingService(
@@ -18,8 +19,29 @@ class PDFService:
     def _clean_llm_response(self, text: str) -> str:
         """
         Removes common conversational filler prefixes and <think> blocks from LLM output.
+        Also removes translation notes and meta-commentary.
         """
+        # Remove <think> blocks
         text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+        
+        # Remove translation notes (extremely aggressive)
+        translation_note_patterns = [
+            r'\(translation note:.*?\)',
+            r'\(note:.*?\)',
+            r'\(Translation note:.*?\)',
+            r'\(Note:.*?\)',
+            r'translation note:.*?(?=\n|$)',
+            r'Translation note:.*?(?=\n|$)',
+            r'note:.*?(?=\n|$)',
+            r'Note:.*?(?=\n|$)',
+            r'\(.*?made sure to translate.*?\)',
+            r'\(.*?I translated.*?\)',
+            r'\(.*?literal translation.*?\)',
+        ]
+        
+        for pattern in translation_note_patterns:
+            text = re.sub(pattern, "", text, flags=re.IGNORECASE | re.DOTALL)
+        
         prefixes_to_remove = [
             "Here is the translation:", "Here is the translation of the TARGET TEXT:", 
             "Here's the translation:", "SURE, here is the translation:", "I'm ready to help.",
@@ -45,52 +67,50 @@ class PDFService:
 
         return cleaned
 
-    def _detect_is_chinese(self, text: str) -> bool:
-        """Detects if the text is primarily Chinese."""
-        if not text:
-            return False
-        chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
-        return (chinese_chars / (len(text) + 1)) > 0.05
-
     def _translate_ollama(self, text: str, target_lang: str = "zh-TW", context: str = "") -> str:
+        """
+        Smart chunked translation: automatically splits long text to prevent incomplete translations.
+        """
         base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         base_url = base_url.rstrip("/")
         api_url = f"{base_url}/api/chat"
 
+        # Skip if text is purely numeric
+        if text.strip().isdigit():
+            return text
 
         is_cn_to_en = target_lang.lower() in ['en', 'en-us', 'en-gb']
         
+        # --- SMART CHUNKING: Split long text to prevent incomplete translation ---
+        # Qwen3 32B can handle longer text, increased from 200 to 500 chars
+        MAX_CHUNK_SIZE = 500  # characters
+        if len(text) > MAX_CHUNK_SIZE:
+            print(f"[PDF] Long text detected ({len(text)} chars). Applying smart chunking...")
+            return self._translate_with_chunking(text, target_lang, context, api_url)
+        
+        # --- SINGLE CHUNK TRANSLATION (for short text) ---
+        # Simplified prompts for Qwen3 32B (better instruction following)
         if is_cn_to_en:
             system_prompt = (
-                "You are a professional translator for formal business and academic documents. "
-                "Translate the Chinese text segment into professional, fluent English.\n\n"
-                "CRITICAL RULES:\n"
-                "1. COMPLETE TRANSLATION: You MUST translate ALL Chinese text. Do NOT leave ANY Chinese characters untranslated.\n"
-                "2. PROPER NOUNS: Only keep Chinese for organization names if they don't have English equivalents. Translate everything else.\n"
-                "3. NATURALNESS: Produce natural, fluent English that reads like a native document.\n"
-                "4. NO EXPLANATIONS: Output ONLY the translated English text.\n"
-                "5. CONTEXT: Use the PAGE CONTEXT below to understand the full meaning, but ONLY translate the 'TARGET TEXT'.\n\n"
-                f"=== PAGE CONTEXT (For Reference) ===\n{context[:8000]}\n=== END CONTEXT ===\n"
+                "You are a professional translator. Translate Chinese to fluent English.\n\n"
+                "RULES:\n"
+                "1. Translate EVERYTHING - no omissions\n"
+                "2. Output ONLY the translation - no notes or explanations\n"
+                "3. Use natural, professional language\n"
             )
         else:
             system_prompt = (
-                "You are a professional translator for formal business and academic documents. "
-                "Translate the English text segment into professional Traditional Chinese (Taiwan, zh-TW).\n\n"
-                "CRITICAL RULES:\n"
-                "1. FULL TRANSLATION: Translate ALL English content. Do NOT leave English words unless they are proper nouns or acronyms.\n"
-                "2. NATURALNESS: Produce natural, fluent Traditional Chinese.\n"
-                "3. NO EXPLANATIONS: Output ONLY the translated text.\n"
-                "4. CONTEXT: Use the PAGE CONTEXT to understand meaning, but ONLY translate the 'TARGET TEXT'.\n\n"
-                f"=== PAGE CONTEXT (For Reference) ===\n{context[:8000]}\n=== END CONTEXT ===\n"
+                "You are a professional translator. Translate English to Traditional Chinese (Taiwan).\n\n"
+                "RULES:\n"
+                "1. Translate EVERYTHING - no omissions\n"
+                "2. Output ONLY the translation - no notes\n"
+                "3. Use natural Traditional Chinese\n"
             )
 
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"TARGET TEXT:\n{text}"},
+            {"role": "user", "content": f"Translate this text:\n{text}"},
         ]
-
-        if text.strip().isdigit():
-            return text
 
         max_retries = 3
         for attempt in range(max_retries):
@@ -103,8 +123,6 @@ class PDFService:
                         "stream": False,
                         "options": {
                             "temperature": 0.3,
-                            "top_p": 0.9,
-                            "top_k": 40,
                         },
                     },
                     timeout=300,
@@ -122,18 +140,112 @@ class PDFService:
                 print(f"[PDF] Translation error (Attempt {attempt+1}): {e}")
         
         print(f"[PDF] All retries failed for text: {text[:20]}...")
-
         return text
 
-    def process_pdf(self, input_pdf_path: str, force_target_lang: str = None):
+    def _translate_with_chunking(self, text: str, target_lang: str, context: str, api_url: str) -> str:
+        """
+        Split long text into chunks at natural boundaries and translate separately.
+        """
+        # Smart split at sentence boundaries
+        # Priority: 。 (Chinese period) > \n (newline) > ； (semicolon) > ， (comma)
+        import re
+        
+        # Split by periods, semicolons, or newlines
+        # Keep the delimiter with the chunk
+        chunks = re.split(r'([。\n；])', text)
+        
+        # Recombine chunks with their delimiters
+        combined_chunks = []
+        temp = ""
+        for i, part in enumerate(chunks):
+            temp += part
+            if part in ['。', '\n', '；'] or len(temp) > 200:
+                if temp.strip():
+                    combined_chunks.append(temp)
+                temp = ""
+        if temp.strip():
+            combined_chunks.append(temp)
+        
+        # If no natural boundaries found, force split by character count
+        if len(combined_chunks) <= 1:
+            combined_chunks = [text[i:i+200] for i in range(0, len(text), 200)]
+        
+        print(f"[PDF] Split into {len(combined_chunks)} chunks for translation")
+        
+        is_cn_to_en = target_lang.lower() in ['en', 'en-us', 'en-gb']
+        translated_chunks = []
+        previous_translation = ""
+        
+        for idx, chunk in enumerate(combined_chunks):
+            if not chunk.strip():
+                continue
+                
+            if is_cn_to_en:
+                system_prompt = (
+                    "Professional translator. Translate Chinese to English.\n"
+                    "MUST translate every character. NO omissions.\n"
+                )
+                if previous_translation:
+                    # Increased context window from 200 to 500 chars for Qwen3 32B
+                    system_prompt += f"\nPREVIOUS CONTEXT:\n{previous_translation[-500:]}\n"
+            else:
+                system_prompt = (
+                    "Professional translator. Translate English to Traditional Chinese.\n"
+                    "MUST translate every word. NO omissions.\n"
+                )
+                if previous_translation:
+                    system_prompt += f"\nPREVIOUS CONTEXT:\n{previous_translation[-500:]}\n"
+
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Translate this part ({idx+1}/{len(combined_chunks)}):\n{chunk}"},
+            ]
+
+            max_retries = 2
+            chunk_translation = None
+            
+            for attempt in range(max_retries):
+                try:
+                    r = requests.post(
+                        api_url,
+                        json={
+                            "model": self.ollama_model,
+                            "messages": messages,
+                            "stream": False,
+                            "options": {"temperature": 0.3},
+                        },
+                        timeout=180,
+                    )
+
+                    if r.status_code == 200:
+                        out = r.json().get("message", {}).get("content", "").strip()
+                        chunk_translation = self._clean_llm_response(out)
+                        if target_lang == "zh-TW":
+                            chunk_translation = self.s2tw.convert(chunk_translation)
+                        break
+                except Exception as e:
+                    print(f"[PDF] Chunk {idx+1} translation error: {e}")
+            
+            if chunk_translation:
+                translated_chunks.append(chunk_translation)
+                previous_translation = chunk_translation
+            else:
+                # Fallback: use original text if translation fails
+                translated_chunks.append(chunk)
+        
+        # Merge all translated chunks
+        final_translation = " ".join(translated_chunks)
+        print(f"[PDF] Chunked translation complete. Original: {len(text)} chars -> Translated: {len(final_translation)} chars")
+        return final_translation
+
+    def process_pdf(self, input_pdf_path: str, force_target_lang: str = None, debug_mode: bool = False):
         """
         Processes the PDF: Uses PyMuPDF to preserve layout and translation.
-        Returns a structured response, but now points to the translated PDF file.
         """
         if not os.path.exists(input_pdf_path):
             raise FileNotFoundError(f"File not found: {input_pdf_path}")
 
-        print(f"[PDF] processing: {input_pdf_path}")
+        print(f"[PDF] processing: {input_pdf_path} (Debug: {debug_mode})")
         
         target_lang = force_target_lang or "zh-TW"
         
@@ -145,7 +257,8 @@ class PDFService:
             self.layout_translator.translate_pdf(
                 input_path=input_pdf_path,
                 output_path=output_pdf_path,
-                target_lang=target_lang
+                target_lang=target_lang,
+                debug_mode=debug_mode
             )
             
             return [

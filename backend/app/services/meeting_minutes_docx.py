@@ -87,11 +87,20 @@ class MeetingMinutesDocxService:
         
         # 與會人員
         if attendees:
+            # Ensure attendees is a list, not a string
+            if isinstance(attendees, str):
+                # If it's a string, try to split by common separators
+                if ',' in attendees or '、' in attendees or '；' in attendees:
+                    attendees = [a.strip() for a in attendees.replace('、', ',').replace('；', ',').split(',') if a.strip()]
+                else:
+                    attendees = [attendees]
+            
             p = doc.add_paragraph()
             p.add_run('與會人員：').bold = True
             doc.add_paragraph()
             for attendee in attendees:
-                doc.add_paragraph(str(attendee), style='List Bullet')
+                if attendee and str(attendee).strip():  # Skip empty entries
+                    doc.add_paragraph(str(attendee).strip(), style='List Bullet')
         
         doc.add_paragraph()  # Spacing
         

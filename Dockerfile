@@ -1,31 +1,53 @@
-# Build Backend & Runtime
-FROM python:3.11-slim
+# Use NVIDIA CUDA base image for GPU support (matching driver 580.x)
+FROM nvidia/cuda:12.6.0-cudnn-runtime-ubuntu22.04
 
-# Install system dependencies (ffmpeg is needed for audio processing)
-RUN apt-get update && apt-get install -y \
+# Prevent interactive prompts during installation
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 \
+    python3-pip \
     ffmpeg \
     git \
+    libgl1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    fonts-noto-cjk \
+    build-essential \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+# Create symlinks for python
+RUN ln -s /usr/bin/python3.10 /usr/bin/python
 
 WORKDIR /app
 
-# Install uv for fast python package management
+# Install uv for faster package management
 RUN pip install uv
-ENV UV_HTTP_TIMEOUT=300
 
-# Copy ONLY pyproject.toml FIRST
+# Copy pyproject.toml
 COPY backend/pyproject.toml ./
 
-# Install dependencies
-RUN uv sync
+# Install app dependencies
+RUN uv pip install --system -r pyproject.toml
 
-# Copy Backend Source Code
+# Copy Code
 COPY backend/app ./app
 COPY backend/.env.example ./.env
 
+# --- Install PyTorch with CUDA 12.6 support ---
+RUN uv pip install --system torch torchvision --index-url https://download.pytorch.org/whl/cu126
+
+# --- Install LayoutParser with EfficientDet (GPU-accelerated, stable) ---
+RUN uv pip install --system opencv-python-headless && \
+    uv pip install --system "layoutparser[effdet]" && \
+    uv pip install --system timm
+
+# Verify installation
+RUN python -c "import layoutparser as lp; import torch; print(f'✓ LayoutParser + EfficientDet ready (CUDA: {torch.cuda.is_available()})')"
+
 EXPOSE 8000
-
-ENV PYTHONPATH=/app
-ENV PYTHONUNBUFFERED=1
-
-CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--timeout-keep-alive", "3600"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

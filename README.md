@@ -4,12 +4,11 @@ A full-stack AI productivity suite featuring **Document Translation**, **Speech-
 
 ## 📋 Features
 
-### 🔄 Document Translation
-- Upload PDF files for intelligent translation
-- Preserves formatting, tables, and document structure
-- Supports English ↔ Traditional Chinese
-- Powered by **Docling** for accurate PDF parsing
-- Utilizes local LLM (Ollama) for context-aware translation
+- **Document Translation**:
+  - High-fidelity PDF parsing using **LayoutParser (EfficientDet)**
+  - Preserves formatting, tables, and document structure
+  - **Debug Mode**: Visual inspection of layout analysis
+  - Supports English ↔ Traditional Chinese via local LLMs
 
 ### 🎙️ Speech-to-Text (STT) & Meeting Intelligence
 - Transcribe audio files (WAV, MP3, M4A, etc.)
@@ -64,8 +63,11 @@ git clone <your-repo-url>
 cd File-Translation-STT-Service
 
 # Start backend services (FastAPI + Redis)
+# Start backend services (FastAPI + Redis)
 docker compose up -d --build
 ```
+
+**Note**: For production deployment on GPU-enabled Ubuntu hosts, please refer to the detailed guide: `DEPLOY_UBUNTU_2404.md`.
 
 Backend will be available at: `http://localhost:8000`
 - API Documentation: `http://localhost:8000/docs`
@@ -86,7 +88,8 @@ Frontend will be available at: `http://localhost:3000`
 - **Package Manager**: uv
 - **AI/ML**:
   - `faster-whisper` (STT, CPU-optimized)
-  - `docling` (PDF parsing)
+  - `docling` (Document parsing)
+  - `layoutparser` + `efficientdet` (Layout Analysis)
   - `ollama` (Local LLM)
   - `opencc` (Chinese conversion)
 - **Database**: Redis (for caching)

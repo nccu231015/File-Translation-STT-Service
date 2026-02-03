@@ -76,5 +76,6 @@ class STTService:
 
 
 # Global instance
-# Using "small" model as default balancing speed/accuracy
-stt_service = STTService(model_size="small")
+# Using "large-v3" model for maximum accuracy (requires GPU)
+stt_service = STTService(model_size="large-v3")
+

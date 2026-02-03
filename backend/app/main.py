@@ -163,10 +163,12 @@ async def transcribe_audio(
 async def translate_pdf(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    target_lang: str = Form(None) # Optional, default None to let service auto-detect
+    target_lang: str = Form(None), # Optional, default None to let service auto-detect
+    debug: bool = Form(False) # Debug mode flag
 ):
     """
     Receives a PDF file, extracts text, translates it, and returns the translated PDF file.
+    If debug=True, returns PDF with bounding boxes instead of translation.
     """
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="File must be a PDF")
@@ -181,8 +183,12 @@ async def translate_pdf(
             temp_input_path = temp_input.name
 
         # Process
-        print(f"Processing PDF: {file.filename}, Target Lang: {target_lang}")
-        result_list = pdf_service.process_pdf(temp_input_path, force_target_lang=target_lang)
+        print(f"Processing PDF: {file.filename}, Target Lang: {target_lang}, Debug: {debug}")
+        result_list = pdf_service.process_pdf(
+            temp_input_path, 
+            force_target_lang=target_lang,
+            debug_mode=debug
+        )
         
         # The service returns a list with one item containing the file_path
         output_pdf_path = result_list[0]["file_path"]

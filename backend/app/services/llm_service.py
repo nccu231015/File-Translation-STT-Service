@@ -1,5 +1,4 @@
 import ollama
-import redis
 import os
 import json
 from dotenv import load_dotenv
@@ -10,27 +9,17 @@ load_dotenv()
 
 
 class LLMService:
-    def __init__(self, model="qwen2.5:7b"):
+    def __init__(self, model="qwen3:32b"):
         self.model = model
         print(f"LLM Service initialized with model: {self.model}")
 
         # Initialize OpenCC for simplified to traditional Chinese conversion
         self.s2tw = OpenCC("s2tw")  # Simplified to Traditional (Taiwan standard)
 
-        # Redis Connection
-        self.redis_client = redis.Redis(
-            host=os.getenv("REDIS_HOST"),
-            port=os.getenv("REDIS_PORT"),
-            password=os.getenv("REDIS_PASSWORD"),
-            username=os.getenv("REDIS_USERNAME"),
-            db=os.getenv("REDIS_DB", 0),
-            decode_responses=True,
-        )
-        try:
-            self.redis_client.ping()
-            print("Successfully connected to Redis.")
-        except redis.ConnectionError as e:
-            print(f"Failed to connect to Redis: {e}")
+        # In-memory chat history storage (no Redis needed)
+        # Format: {session_id: [messages]}
+        self.chat_history = {}
+        print("Using in-memory chat history storage (no Redis)")
 
         # Configure Ollama Host
         self.ollama_host = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
@@ -72,25 +61,25 @@ class LLMService:
         self, filename: str, summary: str, session_id: str = "default_session"
     ):
         """
-        Adds a document summary to the Redis chat history as context.
+        Adds a document summary to the chat history as context.
         """
-        redis_key = f"chat_history:{session_id}"
+        if session_id not in self.chat_history:
+            self.chat_history[session_id] = []
 
         context_message = {
             "role": "system",
-            "content": f"[系統訊息] 使用者已上傳文件 '{filename}'。以下是該文件的摘要內容，請根據此內容回答後續問題：\n\n{summary}",
+            "content": f"[系統訊息] 使用者已上傳文件 '{filename}'。以下是該文件的摘要內容，請根據此內容回答後續問題:\n\n{summary}",
         }
 
         try:
-            self.redis_client.rpush(redis_key, json.dumps(context_message))
-            self.redis_client.expire(redis_key, 86400)
-            print(f"Document context for '{filename}' added to Redis.")
+            self.chat_history[session_id].append(context_message)
+            print(f"Document context for '{filename}' added to chat history.")
         except Exception as e:
-            print(f"Error adding document context to Redis: {e}")
+            print(f"Error adding document context: {e}")
 
     def chat(self, prompt: str, session_id: str = "default_session"):
         """
-        Sends a prompt to the Ollama model with context from Redis.
+        Sends a prompt to the Ollama model with in-memory chat history.
         """
         system_prompt = """你是一個專業的文件 AI 助手。
 
@@ -101,18 +90,13 @@ class LLMService:
 4. 字形必須是繁體：「體」而非「体」，「國」而非「国」。
 
 請用繁體中文回答使用者的問題。"""
-        redis_key = f"chat_history:{session_id}"
-
-        # 1. Retrieve history
-        # We store messages as JSON strings in a Redis List
-        history_items = self.redis_client.lrange(redis_key, 0, -1)
+        
+        # 1. Retrieve history from memory
+        if session_id not in self.chat_history:
+            self.chat_history[session_id] = []
+        
         messages = [{"role": "system", "content": system_prompt}]
-
-        for item in history_items:
-            try:
-                messages.append(json.loads(item))
-            except json.JSONDecodeError:
-                continue
+        messages.extend(self.chat_history[session_id])
 
         # 2. Add current user message
         user_message = {"role": "user", "content": prompt}
@@ -127,15 +111,10 @@ class LLMService:
             # Convert simplified Chinese to traditional Chinese (Taiwan)
             assistant_content = self.s2tw.convert(assistant_content)
 
-            # 4. Save to Redis
-            # Save User Message
-            self.redis_client.rpush(redis_key, json.dumps(user_message))
-            # Save Assistant Message
+            # 4. Save to memory
+            self.chat_history[session_id].append(user_message)
             assistant_message = {"role": "assistant", "content": assistant_content}
-            self.redis_client.rpush(redis_key, json.dumps(assistant_message))
-
-            # Optional: Set TTL for the session (e.g., 1 day)
-            self.redis_client.expire(redis_key, 86400)
+            self.chat_history[session_id].append(assistant_message)
 
             return assistant_content
         except Exception as e:
@@ -175,19 +154,38 @@ class LLMService:
         Uses Map-Reduce for long texts.
         """
         print("[LLM] Starting meeting analysis...")
-        chunk_size = 3000
+        # Qwen 2.5 7B generally supports 32k context (~100k chars).
+        # We increase chunk size to 15000 to reduce fragmentation while staying safe.
+        chunk_size = 15000
         
-        # Simple case: Short text
+        # Simple case: Short text (fits in one chunk)
         if len(text) <= chunk_size:
             return self._analyze_chunk(text, final=True)
 
         # Long text: Map-Reduce
         print("[LLM] Transcript is long. Starting Map-Reduce analysis...")
-        chunks = [text[i : i + chunk_size] for i in range(0, len(text), chunk_size)]
-        partial_results = []
+        
+        # Smart Chunking: Split by lines to avoid cutting sentences
+        lines = text.split('\n')
+        chunks = []
+        current_chunk = []
+        current_length = 0
+        
+        for line in lines:
+            if current_length + len(line) > chunk_size and current_chunk:
+                chunks.append("\n".join(current_chunk))
+                current_chunk = []
+                current_length = 0
+            current_chunk.append(line)
+            current_length += len(line) + 1 # +1 for newline
+            
+        if current_chunk:
+            chunks.append("\n".join(current_chunk))
 
+        partial_results = []
+        
         for idx, chunk in enumerate(chunks):
-            print(f"[LLM] Analyzing chunk {idx + 1}/{len(chunks)}...")
+            print(f"[LLM] Analyzing chunk {idx + 1}/{len(chunks)} (Length: {len(chunk)})...")
             partial = self._analyze_chunk(chunk, final=False)
             if partial:
                 partial_results.append(partial)
@@ -206,35 +204,45 @@ class LLMService:
         """
         if is_reduce_step:
             prompt = (
-                "Expert meeting secretary. Synthesize partial results into DETAILED meeting minutes (Traditional Chinese, zh-TW).\n\n"
+                "You are an expert meeting secretary. Your task is to compile a FINAL, HIGHLY DETAILED meeting minute based on the provided partial analysis segments.\n\n"
                 "Context: Meeting between 業主方 (Client) and PM方 (PM Team).\n\n"
-                "Output JSON with keys:\n"
-                "- attendees: List of participant names/roles (in Traditional Chinese)\n"
-                "- meeting_objective: Detailed explanation of purpose (Translate to Traditional Chinese)\n"
-                "- discussion_summary: COMPREHENSIVE summary in Traditional Chinese. Organize by topics. Include specific arguments and numbers.\n"
-                "- schedule_notes: Detailed timeline and deadlines (Translate to Traditional Chinese)\n"
-                "- decisions: All conclusive decisions made (Translate to Traditional Chinese). Be specific.\n"
-                "- action_items: [{'task': 'Task in Traditional Chinese', 'owner': 'Name/Role (Chinese)', 'deadline': 'Date'}]\n\n"
+                "INSTRUCTIONS:\n"
+                "1. INTEGRATE: Combine all partial summaries into a single, flowing narrative. Do not just list them.\n"
+                "2. EXPAND: Include as much detail as possible from the source. Do not summarize briefly; explain the 'Why' and 'How'.\n"
+                "3. FORMAT: Output valid JSON.\n\n"
+                "Output JSON structure:\n"
+                "{\n"
+                "  \"attendees\": \"String list of names/roles (in Traditional Chinese)\",\n"
+                "  \"meeting_objective\": \"Detailed explanation of meeting purpose (Traditional Chinese)\",\n"
+                "  \"discussion_summary\": \"A VERY LONG, COMPREHENSIVE summary in Traditional Chinese. Organize by clear topics/headings. Include numbers, dates, and specific arguments mentioned beyond just high-level points.\",\n"
+                "  \"schedule_notes\": \"Detailed timeline and deadlines (Traditional Chinese)\",\n"
+                "  \"decisions\": [\"Decision 1 (Specific)\", \"Decision 2\"],\n"
+                "  \"action_items\": [{\"task\": \"Specific Task\", \"owner\": \"Name\", \"deadline\": \"Date/Time\"}]\n"
+                "}\n\n"
                 "Rules:\n"
-                "- OUTPUT LANGUAGE: MUST BE TRADITIONAL CHINESE (Taiwan) ONLY. Do not output English unless it's a specific technical term.\n"
-                "- RETAIN DETAILS: Do not omit important technical details.\n"
-                "- Output ONLY valid JSON"
+                "- OUTPUT LANGUAGE: TRADITIONAL CHINESE (Taiwan) ONLY.\n"
+                "- BE VERBOSE: The user wants a detailed report, not a brief summary.\n"
+                "- Output ONLY valid JSON."
             )
         else:
             prompt = (
-                "Expert meeting secretary. Analyze transcript segment (Traditional Chinese, zh-TW).\n\n"
+                "You are an expert meeting secretary. Analyze this specific segment of a meeting transcript.\n\n"
                 "Context: Meeting between 業主方 (Client) and PM方 (PM Team).\n\n"
-                "Output JSON with keys:\n"
-                "- attendees: List of names/roles (in Traditional Chinese)\n"
-                "- meeting_objective: Discussed purpose (Translate to Traditional Chinese)\n"
-                "- discussion_summary: DETAILED summary in Traditional Chinese. Capture requirements and issues.\n"
-                "- schedule_notes: Timeline info (Translate to Traditional Chinese)\n"
-                "- decisions: Clear decisions ONLY (Translate to Traditional Chinese)\n"
-                "- action_items: [{'task': 'Task in Chinese', 'owner': 'Name (Chinese)', 'deadline': '...'}]\n\n"
+                "INSTRUCTIONS:\n"
+                "1. EXTRACT detailed points. Do not be vague.\n"
+                "2. Identify specific decisions and action items.\n\n"
+                "Output JSON structure:\n"
+                "{\n"
+                "  \"attendees\": \"Names (if mentioned)\",\n"
+                "  \"meeting_objective\": \"Purpose (if mentioned)\",\n"
+                "  \"discussion_summary\": \"Detailed summary of this segment in Traditional Chinese. Capture technical requirements, disputes, and agreements.\",\n"
+                "  \"schedule_notes\": \"Time info\",\n"
+                "  \"decisions\": [\"Decision found in this segment\"],\n"
+                "  \"action_items\": [{\"task\": \"Task\", \"owner\": \"Owner\", \"deadline\": \"Due\"}]\n"
+                "}\n\n"
                 "Rules:\n"
-                "- OUTPUT LANGUAGE: MUST BE TRADITIONAL CHINESE (Taiwan) ONLY.\n"
-                "- Focus on SUBSTANCE and DETAILS.\n"
-                "- Output ONLY valid JSON"
+                "- OUTPUT LANGUAGE: TRADITIONAL CHINESE (Taiwan) ONLY.\n"
+                "- Output ONLY valid JSON."
             )
 
         messages = [

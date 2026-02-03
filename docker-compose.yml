@@ -7,26 +7,26 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      # Point to host's Ollama or another container. 
-      # host.docker.internal works on Windows/Mac Docker Desktop to reach host machine
+      # Ollama is now on the same host (AI host)
+      # host.docker.internal allows container to access host's Ollama service
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
-      # Force CPU to avoid CUDA initialization crashes in Docker
-      - FORCE_CPU=true
+      # Enable GPU for Faster Whisper and LayoutParser
+      - FORCE_CPU=false
     volumes:
       - ./backend/app:/app/app
     restart: always
-    depends_on:
-      - redis
+    # Enable host.docker.internal on Linux (Windows/Mac already support it)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Enable GPU support
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 
-  redis:
-    image: redis:alpine
-    container_name: stt-redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
 
-volumes:
-  redis_data:
+
+

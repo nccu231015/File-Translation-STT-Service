@@ -7,6 +7,7 @@ This is the user interface for the AI Productivity Suite. It is a modern web app
 
 - **Dashboard**: Central hub for all AI tools
 - **Document Translation**: Upload PDFs and get them translated (EN ↔ ZH) with formatting preserved
+  - **Debug Mode**: Visualize layout parsing with color-coded bounding boxes (Password protected: `123`).
 - **Voice Intelligence**: Powerful meeting analysis dashboard with:
   - Automatic transcription and speaker-aware summarization
   - Structured "Decisions" and "Action Items" extraction
@@ -126,11 +127,21 @@ npm run build
 npm run dev
 ```
 
-### Production (npm)
-```bash
-npm run build
-npm start
-```
+### Production (PM2 - Recommended)
+Since this is a Next.js app, using PM2 ensures 24/7 uptime and scaling.
+
+1. **Install PM2 globally**:
+   ```bash
+   sudo npm install -g pm2
+   ```
+
+2. **Build and Start**:
+   ```bash
+   npm run build
+   pm2 start ecosystem.config.js
+   pm2 save
+   pm2 startup
+   ```
 
 The application will be available on port 3000.
 
