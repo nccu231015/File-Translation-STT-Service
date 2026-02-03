@@ -2,9 +2,10 @@ import fitz  # PyMuPDF
 import numpy as np
 import layoutparser as lp
 from PIL import Image
-from typing import List, Tuple
+from typing import List, Tuple, Dict, Any, Optional
 from dataclasses import dataclass
 import io
+import re
 import cv2
 
 @dataclass
@@ -84,37 +85,127 @@ class PDFLayoutDetector:
         img_array = np.array(img)
         
         # Inference
+        # LayoutParser returns a Layout object (list of TextBlock)
         layout = self.model.detect(img_array)
         
-        blocks = []
+        # 1. AI Predictions (Semantic Layer)
+        if not isinstance(layout, lp.Layout):
+            layout = lp.Layout(layout)
+            
+        # NMS with standard threshold
+        layout = layout.nms(iou_threshold=0.5)
+        
+        ai_blocks = []
         for block in layout:
-            # block.coordinates is [x1, y1, x2, y2]
-            rect = block.coordinates
+            r = block.coordinates
+            ai_blocks.append({
+                "type": block.type,
+                "bbox": [r[0], r[1], r[2], r[3]], # x1,y1,x2,y2
+                "area": (r[2]-r[0]) * (r[3]-r[1]),
+                "score": block.score
+            })
             
-            # Convert to normalized coordinates if needed, or keep absolute
-            # Here we return absolute coordinates matching the image size
-            # We might need to scale them back if the page_width/height passed in
-            # are different from the rendered image size.
+        # 2. PyMuPDF Extraction (Recall Layer & Text Content)
+        # Get raw text blocks from PDF engine (guaranteed text presence)
+        pdf_blocks = []
+        raw_pdf_blocks = page.get_text("dict")["blocks"]
+        
+        # Scale PyMuPDF coordinates to Image coordinates
+        pdf_w, pdf_h = page.rect.width, page.rect.height
+        scale_x = page_width / pdf_w
+        scale_y = page_height / pdf_h
+        
+        for b in raw_pdf_blocks:
+            if b["type"] == 0: # Text block
+                r = b["bbox"]
+                # Get the first line text to check for bullet points
+                first_line_text = ""
+                if "lines" in b and len(b["lines"]) > 0:
+                    spans = b["lines"][0].get("spans", [])
+                    if spans:
+                        first_line_text = spans[0].get("text", "").strip()
+
+                img_bbox = [r[0] * scale_x, r[1] * scale_y, r[2] * scale_x, r[3] * scale_y]
+                pdf_blocks.append({
+                    "bbox": img_bbox,
+                    "area": (img_bbox[2]-img_bbox[0]) * (img_bbox[3]-img_bbox[1]),
+                    "text_lines": b.get("lines", []),
+                    "first_text": first_line_text,
+                    "original_bbox": r
+                })
+
+        # 3. Smart Merge Strategy
+        final_blocks = []
+        
+        for p_block in pdf_blocks:
+            px1, py1, px2, py2 = p_block["bbox"]
+            p_area = p_block["area"]
             
-            # Note: The input page_width/height are from the PDF metadata (usually 72 DPI points)
-            # The image was rendered at 300 DPI. We must scale back.
-            img_h, img_w = img_array.shape[:2]
-            scale_x = page_width / img_w
-            scale_y = page_height / img_h
+            matched_type = "Text"
+            max_ai_score = 0.0
             
-            x1, y1, x2, y2 = rect
+            # Find overlapping AI block
+            for ai_b in ai_blocks:
+                ax1, ay1, ax2, ay2 = ai_b["bbox"]
+                
+                # Intersection
+                ix1 = max(px1, ax1)
+                iy1 = max(py1, ay1)
+                ix2 = min(px2, ax2)
+                iy2 = min(py2, ay2)
+                
+                if ix2 > ix1 and iy2 > iy1:
+                    intersection = (ix2 - ix1) * (iy2 - iy1)
+                    coverage = intersection / p_area if p_area > 0 else 0
+                    
+                    if coverage > 0.5:
+                        # Prefer semantic tags
+                        if ai_b["type"] != "Text":
+                            matched_type = ai_b["type"]
+                            max_ai_score = ai_b["score"]
+                            break
+                        elif matched_type == "Text":
+                            max_ai_score = ai_b["score"]
+
+            # --- Heuristic Correction (Rule-based) ---
+            # 1. List Detection: Check for bullet points if AI failed or said "Text"
+            # Common list markers: •, -, *, 1., (1), a.
+            txt = p_block["first_text"]
+            if matched_type == "Text":
+                if re.match(r'^(\•|\-|\*|\d+\.|^\([0-9a-z]+\))', txt):
+                    matched_type = "List"
+                    # print(f"DEBUG: Auto-corrected Text to List based on content: '{txt}'")
             
-            blocks.append(LayoutBlock(
-                type=block.type,
-                bbox=(x1 * scale_x, y1 * scale_y, x2 * scale_x, y2 * scale_y),
-                confidence=block.score,
+            # 2. Title Detection: Geometry check
+            p_center_y = (py1 + py2) / 2
+            p_width = px2 - px1
+            if matched_type == "Text":
+                 if p_center_y < page_height * 0.15 and p_width < page_width * 0.85:
+                     matched_type = "Title"
+
+            final_blocks.append(LayoutBlock(
+                type=matched_type,
+                bbox=(px1, py1, px2, py2), 
+                confidence=max_ai_score if max_ai_score > 0 else 1.0,
                 page_width=page_width,
                 page_height=page_height
             ))
             
-        doc.close()
-        print(f"[PDF Layout Detector] Detectron2 found {len(blocks)} blocks on page {page_num+1}")
-        return blocks
+        # 4. Add non-text AI blocks (Figures/Images/Tables)
+        for ai_b in ai_blocks:
+            if ai_b["type"] in ["Figure", "Table", "Image"]:
+                 # Simple check to avoid duplicates (if a text block is fully inside)
+                 # But usually we want Figures even if they contain text
+                 final_blocks.append(LayoutBlock(
+                    type=ai_b["type"],
+                    bbox=tuple(ai_b["bbox"]),
+                    confidence=ai_b["score"],
+                    page_width=page_width,
+                    page_height=page_height
+                ))
+
+        print(f"[PDF Layout Detector] Detectron2+Hybrid found {len(final_blocks)} blocks")
+        return final_blocks
     
     def _detect_layout_pymupdf(self, pdf_path: str, page_num: int) -> List[LayoutBlock]:
         """Heuristic fallback using PyMuPDF"""
