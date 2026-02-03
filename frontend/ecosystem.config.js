@@ -12,8 +12,8 @@ module.exports = {
             env: {
                 NODE_ENV: "production",
                 PORT: 3000,
-                // Host-side API URL (Docker container mapped to host port 8000)
-                NEXT_PUBLIC_API_URL: "http://localhost:8000"
+                // API URL pointing to backend on the same server
+                NEXT_PUBLIC_API_URL: "http://172.16.2.68:8000"
             }
         }
     ]
