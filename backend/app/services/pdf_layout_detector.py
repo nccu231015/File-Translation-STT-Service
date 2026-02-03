@@ -25,18 +25,18 @@ class PDFLayoutDetector:
     def __init__(self):
         """Initialize LayoutParser with EfficientDet backend (GPU-accelerated)"""
         try:
-            # Using EfficientDet D4 model (high accuracy, second to Detectron2)
-            # Will automatically use GPU if available
+            # Using EfficientDet D0 model with PubLayNet
+            # Note: Do NOT override label_map - the model uses correct built-in mapping:
+            # 0=Background, 1=Text, 2=Title, 3=List, 4=Table, 5=Figure
             self.model = lp.AutoLayoutModel(
                 'lp://efficientdet/PubLayNet',
-                extra_config={"CONFIDENCE_THRESHOLD": 0.5},
-                label_map={0: "Text", 1: "Title", 2: "List", 3: "Table", 4: "Figure"}
+                extra_config={"CONFIDENCE_THRESHOLD": 0.5}
             )
             
             # Check if running on GPU
             import torch
             device = "GPU" if torch.cuda.is_available() else "CPU"
-            print(f"[PDF Layout Detector] LayoutParser (EfficientDet) initialized on {device}")
+            print(f"[PDF Layout Detector] LayoutParser (EfficientDet/PubLayNet) initialized on {device}")
             
         except Exception as e:
             print(f"[PDF Layout Detector] WARNING: LayoutParser initialization failed ({e}). Switching to PyMuPDF heuristic mode.")
@@ -72,7 +72,7 @@ class PDFLayoutDetector:
         layout = self.model.detect(img_array)
         
         blocks = []
-        for block in layout:
+        for idx, block in enumerate(layout):
             # block.block_1, block_2 ... are coordinates [x1, y1, x2, y2]
             # block.type is the label string
             # block.score is confidence
@@ -82,6 +82,10 @@ class PDFLayoutDetector:
                 continue
                 
             rect = block.coordinates
+            
+            # Debug: Print block type to diagnose classification issues
+            print(f"[PDF Layout Detector] Block {idx}: type={block.type}, confidence={block.score:.2f}")
+            
             blocks.append(LayoutBlock(
                 type=block.type, # 'Text', 'Title', etc.
                 bbox=(rect[0], rect[1], rect[2], rect[3]),
