@@ -81,7 +81,7 @@ class PDFService:
         is_cn_to_en = target_lang.lower() in ['en', 'en-us', 'en-gb']
         
         # --- SMART CHUNKING ---
-        MAX_CHUNK_SIZE = 500
+        MAX_CHUNK_SIZE = 800 # Increased for 20b model performance
         if len(text) > MAX_CHUNK_SIZE:
             print(f"[PDF] Long text ({len(text)} chars). Chunking...", flush=True)
             return self._translate_with_chunking(text, target_lang, context, api_url)
@@ -141,22 +141,29 @@ class PDFService:
         chunks = re.split(r'([。\n；])', text)
         
         # Recombine chunks with their delimiters
+        # Combine chunks aggressively to fill context window
         combined_chunks = []
-        temp = ""
-        for i, part in enumerate(chunks):
-            temp += part
-            if part in ['。', '\n', '；'] or len(temp) > 200:
-                if temp.strip():
-                    combined_chunks.append(temp)
-                temp = ""
-        if temp.strip():
-            combined_chunks.append(temp)
+        current_chunk = ""
+        # Increase target chunk size for 20b model (it can handle 1k-2k chars easily)
+        TARGET_CHUNK_SIZE = 600 
         
-        # If no natural boundaries found, force split by character count
-        if len(combined_chunks) <= 1:
-            combined_chunks = [text[i:i+200] for i in range(0, len(text), 200)]
+        for part in chunks:
+            # If adding this part exceeds limit, save current chunk and start new one
+            if len(current_chunk) + len(part) > TARGET_CHUNK_SIZE:
+                if current_chunk.strip():
+                    combined_chunks.append(current_chunk)
+                current_chunk = part
+            else:
+                current_chunk += part
+                
+        if current_chunk.strip():
+            combined_chunks.append(current_chunk)
         
-        print(f"[PDF] Split into {len(combined_chunks)} chunks for translation")
+        # Fallback: if somehow empty or weird split
+        if not combined_chunks and text.strip():
+            combined_chunks = [text]
+            
+        print(f"[PDF] Optimized chunking: {len(text)} chars -> {len(combined_chunks)} chunks (Target: {TARGET_CHUNK_SIZE})", flush=True)
         
         is_cn_to_en = target_lang.lower() in ['en', 'en-us', 'en-gb']
         translated_chunks = []
