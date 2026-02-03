@@ -92,8 +92,8 @@ class PDFLayoutDetector:
         page = doc[page_num]
         
         # High DPI for better detection (LayoutParser expects good resolution)
-        # 300 DPI is standard for document analysis; 200 might be too blurry
-        pix = page.get_pixmap(dpi=300)
+        # Increased to 400 as requested for maximum clarity
+        pix = page.get_pixmap(dpi=400)
         img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
         img_array = np.array(img)
         
@@ -154,43 +154,59 @@ class PDFLayoutDetector:
                 img_bbox = [r[0] * scale_x, r[1] * scale_y, r[2] * scale_x, r[3] * scale_y]
                 pdf_blocks.append({
                     "bbox": img_bbox,
-                    "text_len": len(b.get("lines", [])),
+                    "area": (img_bbox[2]-img_bbox[0]) * (img_bbox[3]-img_bbox[1]),
+                    "text_lines": b.get("lines", []),
                     "original_bbox": r
                 })
 
-        # 3. Merge Strategy (The "Hybrid" Fix)
+        # 3. Intersection-Based Merge Strategy
         final_blocks = []
         
-        # For each PDF text block, check if it falls inside an AI block
         for p_block in pdf_blocks:
             px1, py1, px2, py2 = p_block["bbox"]
-            p_center = ((px1+px2)/2, (py1+py2)/2)
+            p_area = p_block["area"]
             
-            matched_type = "Text" # Default to Text (Recall Guarantee)
-            max_score = 0.0
-            matched_ai = False
+            matched_type = "Text"
+            max_ai_score = 0.0
             
+            # Find best overlapping AI block
             for ai_b in ai_blocks:
                 ax1, ay1, ax2, ay2 = ai_b["bbox"]
                 
-                # Check center containment
-                if (ax1 < p_center[0] < ax2) and (ay1 < p_center[1] < ay2):
-                    matched_ai = True
-                    # If AI says it's Title/Table/List/Figure -> Trust it
-                    if ai_b["score"] > max_score:
-                        matched_type = ai_b["type"]
-                        max_score = ai_b["score"]
-            
-            # Heuristic: Fix AI mistaking Title for Text
+                # Calculate Intersection
+                ix1 = max(px1, ax1)
+                iy1 = max(py1, ay1)
+                ix2 = min(px2, ax2)
+                iy2 = min(py2, ay2)
+                
+                if ix2 > ix1 and iy2 > iy1:
+                    intersection = (ix2 - ix1) * (iy2 - iy1)
+                    # Calculate Coverage: How much of the PDF text block is inside the AI box?
+                    coverage = intersection / p_area if p_area > 0 else 0
+                    
+                    # If >50% of text is inside an AI box, inherit its type
+                    if coverage > 0.5:
+                        # Prefer non-Text labels (Title, List, Table)
+                        if ai_b["type"] != "Text":
+                            matched_type = ai_b["type"]
+                            max_ai_score = ai_b["score"]
+                            break # Found a semantic tag, stop looking
+                        elif matched_type == "Text":
+                            # If we only have Text matches so far, keep updating score
+                            max_ai_score = ai_b["score"]
+
+            # Heuristic: Title Correction (if AI missed it)
             if matched_type == "Text":
-                 # If near top and short -> Title
-                 if p_center[1] < page_height * 0.15 and (px2 - px1) < page_width * 0.85:
+                 p_center_y = (py1 + py2) / 2
+                 p_width = px2 - px1
+                 # Top 15% of page + Short width (<85%) + High font size check (optional but hard without parsing lines)
+                 if p_center_y < page_height * 0.15 and p_width < page_width * 0.85:
                      matched_type = "Title"
 
             final_blocks.append(LayoutBlock(
                 type=matched_type,
-                bbox=(px1, py1, px2, py2), # Use precise PyMuPDF coordinates
-                confidence=max_score if matched_ai else 1.0,
+                bbox=(px1, py1, px2, py2), 
+                confidence=max_ai_score if max_ai_score > 0 else 1.0,
                 page_width=page_width,
                 page_height=page_height
             ))
@@ -209,7 +225,7 @@ class PDFLayoutDetector:
                 ))
 
         doc.close()
-        print(f"[PDF Layout Detector] Hybrid Merge: {len(ai_blocks)} AI blocks + {len(pdf_blocks)} PDF blocks -> {len(final_blocks)} final blocks")
+        print(f"[PDF Layout Detector] Merge: {len(ai_blocks)} AI + {len(pdf_blocks)} PDF -> {len(final_blocks)} final (DPI=400)")
         return final_blocks
     
     def _detect_layout_pymupdf(self, pdf_path: str, page_num: int) -> List[LayoutBlock]:
