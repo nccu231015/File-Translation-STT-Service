@@ -39,7 +39,7 @@ class PDFLayoutPreservingService:
             try:
                 # STEP 1: Layout Detection
                 print(f"[PDF Layout] Step 1: Detecting layout...")
-                layout_blocks = self.layout_detector.detect_layout(input_path, page_num)
+                layout_blocks = self.layout_detector.detect_layout(input_path, page_num, page.rect.width, page.rect.height)
 
                 # --- DEBUG MODE VISUALIZATION ---
                 if debug_mode:
