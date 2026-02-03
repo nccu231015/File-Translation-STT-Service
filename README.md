@@ -88,7 +88,7 @@ Frontend will be available at: `http://localhost:3000`
 - **Package Manager**: uv
 - **AI/ML**:
   - `faster-whisper` (STT, CPU-optimized)
-  - `docling` (Document parsing)
+  - `faster-whisper` (STT, CPU-optimized)
   - `layoutparser` + `efficientdet` (Layout Analysis)
   - `ollama` (Local LLM)
   - `opencc` (Chinese conversion)
@@ -198,6 +198,6 @@ Contributions are welcome! Please ensure:
 ## 🙏 Acknowledgments
 
 - [Ollama](https://ollama.ai/) - Local LLM runtime
-- [Docling](https://github.com/DS4SD/docling) - PDF parsing
+- [LayoutParser](https://github.com/Layout-Parser/layout-parser) - Deep Learning based Document Image Analysis
 - [Faster Whisper](https://github.com/guillaumekln/faster-whisper) - Efficient STT
 - [Shadcn UI](https://ui.shadcn.com/) - Component library

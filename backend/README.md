@@ -1,7 +1,7 @@
 
 # Backend API Service
 
-This directory contains the Python backend for the File Translation & STT Service. It is built using **FastAPI** and utilizes local LLMs (via Ollama) and Docling for document processing.
+This directory contains the Python backend for the File Translation & STT Service. It is built using **FastAPI** and utilizes local LLMs (via Ollama) and LayoutParser for document processing.
 
 ## 🚀 Features
 
@@ -18,11 +18,9 @@ This directory contains the Python backend for the File Translation & STT Servic
 
 - **Framework**: FastAPI
 - **Package Manager**: uv
-- **AI/ML**: 
-  - `docling` (Document parsing)
+  - `layoutparser` + `efficientdet` (Layout Analysis)
   - `faster-whisper` (CPU-optimized STT)
   - `ollama` (Local LLM inference, default model: **qwen2.5:7b**)
-  - `layoutparser` + `efficientdet` (Layout Analysis)
   - `fitz` (PyMuPDF) (PDF Manipulation)
   - `opencc` (Chinese conversion)
   - `ffmpeg` (Audio processing)
