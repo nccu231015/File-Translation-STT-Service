@@ -23,22 +23,21 @@ class PDFLayoutDetector:
     """
     
     def __init__(self):
-        """Initialize LayoutParser with Detectron2 backend (Faster R-CNN)"""
+        """Initialize LayoutParser with EfficientDet backend"""
         try:
-            # Using Detectron2 Faster R-CNN R50 FPN 3x model with PubLayNet
-            # This is the official recommended model for general document layout analysis
-            print(f"[PDF Layout Detector] Initializing Detectron2 model...")
+            # Using EfficientDet D0 model with PubLayNet
+            # Model weights are pre-downloaded in Docker image to avoid runtime issues
+            print(f"[PDF Layout Detector] Initializing EfficientDet model...")
             
-            self.model = lp.Detectron2LayoutModel(
-                config_path='lp://PubLayNet/faster_rcnn_R_50_FPN_3x/config',
-                label_map={0: "Text", 1: "Title", 2: "List", 3: "Table", 4: "Figure"},
-                extra_config=["MODEL.ROI_HEADS.SCORE_THRESH_TEST", 0.5]
+            self.model = lp.AutoLayoutModel(
+                'lp://PubLayNet/tf_efficientdet_d0',
+                extra_config={"CONFIDENCE_THRESHOLD": 0.5}
             )
             
             # Check if running on GPU
             import torch
             device = "GPU" if torch.cuda.is_available() else "CPU"
-            print(f"[PDF Layout Detector] LayoutParser (Detectron2) initialized on {device}")
+            print(f"[PDF Layout Detector] LayoutParser (EfficientDet/PubLayNet) initialized on {device}")
             
         except Exception as e:
             print(f"[PDF Layout Detector] WARNING: LayoutParser initialization failed ({e}). Switching to PyMuPDF heuristic mode.")
