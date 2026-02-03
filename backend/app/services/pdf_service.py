@@ -75,71 +75,54 @@ class PDFService:
         base_url = base_url.rstrip("/")
         api_url = f"{base_url}/api/chat"
 
-        # Skip if text is purely numeric
         if text.strip().isdigit():
             return text
 
         is_cn_to_en = target_lang.lower() in ['en', 'en-us', 'en-gb']
         
-        # --- SMART CHUNKING: Split long text to prevent incomplete translation ---
-        # Qwen3 32B can handle longer text, increased from 200 to 500 chars
-        MAX_CHUNK_SIZE = 500  # characters
+        # --- SMART CHUNKING ---
+        MAX_CHUNK_SIZE = 500
         if len(text) > MAX_CHUNK_SIZE:
-            print(f"[PDF] Long text detected ({len(text)} chars). Applying smart chunking...")
+            print(f"[PDF] Long text ({len(text)} chars). Chunking...", flush=True)
             return self._translate_with_chunking(text, target_lang, context, api_url)
         
-        # --- SINGLE CHUNK TRANSLATION (for short text) ---
-        # Simplified prompts for Qwen3 32B (better instruction following)
+        # --- SINGLE CHUNK ---
         if is_cn_to_en:
-            system_prompt = (
-                "You are a professional translator. Translate Chinese to fluent English.\n\n"
-                "RULES:\n"
-                "1. Translate EVERYTHING - no omissions\n"
-                "2. Output ONLY the translation - no notes or explanations\n"
-                "3. Use natural, professional language\n"
-            )
+            system_prompt = "Professional translator. Chinese to English. Output translation only."
         else:
-            system_prompt = (
-                "You are a professional translator. Translate English to Traditional Chinese (Taiwan).\n\n"
-                "RULES:\n"
-                "1. Translate EVERYTHING - no omissions\n"
-                "2. Output ONLY the translation - no notes\n"
-                "3. Use natural Traditional Chinese\n"
-            )
+            system_prompt = "Professional translator. English to Traditional Chinese (Taiwan). Output translation only."
 
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Translate this text:\n{text}"},
+            {"role": "user", "content": f"Text:\n{text}"},
         ]
 
         max_retries = 3
         for attempt in range(max_retries):
             try:
+                print(f"  [Ollama] Sending block ({len(text)} chars) to {self.ollama_model}...", flush=True)
                 r = requests.post(
                     api_url,
                     json={
                         "model": self.ollama_model,
                         "messages": messages,
                         "stream": False,
-                        "options": {
-                            "temperature": 0.3,
-                        },
+                        "options": {"temperature": 0.2},
                     },
-                    timeout=300,
+                    timeout=180, # 3 minutes timeout
                 )
 
                 if r.status_code == 200:
                     out = r.json().get("message", {}).get("content", "").strip()
                     cleaned = self._clean_llm_response(out)
-                    if target_lang == "zh-TW":
-                        return self.s2tw.convert(cleaned)
-                    return cleaned
+                    result = self.s2tw.convert(cleaned) if target_lang == "zh-TW" else cleaned
+                    print(f"  [Ollama] Success! (Attempt {attempt+1})", flush=True)
+                    return result
                 else:
-                    print(f"[PDF] Translation failed (Attempt {attempt+1}): Status {r.status_code}")
+                    print(f"  [Ollama] Failed: Status {r.status_code} ({r.text[:100]})", flush=True)
             except Exception as e:
-                print(f"[PDF] Translation error (Attempt {attempt+1}): {e}")
+                print(f"  [Ollama] Error (Attempt {attempt+1}): {e}", flush=True)
         
-        print(f"[PDF] All retries failed for text: {text[:20]}...")
         return text
 
     def _translate_with_chunking(self, text: str, target_lang: str, context: str, api_url: str) -> str:
