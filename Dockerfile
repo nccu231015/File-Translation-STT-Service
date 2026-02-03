@@ -54,6 +54,15 @@ RUN python -m pip install 'git+https://github.com/facebookresearch/detectron2.gi
 RUN uv pip install --system opencv-python-headless && \
     uv pip install --system "layoutparser[detectron2]"
 
+# --- Pre-download Detectron2 PubLayNet Model (faster_rcnn_R_50_FPN_3x) ---
+# Direct link from LayoutParser Model Zoo
+RUN mkdir -p /root/.cache/layoutparser/models && \
+    wget -q --timeout=60 "https://www.dropbox.com/s/dgy9c10wykk4lq4/model_final.pth?dl=1" \
+         -O /root/.cache/layoutparser/models/faster_rcnn_R_50_FPN_3x.pth || \
+    wget -q "https://ghproxy.com/https://www.dropbox.com/s/dgy9c10wykk4lq4/model_final.pth?dl=1" \
+         -O /root/.cache/layoutparser/models/faster_rcnn_R_50_FPN_3x.pth || \
+    echo "WARNING: Detectron2 model download failed"
+
 # Verify installation
 RUN python -c "import detectron2; import layoutparser as lp; print(f'✓ LayoutParser + Detectron2 ready')"
 

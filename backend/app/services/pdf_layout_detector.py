@@ -30,13 +30,27 @@ class PDFLayoutDetector:
             
             # Using Detectron2 Faster R-CNN R50 FPN 3x model with PubLayNet
             # This is the gold standard for layout analysis
+            # We use local weights because automatic download often fails
             print(f"[PDF Layout Detector] Initializing Detectron2 model...")
             
-            self.model = lp.Detectron2LayoutModel(
-                config_path='lp://PubLayNet/faster_rcnn_R_50_FPN_3x/config',
-                extra_config=["MODEL.ROI_HEADS.SCORE_THRESH_TEST", 0.5],
-                label_map={0: "Text", 1: "Title", 2: "List", 3: "Table", 4: "Figure"}
-            )
+            import os
+            model_path = "/root/.cache/layoutparser/models/faster_rcnn_R_50_FPN_3x.pth"
+            if not os.path.exists(model_path):
+                 print(f"[PDF Layout Detector] WARNING: Local model weights not found at {model_path}, LayoutParser will try to download...")
+                 # No model_path arg means it will try to download from config
+                 self.model = lp.Detectron2LayoutModel(
+                    config_path='lp://PubLayNet/faster_rcnn_R_50_FPN_3x/config',
+                    extra_config=["MODEL.ROI_HEADS.SCORE_THRESH_TEST", 0.5],
+                    label_map={0: "Text", 1: "Title", 2: "List", 3: "Table", 4: "Figure"}
+                )
+            else:
+                print(f"[PDF Layout Detector] Loading local weights: {model_path}")
+                self.model = lp.Detectron2LayoutModel(
+                    config_path='lp://PubLayNet/faster_rcnn_R_50_FPN_3x/config',
+                    model_path=model_path, # Explicitly use local weights
+                    extra_config=["MODEL.ROI_HEADS.SCORE_THRESH_TEST", 0.5],
+                    label_map={0: "Text", 1: "Title", 2: "List", 3: "Table", 4: "Figure"}
+                )
             
             device = "GPU" if torch.cuda.is_available() else "CPU"
             print(f"[PDF Layout Detector] LayoutParser (Detectron2) initialized on {device}")
