@@ -57,7 +57,7 @@ class PDFLayoutDetector:
                 config_path='tf_efficientdet_d0',  # Built-in model architecture name
                 model_path=model_path,              # PubLayNet-specific weights (5 classes)
                 label_map={1: "Text", 2: "Title", 3: "List", 4: "Table", 5: "Figure"},
-                extra_config={"CONFIDENCE_THRESHOLD": 0.25}
+                extra_config={"CONFIDENCE_THRESHOLD": 0.15}
             )
             
             # Check if running on GPU
@@ -103,6 +103,10 @@ class PDFLayoutDetector:
         # LayoutParser returns a Layout object (list of TextBlock)
         layout = self.model.detect(img_array)
         
+        # Apply Non-Maximum Suppression (NMS) to remove overlapping boxes
+        # This fixes the "red and green box overlap" issue
+        layout = layout.nms(iou_threshold=0.1)  # Strict NMS: eliminate boxes that barely overlap
+        
         blocks = []
         for idx, block in enumerate(layout):
             # block.block_1, block_2 ... are coordinates [x1, y1, x2, y2]
@@ -110,7 +114,7 @@ class PDFLayoutDetector:
             # block.score is confidence
             
             # Filter low confidence predictions
-            if block.score < 0.25:
+            if block.score < 0.15:
                 continue
                 
             rect = block.coordinates
