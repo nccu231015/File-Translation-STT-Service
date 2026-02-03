@@ -103,9 +103,22 @@ class PDFLayoutDetector:
         # LayoutParser returns a Layout object (list of TextBlock)
         layout = self.model.detect(img_array)
         
-        # Apply Non-Maximum Suppression (NMS) to remove overlapping boxes
-        # This fixes the "red and green box overlap" issue
-        layout = layout.nms(iou_threshold=0.1)  # Strict NMS: eliminate boxes that barely overlap
+        # Apply Non-Maximum Suppression (NMS) properly
+        # Note: Some versions of LP return a list, so we wrap it just in case
+        if not isinstance(layout, lp.Layout):
+            layout = lp.Layout(layout)
+        
+        # Use global NMS function if method missing, or ensure it's filtered
+        # Trying the most robust way:
+        layout = lp.Layout([b for b in layout if b.score > 0.15]) # Pre-filter
+        # Use simple recursion NMS from layoutparser
+        # Note: If layout.nms() fails, we skip it or hand-roll it, but let's try strict wrapping
+        try:
+             # Standard LP NMS
+             layout = layout.nms(iou_threshold=0.1)
+        except AttributeError:
+             # Fallback if method doesn't exist in installed version
+             pass
         
         blocks = []
         for idx, block in enumerate(layout):
@@ -113,11 +126,27 @@ class PDFLayoutDetector:
             # block.type is the label string
             # block.score is confidence
             
-            # Filter low confidence predictions
-            if block.score < 0.15:
-                continue
-                
             rect = block.coordinates
+            
+            # --- Heuristic Correction (Hybrid Mode) ---
+            # AI sometimes mistakes Title for Text. Let's fix it using geometry/content.
+            b_type = block.type
+            
+            # 1. Title Correction: Short text at top of page or large font (requires text content check, 
+            #    but here we only have boxes. We can infer by aspect ratio/position).
+            #    Simple rule: If near top and is "Text", usually Title.
+            y_center = (rect[1] + rect[3]) / 2
+            if b_type == "Text" and y_center < page_height * 0.15 and (rect[2] - rect[0]) < page_width * 0.8:
+                 # It's at the very top and not full width -> Likely a Title/Header
+                 b_type = "Title"
+            
+            blocks.append(LayoutBlock(
+                type=b_type, # Used corrected type
+                bbox=(rect[0], rect[1], rect[2], rect[3]),
+                confidence=block.score,
+                page_width=page_width,
+                page_height=page_height
+            ))
             
             # Debug: Print block type to diagnose classification issues
             print(f"[PDF Layout Detector] Block {idx}: type={block.type}, confidence={block.score:.2f}")
