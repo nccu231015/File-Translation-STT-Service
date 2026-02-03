@@ -26,6 +26,11 @@ class PDFLayoutDetector:
     def __init__(self):
         """Initialize LayoutParser with Detectron2 backend (Faster R-CNN)"""
         import threading
+        import warnings
+        # Silence the weights_only=False warning from fvcore/torch
+        warnings.filterwarnings("ignore", category=FutureWarning, module="torch.serialization")
+        warnings.filterwarnings("ignore", category=FutureWarning, module="fvcore.common.checkpoint")
+        
         self.lock = threading.Lock() # Prevent GPU inference collision
         try:
             import layoutparser as lp
