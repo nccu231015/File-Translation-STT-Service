@@ -1,5 +1,5 @@
-# Use NVIDIA CUDA base image for GPU support (matching driver 580.x)
-FROM nvidia/cuda:12.6.0-cudnn-runtime-ubuntu22.04
+# Use NVIDIA CUDA base image (Using 12.1 for better PyTorch/Detectron2 compatibility)
+FROM nvidia/cuda:12.1.1-cudnn8-devel-ubuntu22.04
 
 # Prevent interactive prompts during installation
 ENV DEBIAN_FRONTEND=noninteractive
@@ -17,6 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxrender-dev \
     fonts-noto-cjk \
     build-essential \
+    ninja-build \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -38,16 +39,19 @@ RUN uv pip install --system -r pyproject.toml
 COPY backend/app ./app
 COPY backend/.env.example ./.env
 
-# --- Install PyTorch with CUDA 12.6 support ---
-RUN uv pip install --system torch torchvision --index-url https://download.pytorch.org/whl/cu126
+# --- Install PyTorch with CUDA 12.1 support ---
+RUN uv pip install --system torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
-# --- Install LayoutParser with EfficientDet (GPU-accelerated, stable) ---
+# --- Install Detectron2 (Pre-built for CUDA 12.1 + Torch 2.X) ---
+# Installing directly from Facebook's wheel to avoid slow compilation
+RUN python -m pip install detectron2 -f https://dl.fbaipublicfiles.com/detectron2/wheels/cu121/torch2.1/index.html
+
+# --- Install LayoutParser with Detectron2 backend ---
 RUN uv pip install --system opencv-python-headless && \
-    uv pip install --system "layoutparser[effdet]" && \
-    uv pip install --system timm
+    uv pip install --system layoutparser
 
 # Verify installation
-RUN python -c "import layoutparser as lp; import torch; print(f'✓ LayoutParser + EfficientDet ready (CUDA: {torch.cuda.is_available()})')"
+RUN python -c "import layoutparser as lp; import detectron2; import torch; print(f'✓ LayoutParser + Detectron2 ready (CUDA: {torch.cuda.is_available()})')"
 
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
