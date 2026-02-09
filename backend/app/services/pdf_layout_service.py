@@ -195,16 +195,8 @@ class PDFLayoutPreservingService:
                 
                 print(f"[PDF Layout] Page {page_num+1}: Found {len(text_blocks)} translatable blocks", flush=True)
                 
-                # Context for translation
-                page_context = page.get_text()
-                
-                # Store processed blocks to avoid re-extraction logic duplication
-                # List of dict: { 'block': block, 'raw_rect': rect, 'text': str, 'format': dict }
-                processed_queue = []
-                
                 # --- PHASE 1: PREPARATION & WIPING ---
                 # We collect all blocks first, then wipe them ALL at once.
-                # This prevents "Block B's wipe" from erasing "Block A's translated text" if they overlap.
                 
                 for idx, block in enumerate(text_blocks):
                     try:
@@ -213,18 +205,16 @@ class PDFLayoutPreservingService:
                             block.bbox, page, block.page_width, block.page_height
                         )
                         
-                        # Vertically inflate 
-                        v_pad = 2.0
-                        raw_rect = fitz.Rect(
-                            raw_rect.x0,
-                            raw_rect.y0 - v_pad,
-                            raw_rect.x1,
-                            raw_rect.y1 + v_pad
-                        )
-                        raw_rect.intersect(page.rect)
-                        
+                        # Fix: Do NOT inflate vertically. In fact, slightly shrink to avoid grabbing neighbor text.
+                        # Using exact rect or slightly inset rect prevents "Manufacturing processes" from being
+                        # grabbed by the list block below it.
+                        search_rect = fitz.Rect(raw_rect.x0, raw_rect.y0 + 1, raw_rect.x1, raw_rect.y1 - 1)
+                        if search_rect.height <= 0:
+                            search_rect = raw_rect # Fallback for tiny boxes
+
                         # 2. Text Extraction
-                        block_text = page.get_textbox(raw_rect).strip()
+                        # Use search_rect (shrunk) to get text
+                        block_text = page.get_textbox(search_rect).strip()
                         
                         # Filter Logic
                         if not block_text: continue
@@ -242,18 +232,21 @@ class PDFLayoutPreservingService:
                             'block': block,
                             'raw_rect': raw_rect,
                             'text': block_text,
-                            'format': format_info
+                            'format': format_info,
+                            'sort_key': raw_rect.y0 # Key for sorting
                         })
                         
                         # EXECUTE WIPE IMMEDIATELY (Accumulative Wiping)
-                        # We use a slightly tighter wipe rect to ensure we don't kill boundaries, 
-                        # but "Smallest First" sorting + Global Wipe plan is safer.
+                        # We use a slightly tighter wipe rect to ensure we don't kill boundaries
                         wipe_rect = fitz.Rect(raw_rect.x0-0.5, raw_rect.y0-0.5, raw_rect.x1+0.5, raw_rect.y1+0.5)
                         page.draw_rect(wipe_rect, color=(1, 1, 1), fill=(1, 1, 1), fill_opacity=1)
                         
                     except Exception as e:
                         print(f"[PDF Layout] Prep Error Block {idx}: {e}")
                         continue
+
+                # Sort by vertical position (Top to Bottom) to ensure logical rendering order
+                processed_queue.sort(key=lambda x: x['sort_key'])
 
                 # --- PHASE 2: TRANSLATION & RENDERING ---
                 # Now that the canvas is clean, we can write text without fear of it being erased.
