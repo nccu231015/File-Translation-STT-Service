@@ -152,25 +152,34 @@ class PDFLayoutPreservingService:
                             ib.type = 'Text'
                             text_blocks.append(ib)
 
-                # NMS Deduplication (Smallest First)
-                # Process specific paragraphs before containers
+                # NMS Deduplication with Triple Protection
+                # Strategy: Smallest First to preserve specific paragraphs
                 text_blocks.sort(key=lambda b: fitz.Rect(b.bbox).get_area(), reverse=False)
                 
                 unique_blocks = []
                 for i, current_block in enumerate(text_blocks):
                     curr_rect = fitz.Rect(current_block.bbox)
+                    curr_area = curr_rect.get_area()
                     is_duplicate = False
                     
                     for kept_block in unique_blocks:
                         kept_rect = fitz.Rect(kept_block.bbox)
+                        kept_area = kept_rect.get_area()
                         
                         if curr_rect.intersects(kept_rect):
                             intersect_area = curr_rect.intersect(kept_rect).get_area()
-                            kept_area = kept_rect.get_area()
                             
-                            # CRITICAL FIX: Check if the KEPT block (small) is contained in CURRENT block (large)
-                            # If the kept block is >80% inside the current block, current is a "container" -> DROP IT
-                            if kept_area > 0 and (intersect_area / kept_area) > 0.8:
+                            # Protection Layer 1: Container Detection
+                            # If kept block (small) is >50% inside current block (large), drop current
+                            if kept_area > 0 and (intersect_area / kept_area) > 0.5:
+                                # Additional check: current must be significantly larger (1.3x) to be a container
+                                if curr_area > kept_area * 1.3:
+                                    is_duplicate = True
+                                    break
+                            
+                            # Protection Layer 2: Redundancy Detection
+                            # If current block overlaps >60% with kept block, drop current
+                            if curr_area > 0 and (intersect_area / curr_area) > 0.6:
                                 is_duplicate = True
                                 break
                     
