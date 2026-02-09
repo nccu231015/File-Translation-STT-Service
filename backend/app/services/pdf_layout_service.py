@@ -208,6 +208,7 @@ class PDFLayoutPreservingService:
                 # Store processed blocks to avoid re-extraction logic duplication
                 # List of dict: { 'block': block, 'raw_rect': rect, 'text': str, 'format': dict }
                 processed_queue = []
+                seen_texts = []  # Track extracted text to detect content duplication
                 
                 # --- PHASE 1: PREPARATION & WIPING ---
                 # We collect all blocks first, then wipe them ALL at once.
@@ -227,6 +228,28 @@ class PDFLayoutPreservingService:
                         if not block_text: continue
                         
                         print(f"[PDF Layout] Block {idx}: Extracted {len(block_text)} chars: '{block_text[:50]}...'", flush=True)
+                        
+                        # TEXT-BASED DEDUPLICATION (Critical Fix)
+                        # Check if this text is substantially similar to any previously extracted text
+                        is_duplicate_text = False
+                        for prev_text in seen_texts:
+                            # Calculate similarity (simple approach: check if one contains most of the other)
+                            shorter = min(len(block_text), len(prev_text))
+                            longer = max(len(block_text), len(prev_text))
+                            
+                            # If this text is a substring or superset of previous text
+                            if shorter > 0 and (block_text in prev_text or prev_text in block_text):
+                                # If >70% overlap, consider it duplicate
+                                if shorter / longer > 0.7:
+                                    is_duplicate_text = True
+                                    print(f"[PDF Layout] Block {idx}: SKIPPED - Text is {shorter/longer:.0%} duplicate of previous block", flush=True)
+                                    break
+                        
+                        if is_duplicate_text:
+                            continue
+                        
+                        # Record this text as seen
+                        seen_texts.append(block_text)
                         
                         # Skip purely numeric (unless Title)
                         is_numeric = re.match(r'^[\d\s\.,\-\/%$€]+$', block_text)
