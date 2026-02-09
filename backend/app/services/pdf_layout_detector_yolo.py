@@ -108,6 +108,42 @@ class PDFLayoutDetectorYOLO:
             print(f"[DocLayout-YOLO] ERROR: {e}", flush=True)
             raise
     
+    def detect_layout(self, pdf_path: str, page_num: int, page_width: float, page_height: float) -> List[LayoutBlock]:
+        """
+        High-level wrapper to detect layout for a specific PDF page.
+        Maintains compatibility with pdf_layout_service.py calling convention.
+        
+        Args:
+            pdf_path: Path to the PDF file
+            page_num: Page number (0-indexed)
+            page_width: Original PDF page width
+            page_height: Original PDF page height
+            
+        Returns:
+            List of LayoutBlock objects
+        """
+        doc = fitz.open(pdf_path)
+        page = doc[page_num]
+        
+        # Render page to image at high resolution for detection
+        # Using 3.0 zoom (approx 216 DPI) as typical for layout detection
+        zoom = 3.0
+        mat = fitz.Matrix(zoom, zoom)
+        pix = page.get_pixmap(matrix=mat, alpha=False)
+        
+        # Convert to numpy array (H, W, 3)
+        img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+        
+        # DocLayout-YOLO expects RGB
+        if pix.n == 4:  # CMYK or RGBA
+           pass # fitz handles conversion usually, but just in case
+        
+        # Run detection
+        blocks = self.detect(img_array)
+        
+        doc.close()
+        return blocks
+
     def detect(self, image: np.ndarray) -> List[LayoutBlock]:
         """
         Detect layout blocks in a page image.
