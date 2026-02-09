@@ -137,34 +137,33 @@ class PDFLayoutPreservingService:
                     if not is_protected:
                         text_blocks.append(tb)
 
-                # --- NEW STEP: Remove Overlapping Text Blocks (NMS) ---
-                # Sort by area (largest first) to prioritize preserving container blocks
-                text_blocks.sort(key=lambda b: fitz.Rect(b.bbox).get_area(), reverse=True)
-                
-                unique_blocks = []
-                for i, current_block in enumerate(text_blocks):
-                    curr_rect = fitz.Rect(current_block.bbox)
-                    is_duplicate = False
-                    
-                    for kept_block in unique_blocks:
-                        kept_rect = fitz.Rect(kept_block.bbox)
-                        
-                        # Check intersection
-                        if curr_rect.intersects(kept_rect):
-                            intersect_area = curr_rect.intersect(kept_rect).get_area()
-                            curr_area = curr_rect.get_area()
-                            
-                            # If the current (smaller) block is >50% contained in a kept (larger) block, drop it
-                            # Threshold set to 50% (balanced) to remove nested lists/duplicates but keep columns
-                            if curr_area > 0 and (intersect_area / curr_area) > 0.5:
-                                is_duplicate = True
-                                # print(f"[PDF Layout] Dropping duplicate block (contained in larger block)")
-                                break
-                    
-                    if not is_duplicate:
-                        unique_blocks.append(current_block)
-                
-                text_blocks = unique_blocks
+                # --- TEMPORARILY DISABLED: NMS Deduplication for Raw Model Testing ---
+                # Commenting out to test DocLayout-YOLO's raw detection capability
+                # # Sort by area (largest first) to prioritize preserving container blocks
+                # text_blocks.sort(key=lambda b: fitz.Rect(b.bbox).get_area(), reverse=True)
+                # 
+                # unique_blocks = []
+                # for i, current_block in enumerate(text_blocks):
+                #     curr_rect = fitz.Rect(current_block.bbox)
+                #     is_duplicate = False
+                #     
+                #     for kept_block in unique_blocks:
+                #         kept_rect = fitz.Rect(kept_block.bbox)
+                #         
+                #         # Check intersection
+                #         if curr_rect.intersects(kept_rect):
+                #             intersect_area = curr_rect.intersect(kept_rect).get_area()
+                #             curr_area = curr_rect.get_area()
+                #             
+                #             # If the current (smaller) block is >50% contained in a kept (larger) block, drop it
+                #             if curr_area > 0 and (intersect_area / curr_area) > 0.5:
+                #                 is_duplicate = True
+                #                 break
+                #     
+                #     if not is_duplicate:
+                #         unique_blocks.append(current_block)
+                # 
+                # text_blocks = unique_blocks
                 # -----------------------------------------------------
 
                 print(f"[PDF Layout] Page {page_num+1}: Found {len(text_blocks)} translatable blocks", flush=True)

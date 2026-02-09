@@ -127,7 +127,9 @@ class PDFService:
                     if not raw_out:
                         print(f"  [Ollama] DEBUG: Model returned literally nothing.", flush=True)
                     else:
-                        print(f"  [Ollama] RAW Response (first 100 chars): {raw_out[:100].replace('\n', ' ')}...", flush=True)
+                        # Extract preview without newlines (f-string can't contain backslash)
+                        preview = raw_out[:100].replace('\n', ' ')
+                        print(f"  [Ollama] RAW Response (first 100 chars): {preview}...", flush=True)
                     
                     cleaned = self._clean_llm_response(raw_out)
                     
