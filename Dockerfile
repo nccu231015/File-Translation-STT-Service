@@ -48,8 +48,8 @@ RUN uv pip install --system torch torchvision torchaudio --index-url https://dow
 
 # --- Install DocLayout-YOLO for Layout Detection ---
 # Official installation method from: https://github.com/opendatalab/PDF-Extract-Kit
-# Note: Must use pip directly (not uv) for --extra-index-url support
-RUN pip install doclayout-yolo==0.0.2 --extra-index-url=https://pypi.org/simple
+# Using latest stable version (0.0.2 doesn't exist, only 0.0.2b1, 0.0.3, 0.0.4)
+RUN pip install doclayout-yolo --extra-index-url=https://pypi.org/simple
 
 # --- Download DocLayout-YOLO Pre-trained Model ---
 # Using official weights from HuggingFace
