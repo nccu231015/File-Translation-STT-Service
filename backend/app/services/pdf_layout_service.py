@@ -247,11 +247,16 @@ class PDFLayoutPreservingService:
                                 # Check if one is a substring of the other
                                 is_substring = curr_normalized in prev_normalized or prev_normalized in curr_normalized
                                 
-                                # Only skip if >70% substring (very conservative)
-                                if is_substring and (shorter / longer > 0.7):
-                                    is_duplicate_text = True
-                                    print(f"[PDF Layout] Block {idx}: SKIPPED - Text is {shorter/longer:.0%} substring of previous block", flush=True)
-                                    break
+                                # CRITICAL FIX: Hybrid threshold
+                                # 1. If ratio > 70% (standard duplicate)
+                                # 2. OR if shared content > 30 chars (long meaningful overlap, ignore ratio)
+                                #    This catches cases like "g p\n[Long Content]" vs "[Long Content]"
+                                #    where ratio might be 55% but they are clearly the same content.
+                                if is_substring:
+                                    if (shorter / longer > 0.7) or (shorter > 30):
+                                        is_duplicate_text = True
+                                        print(f"[PDF Layout] Block {idx}: SKIPPED - Text is substring of previous block (Acc: {shorter/longer:.0%}, Len: {shorter})", flush=True)
+                                        break
                         
                         if is_duplicate_text:
                             continue
