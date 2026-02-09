@@ -188,19 +188,31 @@ class PDFLayoutPreservingService:
                 
                 text_blocks = unique_blocks
 
+                # -----------------------------------------------------
+                # NEW PIPELINE: Separate Wipe and Render Phases
+                # -----------------------------------------------------
+                
                 print(f"[PDF Layout] Page {page_num+1}: Found {len(text_blocks)} translatable blocks", flush=True)
                 
-                # Collect full page context for better translation
+                # Context for translation
                 page_context = page.get_text()
+                
+                # Store processed blocks to avoid re-extraction logic duplication
+                # List of dict: { 'block': block, 'raw_rect': rect, 'text': str, 'format': dict }
+                processed_queue = []
+                
+                # --- PHASE 1: PREPARATION & WIPING ---
+                # We collect all blocks first, then wipe them ALL at once.
+                # This prevents "Block B's wipe" from erasing "Block A's translated text" if they overlap.
                 
                 for idx, block in enumerate(text_blocks):
                     try:
-                        # STEP 2: Text Extraction
+                        # 1. Coordinate Conversion
                         raw_rect = self.layout_detector.pixel_to_pdf_rect(
                             block.bbox, page, block.page_width, block.page_height
                         )
                         
-                        # Vertically inflate raw box to ensure full capture
+                        # Vertically inflate 
                         v_pad = 2.0
                         raw_rect = fitz.Rect(
                             raw_rect.x0,
@@ -210,7 +222,64 @@ class PDFLayoutPreservingService:
                         )
                         raw_rect.intersect(page.rect)
                         
-                        # Calculate render rect with padding for expansion
+                        # 2. Text Extraction
+                        block_text = page.get_textbox(raw_rect).strip()
+                        
+                        # Filter Logic
+                        if not block_text: continue
+                        
+                        # Skip purely numeric (unless Title)
+                        is_numeric = re.match(r'^[\d\s\.,\-\/%$€]+$', block_text)
+                        if is_numeric and block.type.lower() != 'title':
+                            continue
+                            
+                        # Format Extraction
+                        format_info = self._extract_format_info(page, raw_rect, block_type=block.type)
+                        
+                        # Queue it
+                        processed_queue.append({
+                            'block': block,
+                            'raw_rect': raw_rect,
+                            'text': block_text,
+                            'format': format_info
+                        })
+                        
+                        # EXECUTE WIPE IMMEDIATELY (Accumulative Wiping)
+                        # We use a slightly tighter wipe rect to ensure we don't kill boundaries, 
+                        # but "Smallest First" sorting + Global Wipe plan is safer.
+                        wipe_rect = fitz.Rect(raw_rect.x0-0.5, raw_rect.y0-0.5, raw_rect.x1+0.5, raw_rect.y1+0.5)
+                        page.draw_rect(wipe_rect, color=(1, 1, 1), fill=(1, 1, 1), fill_opacity=1)
+                        
+                    except Exception as e:
+                        print(f"[PDF Layout] Prep Error Block {idx}: {e}")
+                        continue
+
+                # --- PHASE 2: TRANSLATION & RENDERING ---
+                # Now that the canvas is clean, we can write text without fear of it being erased.
+                
+                print(f"[PDF Layout] Page {page_num+1}: Translating {len(processed_queue)} blocks...", flush=True)
+                
+                for i, item in enumerate(processed_queue):
+                    try:
+                        block_text = item['text']
+                        raw_rect = item['raw_rect']
+                        
+                        print(f"[PDF Layout] Translating block {i+1}/{len(processed_queue)}...", flush=True)
+                        
+                        # Translation
+                        translated_text = self.translate_func(block_text, target_lang, page_context)
+                        
+                        if not translated_text or not translated_text.strip():
+                            continue
+                            
+                        # Basic validation
+                        if len(block_text) > 10 and len(translated_text.strip()) < 2 and not translated_text.strip().isdigit():
+                             continue
+                             
+                        if translated_text.strip() == block_text:
+                            continue
+                            
+                        # Calculate Render Rect (Expanded)
                         padding = 2.0
                         render_rect = fitz.Rect(
                             raw_rect.x0 - padding,
@@ -219,45 +288,13 @@ class PDFLayoutPreservingService:
                             raw_rect.y1 + padding
                         )
                         render_rect.intersect(page.rect)
-
-                        block_text = page.get_textbox(raw_rect).strip()
                         
-                        # --- Filter Logic ---
-                        if not block_text: continue
+                        # Render
+                        self._insert_text_adaptive(page, render_rect, translated_text, target_lang, item['format'])
                         
-                        # Skip pure numbers unless it's a title
-                        is_numeric = re.match(r'^[\d\s\.,\-\/%$€]+$', block_text)
-                        if is_numeric and block.type.lower() != 'title':
-                            continue
-
-                        # Extract formatting from ORIGINAL box
-                        format_info = self._extract_format_info(page, raw_rect, block_type=block.type)
-                        
-                        print(f"[PDF Layout] Page {page_num+1} | Block {idx+1}/{len(text_blocks)}: Translating...", flush=True)
-                        
-                        # STEP 3: Translation
-                        translated_text = self.translate_func(block_text, target_lang, page_context)
-                        
-                        if not translated_text or not translated_text.strip():
-                            continue
-                            
-                        # Safety check for bad cleaning (short translation for long original)
-                        if len(block_text) > 10 and len(translated_text.strip()) < 2 and not translated_text.strip().isdigit():
-                             continue
-
-                        if translated_text.strip() == block_text:
-                            continue
-                        
-                        # STEP 4 & 5: Wipe and Render
-                        # Wipe original area + bleed
-                        wipe_rect = fitz.Rect(raw_rect.x0-0.5, raw_rect.y0-0.5, raw_rect.x1+0.5, raw_rect.y1+0.5)
-                        page.draw_rect(wipe_rect, color=(1, 1, 1), fill=(1, 1, 1), fill_opacity=1)
-                        
-                        self._insert_text_adaptive(page, render_rect, translated_text, target_lang, format_info)
-                        
-                    except Exception as block_error:
-                        print(f"[PDF Layout] ERROR processing block {idx+1}: {block_error}", flush=True)
-                        continue
+                    except Exception as render_err:
+                         print(f"[PDF Layout] Render Error Item {i}: {render_err}")
+                         continue
                 
                 print(f"[PDF Layout] Page {page_num + 1} completed successfully", flush=True)
                 
