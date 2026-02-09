@@ -154,8 +154,9 @@ class PDFLayoutPreservingService:
                             intersect_area = curr_rect.intersect(kept_rect).get_area()
                             curr_area = curr_rect.get_area()
                             
-                            # If the current (smaller) block is >50% contained in a kept (larger) block, drop it
-                            if curr_area > 0 and (intersect_area / curr_area) > 0.5:
+                            # If the current (smaller) block is >90% contained in a kept (larger) block, drop it
+                            # Valid paragraphs often overlap slightly. Only drop if it's a true duplicate (ghost).
+                            if curr_area > 0 and (intersect_area / curr_area) > 0.9:
                                 is_duplicate = True
                                 break
                     
@@ -193,11 +194,20 @@ class PDFLayoutPreservingService:
                         # --- ADVANCED SKIP LOGIC ---
                         if not block_text: continue
                         
-                        # Skip formula blocks
+                        # Skip formula blocks, BUT be smart about misclassified text
                         if block.type == 'Formula':
-                            continue
+                            # Heuristic: If it's long and has no equal sign, it's likely Text misclassified as Formula
+                            # e.g. "(三) This is a text paragraph..."
+                            if len(block_text) > 30 and '=' not in block_text:
+                                print(f"[PDF Layout] Block classified as Formula but looks like Text ({len(block_text)} chars). Translating.", flush=True)
+                                # Proceed to translation
+                            else:
+                                print(f"[PDF Layout] Skipping formula block.", flush=True)
+                                continue
                         
                         is_numeric = re.match(r'^[\d\s\.,\-\/%$€]+$', block_text)
+                        
+                        # Only skip purely numeric blocks unless they are specifically titles
                         if is_numeric and block.type.lower() != 'title':
                             continue
 
