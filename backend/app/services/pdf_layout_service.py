@@ -131,12 +131,17 @@ class PDFLayoutPreservingService:
                             intersect_area = tb_rect.intersect(p_rect).get_area()
                             tb_area = tb_rect.get_area()
                             
-                            # Only drop if the text block is substantially covered (>50%) by the figure
-                            # This prevents dropping text that just barely touches a figure's bounding box
-                            if tb_area > 0 and (intersect_area / tb_area) > 0.5:
-                                is_protected = True
-                                # print(f"[PDF Layout] Block type '{tb.type}' overlap with protected area: {intersect_area/tb_area:.2%}. Dropping.")
-                                break
+                            # Only drop if the text block is SUBSTANTIALLY covered (>80%) by the figure
+                            # And is NOT a wide paragraph (likely a real sentence)
+                            is_wide_block = tb_rect.width > 150  # 150px is roughly 15-20 chars width
+                            
+                            if tb_area > 0 and (intersect_area / tb_area) > 0.8:
+                                if is_wide_block:
+                                    print(f"[PDF Layout] Block overlap with figure > 80% but is wide ({tb_rect.width:.1f}). KEEPING.", flush=True)
+                                else:
+                                    is_protected = True
+                                    # print(f"[PDF Layout] Block type '{tb.type}' overlap with protected area: {intersect_area/tb_area:.2%}. Dropping.")
+                                    break
                     
                     # --- CRITICAL: Titles/Headers should NEVER be protected/skipped by figures ---
                     if tb.type.lower() == 'title':
