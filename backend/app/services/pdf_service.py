@@ -87,9 +87,17 @@ class PDFService:
             return await self._translate_with_chunking(text, target_lang, context, api_url)
         
         # Single Block Translation
-        system_prompt = "Translator. Output translation only. Natural Traditional Chinese."
+        system_prompt = (
+            "Professional Translator. Translate to Traditional Chinese (Taiwan)."
+            " RULES:"
+            " 1. Output ONLY the translated text."
+            " 2. Do NOT include the original English text."
+            " 3. Do NOT output 'English (Chinese)'. Just the Chinese."
+            " 4. Ignore obvious OCR noise (e.g. random letters like 'g p')."
+            " 5. Maintain formatting (lists, bullets)."
+        )
         if is_cn_to_en:
-            system_prompt = "Translator. Output translation only. Fluent English."
+            system_prompt = "Translator. Output translation only. Fluent English. No original text."
 
         messages = [
             {"role": "system", "content": system_prompt},
