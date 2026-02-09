@@ -166,12 +166,14 @@ async def translate_pdf(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     target_lang: str = Form(None), # Optional, default None to let service auto-detect
-    debug: bool = Form(False) # Debug mode flag
+    debug: str = Form("false") # Receive as string to handle "true", "True", "on" manually
 ):
     """
     Receives a PDF file, extracts text, translates it, and returns the translated PDF file.
     If debug=True, returns PDF with bounding boxes instead of translation.
     """
+    # Manual boolean conversion for robustness
+    debug_mode = str(debug).lower() in ("true", "1", "t", "yes", "on")
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="File must be a PDF")
 
@@ -185,13 +187,13 @@ async def translate_pdf(
             temp_input_path = temp_input.name
 
         # Process
-        print(f"Processing PDF: {file.filename}, Target Lang: {target_lang}, Debug: {debug}")
+        print(f"Processing PDF: {file.filename}, Target Lang: {target_lang}, Debug: {debug_mode}")
         
         # Async execution allows non-blocking I/O during long LLM translation
         result_list = await pdf_service.process_pdf(
             temp_input_path, 
             force_target_lang=target_lang,
-            debug_mode=debug
+            debug_mode=debug_mode
         )
         
         # The service returns a list with one item containing the file_path
