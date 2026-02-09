@@ -237,33 +237,22 @@ class PDFLayoutPreservingService:
                         # Check if this text is substantially similar to any previously extracted text
                         is_duplicate_text = False
                         for prev_text in seen_texts:
-                            # Calculate similarity using character overlap
                             # Normalize both texts (remove extra whitespace, lowercase)
                             curr_normalized = ' '.join(block_text.lower().split())
                             prev_normalized = ' '.join(prev_text.lower().split())
                             
-                            # Simple similarity: count common characters
+                            # Only use substring containment (reliable method)
                             if len(curr_normalized) > 0 and len(prev_normalized) > 0:
-                                # Check if one is largely contained in the other
-                                # OR if they share >40% of characters
                                 shorter = min(len(curr_normalized), len(prev_normalized))
                                 longer = max(len(curr_normalized), len(prev_normalized))
                                 
-                                # Method 1: Substring containment (relaxed)
+                                # Check if one is a substring of the other
                                 is_substring = curr_normalized in prev_normalized or prev_normalized in curr_normalized
-                                if is_substring and (shorter / longer > 0.4):
+                                
+                                # Only skip if >70% substring (very conservative)
+                                if is_substring and (shorter / longer > 0.7):
                                     is_duplicate_text = True
                                     print(f"[PDF Layout] Block {idx}: SKIPPED - Text is {shorter/longer:.0%} substring of previous block", flush=True)
-                                    break
-                                
-                                # Method 2: Character overlap (for partial matches)
-                                # Count how many chars from current appear in previous
-                                common_chars = sum(1 for c in curr_normalized if c in prev_normalized)
-                                similarity = common_chars / longer
-                                
-                                if similarity > 0.6:
-                                    is_duplicate_text = True
-                                    print(f"[PDF Layout] Block {idx}: SKIPPED - Text has {similarity:.0%} character overlap with previous block", flush=True)
                                     break
                         
                         if is_duplicate_text:
