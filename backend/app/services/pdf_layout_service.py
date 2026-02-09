@@ -1,7 +1,6 @@
 import fitz  # PyMuPDF
 import os
 from typing import Callable
-from .pdf_layout_detector import PDFLayoutDetector
 import re
 
 class PDFLayoutPreservingService:
@@ -14,13 +13,14 @@ class PDFLayoutPreservingService:
     5. Adaptive Rendering (insert_htmlbox with auto-scaling)
     """
     
-    def __init__(self, translate_func: Callable[[str, str, str], str]):
+    def __init__(self, translate_func: Callable[[str, str, str], str], layout_detector=None):
         """
         Args:
             translate_func: Callback function (text, target_lang, context) -> translated_text
+            layout_detector: Layout detection instance (PDFLayoutDetectorYOLO or similar)
         """
         self.translate_func = translate_func
-        self.layout_detector = PDFLayoutDetector()
+        self.layout_detector = layout_detector
 
     def translate_pdf(self, input_path: str, output_path: str, target_lang: str = "zh-TW", debug_mode: bool = False):
         """
