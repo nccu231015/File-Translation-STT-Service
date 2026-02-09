@@ -221,8 +221,9 @@ class PDFLayoutPreservingService:
                         )
                         raw_rect.intersect(page.rect) # Ensure within page bounds
                         
-                        # 2. Text Extraction (Use exact bbox - no modifications)
-                        block_text = page.get_textbox(raw_rect).strip()
+                        # 2. Text Extraction (STRICT METHOD)
+                        # Use get_text with clip instead of get_textbox for stricter extraction
+                        block_text = page.get_text("text", clip=raw_rect).strip()
                         
                         # Filter Logic
                         if not block_text: continue
