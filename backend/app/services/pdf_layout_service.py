@@ -174,10 +174,24 @@ class PDFLayoutPreservingService:
                 for idx, block in enumerate(text_blocks):
                     try:
                         # STEP 2: Text Extraction
-                        pdf_rect = self.layout_detector.pixel_to_pdf_rect(
+                        raw_rect = self.layout_detector.pixel_to_pdf_rect(
                             block.bbox, page, block.page_width, block.page_height
                         )
                         
+                        # --- CRITICAL LAYOUT FIX: Inflate Bounding Box ---
+                        # DocLayout-YOLO detects TIGHT boxes around Chinese text.
+                        # English needs ~50% more width/space. We expand the writing area slightly.
+                        # This prevents "suffocation" where text wraps too early or is cut off.
+                        padding = 2.0
+                        pdf_rect = fitz.Rect(
+                            raw_rect.x0 - padding,      # Expand Left
+                            raw_rect.y0 - padding,      # Expand Top
+                            raw_rect.x1 + (padding*2),  # Expand Right (More width needed for English)
+                            raw_rect.y1 + padding       # Expand Bottom
+                        )
+                        
+                        # Ensure we don't go out of page bounds
+                        pdf_rect.intersect(page.rect)
                         block_text = page.get_textbox(pdf_rect).strip()
                         
                         # --- ADVANCED SKIP LOGIC ---
@@ -339,10 +353,21 @@ class PDFLayoutPreservingService:
             # In new PyMuPDF, it returns the rectangle of the inserted text or (0,0,0,0) if failed?
             # Actually, let's just use it and catch errors.
             
+            # Improved CSS with word-break logic to prevent overflow
+            css_style = (
+                f"div {{ "
+                f"  line-height: 1.25; "  # Slightly tighter line height
+                f"  font-size: {css_font_size}; "
+                f"  text-align: {text_align}; "
+                f"  overflow-wrap: break-word; "  # Standard break logic
+                f"  word-break: break-word; "     # Fallback
+                f"}}"
+            )
+
             rc = page.insert_htmlbox(
                 rect,
                 html,
-                css=f"div {{ line-height: 1.3; font-size: {css_font_size}; text-align: {text_align}; }}", 
+                css=css_style, 
                 # scale_low=0.1 -> Allow scaling down text to 10% (CRITICAL for small text)
                 scale_low=0.1
             )
