@@ -94,8 +94,9 @@ class PDFLayoutDetectorYOLO:
             
             # Official default configuration from configs/layout_detection.yaml
             # Tuning for Precision: Increased img_size to 1280 for better granularity
+            # Tuning for Recall: Lowered conf_thres to 0.20 to catch faint/dense text (items 1-3)
             self.img_size = int(os.getenv("DOCLAYOUT_IMG_SIZE", "1280"))
-            self.conf_thres = float(os.getenv("DOCLAYOUT_CONF_THRES", "0.30"))
+            self.conf_thres = float(os.getenv("DOCLAYOUT_CONF_THRES", "0.20"))
             self.iou_thres = float(os.getenv("DOCLAYOUT_IOU_THRES", "0.45"))
             
             print(f"[DocLayout-YOLO] ✓ Model loaded: {model_path}", flush=True)
