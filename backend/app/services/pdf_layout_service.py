@@ -137,33 +137,32 @@ class PDFLayoutPreservingService:
                     if not is_protected:
                         text_blocks.append(tb)
 
-                # --- TEMPORARILY DISABLED: NMS Deduplication for Raw Model Testing ---
-                # Commenting out to test DocLayout-YOLO's raw detection capability
-                # # Sort by area (largest first) to prioritize preserving container blocks
-                # text_blocks.sort(key=lambda b: fitz.Rect(b.bbox).get_area(), reverse=True)
-                # 
-                # unique_blocks = []
-                # for i, current_block in enumerate(text_blocks):
-                #     curr_rect = fitz.Rect(current_block.bbox)
-                #     is_duplicate = False
-                #     
-                #     for kept_block in unique_blocks:
-                #         kept_rect = fitz.Rect(kept_block.bbox)
-                #         
-                #         # Check intersection
-                #         if curr_rect.intersects(kept_rect):
-                #             intersect_area = curr_rect.intersect(kept_rect).get_area()
-                #             curr_area = curr_rect.get_area()
-                #             
-                #             # If the current (smaller) block is >50% contained in a kept (larger) block, drop it
-                #             if curr_area > 0 and (intersect_area / curr_area) > 0.5:
-                #                 is_duplicate = True
-                #                 break
-                #     
-                #     if not is_duplicate:
-                #         unique_blocks.append(current_block)
-                # 
-                # text_blocks = unique_blocks
+                # --- NMS Deduplication (Re-enabled) ---
+                # Sort by area (largest first) to prioritize preserving container blocks
+                text_blocks.sort(key=lambda b: fitz.Rect(b.bbox).get_area(), reverse=True)
+                
+                unique_blocks = []
+                for i, current_block in enumerate(text_blocks):
+                    curr_rect = fitz.Rect(current_block.bbox)
+                    is_duplicate = False
+                    
+                    for kept_block in unique_blocks:
+                        kept_rect = fitz.Rect(kept_block.bbox)
+                        
+                        # Check intersection
+                        if curr_rect.intersects(kept_rect):
+                            intersect_area = curr_rect.intersect(kept_rect).get_area()
+                            curr_area = curr_rect.get_area()
+                            
+                            # If the current (smaller) block is >50% contained in a kept (larger) block, drop it
+                            if curr_area > 0 and (intersect_area / curr_area) > 0.5:
+                                is_duplicate = True
+                                break
+                    
+                    if not is_duplicate:
+                        unique_blocks.append(current_block)
+                
+                text_blocks = unique_blocks
                 # -----------------------------------------------------
 
                 print(f"[PDF Layout] Page {page_num+1}: Found {len(text_blocks)} translatable blocks", flush=True)
@@ -179,58 +178,55 @@ class PDFLayoutPreservingService:
                         )
                         
                         # --- CRITICAL LAYOUT FIX: Inflate Bounding Box ---
-                        # DocLayout-YOLO detects TIGHT boxes around Chinese text.
-                        # English needs ~50% more width/space. We expand the writing area slightly.
-                        # This prevents "suffocation" where text wraps too early or is cut off.
                         padding = 2.0
-                        pdf_rect = fitz.Rect(
-                            raw_rect.x0 - padding,      # Expand Left
-                            raw_rect.y0 - padding,      # Expand Top
-                            raw_rect.x1 + (padding*2),  # Expand Right (More width needed for English)
-                            raw_rect.y1 + padding       # Expand Bottom
+                        render_rect = fitz.Rect(
+                            raw_rect.x0 - padding,
+                            raw_rect.y0 - padding,
+                            raw_rect.x1 + (padding*2),
+                            raw_rect.y1 + padding
                         )
-                        
                         # Ensure we don't go out of page bounds
-                        pdf_rect.intersect(page.rect)
-                        block_text = page.get_textbox(pdf_rect).strip()
+                        render_rect.intersect(page.rect)
+
+                        block_text = page.get_textbox(raw_rect).strip()
                         
                         # --- ADVANCED SKIP LOGIC ---
                         if not block_text: continue
                         
-                        # Skip formula blocks (NEW: enabled by DocLayout-YOLO)
+                        # Skip formula blocks
                         if block.type == 'Formula':
-                            print(f"[PDF Layout] Skipping formula block (avoid corrupting math)", flush=True)
                             continue
                         
                         is_numeric = re.match(r'^[\d\s\.,\-\/%$€]+$', block_text)
-                        
-                        # Only skip purely numeric blocks unless they are specifically titles
                         if is_numeric and block.type.lower() != 'title':
                             continue
 
-                        # Extract formatting
-                        format_info = self._extract_format_info(page, pdf_rect, block_type=block.type)
+                        # Extract formatting from ORIGINAL box
+                        format_info = self._extract_format_info(page, raw_rect, block_type=block.type)
                         
                         print(f"[PDF Layout] Page {page_num+1} | Block {idx+1}/{len(text_blocks)}: Translating '{block_text[:20]}...'", flush=True)
                         
-                        # STEP 3: Translation (This is where it usually 'sits' for a while)
+                        # STEP 3: Translation
                         translated_text = self.translate_func(block_text, target_lang, page_context)
                         
                         if not translated_text or not translated_text.strip():
                             continue
                             
-                        # If translation is suspiciously short (e.g. cleaning residue) for a long block
-                        # Example: Original "This is a detailed note..." -> Translated "." or ")"
+                        # Safety check for bad cleaning
                         if len(block_text) > 10 and len(translated_text.strip()) < 2 and not translated_text.strip().isdigit():
-                             print(f"[PDF Layout] Translation too short ('{translated_text}'). Keeping original.")
+                             print(f"[PDF Layout] Translation too short. Keeping original.")
                              continue
 
                         if translated_text.strip() == block_text:
                             continue
                         
                         # STEP 4 & 5: Wipe and Render
-                        page.draw_rect(pdf_rect, color=(1, 1, 1), fill=(1, 1, 1), fill_opacity=1)
-                        self._insert_text_adaptive(page, pdf_rect, translated_text, target_lang, format_info)
+                        # STRATEGY: Wipe ONLY the original box (plus tiny bleed) to avoid erasing neighbor's new text
+                        # Render into the INFLATED box to allow English expansion
+                        wipe_rect = fitz.Rect(raw_rect.x0-0.5, raw_rect.y0-0.5, raw_rect.x1+0.5, raw_rect.y1+0.5)
+                        page.draw_rect(wipe_rect, color=(1, 1, 1), fill=(1, 1, 1), fill_opacity=1)
+                        
+                        self._insert_text_adaptive(page, render_rect, translated_text, target_lang, format_info)
                         
                     except Exception as block_error:
                         print(f"[PDF Layout] ERROR processing block {idx+1}: {block_error}", flush=True)
