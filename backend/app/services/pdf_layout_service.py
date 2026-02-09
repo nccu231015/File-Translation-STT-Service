@@ -127,8 +127,16 @@ class PDFLayoutPreservingService:
                     # Check intersection with expanded protected rects
                     for p_rect in protected_rects:
                         if tb_rect.intersects(p_rect):
-                            is_protected = True
-                            break
+                            # Calculate intersection percentage
+                            intersect_area = tb_rect.intersect(p_rect).get_area()
+                            tb_area = tb_rect.get_area()
+                            
+                            # Only drop if the text block is substantially covered (>50%) by the figure
+                            # This prevents dropping text that just barely touches a figure's bounding box
+                            if tb_area > 0 and (intersect_area / tb_area) > 0.5:
+                                is_protected = True
+                                # print(f"[PDF Layout] Block type '{tb.type}' overlap with protected area: {intersect_area/tb_area:.2%}. Dropping.")
+                                break
                     
                     # --- CRITICAL: Titles/Headers should NEVER be protected/skipped by figures ---
                     if tb.type.lower() == 'title':
