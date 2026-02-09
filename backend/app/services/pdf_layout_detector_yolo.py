@@ -94,8 +94,8 @@ class PDFLayoutDetectorYOLO:
             
             # Official default configuration
             self.img_size = int(os.getenv("DOCLAYOUT_IMG_SIZE", "1280"))
-            self.conf_thres = float(os.getenv("DOCLAYOUT_CONF_THRES", "0.20"))
-            self.iou_thres = float(os.getenv("DOCLAYOUT_IOU_THRES", "0.45"))
+            self.conf_thres = float(os.getenv("DOCLAYOUT_CONF_THRES", "0.15"))
+            self.iou_thres = float(os.getenv("DOCLAYOUT_IOU_THRES", "0.30"))
             
             print(f"[DocLayout-YOLO] ✓ Model loaded: {model_path}", flush=True)
             print(f"[DocLayout-YOLO] ✓ Config: img_size={self.img_size}, conf={self.conf_thres}, iou={self.iou_thres}", flush=True)
