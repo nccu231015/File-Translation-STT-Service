@@ -146,8 +146,9 @@ class PDFLayoutPreservingService:
                         text_blocks.append(tb)
 
                 # --- NMS Deduplication (Re-enabled) ---
-                # Sort by area (largest first) to prioritize preserving container blocks
-                text_blocks.sort(key=lambda b: fitz.Rect(b.bbox).get_area(), reverse=True)
+                # Sort by area (Smallest First) to prioritize specific paragraphs over containers
+                # This ensures we process/keep the detailed blocks, and the container will later find its content 'wiped' and skip itself.
+                text_blocks.sort(key=lambda b: fitz.Rect(b.bbox).get_area(), reverse=False)
                 
                 unique_blocks = []
                 for i, current_block in enumerate(text_blocks):
@@ -162,8 +163,11 @@ class PDFLayoutPreservingService:
                             intersect_area = curr_rect.intersect(kept_rect).get_area()
                             curr_area = curr_rect.get_area()
                             
-                            # If the current (smaller) block is >90% contained in a kept (larger) block, drop it
-                            # Valid paragraphs often overlap slightly. Only drop if it's a true duplicate (ghost).
+                            # If the current block is >90% contained in a kept block...
+                            # But since we sort Smallest First, 'current' is likely Larger than 'kept'.
+                            # So we only drop if 'current' is redundant.
+                            # Actually, with Smallest First, we rarely drop unless it's a true near-identical duplicate.
+                            # This preserves both Small and Big, allowing the "Wipe" logic to handle deduplication naturally.
                             if curr_area > 0 and (intersect_area / curr_area) > 0.9:
                                 is_duplicate = True
                                 break
