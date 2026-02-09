@@ -133,7 +133,12 @@ class PDFLayoutPreservingService:
                         text_blocks.append(tb)
 
                 # Rescue misclassified components
-                ignored_blocks = [b for b in layout_blocks if b.type.lower() not in ['text', 'title', 'list']]
+                # FIX: Only rescue 'Abandon' or unknown blocks.
+                # NEVER rescue 'Figure' or 'Table' because converting them to Text causes the image to be wiped/erased!
+                ignored_blocks = [
+                    b for b in layout_blocks 
+                    if b.type.lower() not in ['text', 'title', 'list', 'figure', 'table', 'equation']
+                ]
                 
                 for ib in ignored_blocks:
                     ib_rect = self.layout_detector.pixel_to_pdf_rect(ib.bbox, page, ib.page_width, ib.page_height)
@@ -161,10 +166,11 @@ class PDFLayoutPreservingService:
                         
                         if curr_rect.intersects(kept_rect):
                             intersect_area = curr_rect.intersect(kept_rect).get_area()
-                            curr_area = curr_rect.get_area()
+                            kept_area = kept_rect.get_area()
                             
-                            # Drop only if highly redundant (>90% overlap)
-                            if curr_area > 0 and (intersect_area / curr_area) > 0.9:
+                            # CRITICAL FIX: Check if the KEPT block (small) is contained in CURRENT block (large)
+                            # If the kept block is >80% inside the current block, current is a "container" -> DROP IT
+                            if kept_area > 0 and (intersect_area / kept_area) > 0.8:
                                 is_duplicate = True
                                 break
                     
