@@ -171,19 +171,19 @@ class PDFLayoutPreservingService:
                         if curr_rect.intersects(kept_rect):
                             intersect_area = curr_rect.intersect(kept_rect).get_area()
                             
-                            # Protection Layer 1: Container Detection
-                            # If kept block (small) is >50% inside current block (large), drop current
-                            if kept_area > 0 and (intersect_area / kept_area) > 0.5:
-                                # Additional check: current must be barely larger (1.05x) to be a container
-                                # Aggressive check to kill any redundancy
-                                if curr_area > kept_area * 1.05:
+                            # Protection Layer 1: Container Detection (ULTRA AGGRESSIVE)
+                            # If kept block (small) is >30% inside current block (large), drop current
+                            if kept_area > 0 and (intersect_area / kept_area) > 0.30:
+                                # Current must be barely larger (1.01x) to be considered a container
+                                # SUPER aggressive to prevent ANY duplication
+                                if curr_area > kept_area * 1.01:
                                     is_duplicate = True
                                     print(f"[PDF Layout] NMS: Dropped block {i} (container of kept block). Area ratio: {curr_area/kept_area:.2f}", flush=True)
                                     break
                             
-                            # Protection Layer 2: Redundancy Detection
-                            # If current block overlaps >60% with kept block, drop current
-                            if curr_area > 0 and (intersect_area / curr_area) > 0.6:
+                            # Protection Layer 2: Redundancy Detection (ULTRA AGGRESSIVE)
+                            # If current block overlaps >40% with kept block, drop current
+                            if curr_area > 0 and (intersect_area / curr_area) > 0.40:
                                 is_duplicate = True
                                 print(f"[PDF Layout] NMS: Dropped block {i} (redundant overlap {intersect_area/curr_area:.1%})", flush=True)
                                 break
