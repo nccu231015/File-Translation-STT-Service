@@ -91,8 +91,8 @@ class PDFLayoutPreservingService:
                     print(f"[PDF Layout] Debug visualization completed for page {page_num + 1}")
                     continue # Skip to next page
                 
-                # 1. Identify "Protected Areas" (Figures, Tables, Equations)
-                figure_blocks = [b for b in layout_blocks if b.type.lower() in ['figure', 'table', 'equation']]
+                # 1. Identify "Protected Areas" (Figures and Equations only - Tables are now translatable)
+                figure_blocks = [b for b in layout_blocks if b.type.lower() in ['figure', 'equation']]
                 protected_rects = []
                 for fb in figure_blocks:
                     fb_rect = fitz.Rect(fb.bbox)
@@ -102,8 +102,8 @@ class PDFLayoutPreservingService:
                     fb_rect.y1 += 10
                     protected_rects.append(fb_rect)
                 
-                # 2. Identify Candidates (Text, Title, List) and filter overlaps
-                text_candidates = [b for b in layout_blocks if b.type.lower() in ['text', 'title', 'list']]
+                # 2. Identify Candidates (Text, Title, List, Table) and filter overlaps
+                text_candidates = [b for b in layout_blocks if b.type.lower() in ['text', 'title', 'list', 'table']]
                 
                 text_blocks = []
                 for tb in text_candidates:
@@ -134,10 +134,11 @@ class PDFLayoutPreservingService:
 
                 # Rescue misclassified components
                 # FIX: Only rescue 'Abandon' or unknown blocks.
-                # NEVER rescue 'Figure' or 'Table' because converting them to Text causes the image to be wiped/erased!
+                # NEVER rescue 'Figure' or 'Equation' because converting them causes the content to be wiped/erased!
+                # Table is now a primary translatable type so it's excluded from rescue.
                 ignored_blocks = [
                     b for b in layout_blocks 
-                    if b.type.lower() not in ['text', 'title', 'list', 'figure', 'table', 'equation']
+                    if b.type.lower() not in ['text', 'title', 'list', 'table', 'figure', 'equation']
                 ]
                 
                 for ib in ignored_blocks:
