@@ -91,8 +91,8 @@ class PDFLayoutPreservingService:
                     print(f"[PDF Layout] Debug visualization completed for page {page_num + 1}")
                     continue # Skip to next page
                 
-                # 1. Identify "Protected Areas" (Figures and Equations only - Tables are now translatable)
-                figure_blocks = [b for b in layout_blocks if b.type.lower() in ['figure', 'equation']]
+                # 1. Identify "Protected Areas" (Figures, Tables, Equations)
+                figure_blocks = [b for b in layout_blocks if b.type.lower() in ['figure', 'table', 'equation']]
                 protected_rects = []
                 for fb in figure_blocks:
                     fb_rect = fitz.Rect(fb.bbox)
@@ -102,8 +102,8 @@ class PDFLayoutPreservingService:
                     fb_rect.y1 += 10
                     protected_rects.append(fb_rect)
                 
-                # 2. Identify Candidates (Text, Title, List, Table) and filter overlaps
-                text_candidates = [b for b in layout_blocks if b.type.lower() in ['text', 'title', 'list', 'table']]
+                # 2. Identify Candidates (Text, Title, List) and filter overlaps
+                text_candidates = [b for b in layout_blocks if b.type.lower() in ['text', 'title', 'list']]
                 
                 text_blocks = []
                 for tb in text_candidates:
@@ -134,11 +134,10 @@ class PDFLayoutPreservingService:
 
                 # Rescue misclassified components
                 # FIX: Only rescue 'Abandon' or unknown blocks.
-                # NEVER rescue 'Figure' or 'Equation' because converting them causes the content to be wiped/erased!
-                # Table is now a primary translatable type so it's excluded from rescue.
+                # NEVER rescue 'Figure', 'Table', or 'Equation' because converting them causes content to be wiped/erased!
                 ignored_blocks = [
                     b for b in layout_blocks 
-                    if b.type.lower() not in ['text', 'title', 'list', 'table', 'figure', 'equation']
+                    if b.type.lower() not in ['text', 'title', 'list', 'figure', 'table', 'equation']
                 ]
                 
                 for ib in ignored_blocks:
@@ -155,9 +154,11 @@ class PDFLayoutPreservingService:
 
                 # NMS Deduplication with Triple Protection
                 # Strategy: Smallest First to preserve specific paragraphs
+                print(f"[PDF Layout] NMS: Starting with {len(text_blocks)} blocks", flush=True)
                 text_blocks.sort(key=lambda b: fitz.Rect(b.bbox).get_area(), reverse=False)
                 
                 unique_blocks = []
+                dropped_count = 0
                 for i, current_block in enumerate(text_blocks):
                     curr_rect = fitz.Rect(current_block.bbox)
                     curr_area = curr_rect.get_area()
@@ -177,17 +178,22 @@ class PDFLayoutPreservingService:
                                 # Aggressive check to kill any redundancy
                                 if curr_area > kept_area * 1.05:
                                     is_duplicate = True
+                                    print(f"[PDF Layout] NMS: Dropped block {i} (container of kept block). Area ratio: {curr_area/kept_area:.2f}", flush=True)
                                     break
                             
                             # Protection Layer 2: Redundancy Detection
                             # If current block overlaps >60% with kept block, drop current
                             if curr_area > 0 and (intersect_area / curr_area) > 0.6:
                                 is_duplicate = True
+                                print(f"[PDF Layout] NMS: Dropped block {i} (redundant overlap {intersect_area/curr_area:.1%})", flush=True)
                                 break
                     
                     if not is_duplicate:
                         unique_blocks.append(current_block)
+                    else:
+                        dropped_count += 1
                 
+                print(f"[PDF Layout] NMS: Kept {len(unique_blocks)} blocks, dropped {dropped_count} duplicates", flush=True)
                 text_blocks = unique_blocks
 
                 # -----------------------------------------------------
@@ -219,6 +225,8 @@ class PDFLayoutPreservingService:
                         
                         # Filter Logic
                         if not block_text: continue
+                        
+                        print(f"[PDF Layout] Block {idx}: Extracted {len(block_text)} chars: '{block_text[:50]}...'", flush=True)
                         
                         # Skip purely numeric (unless Title)
                         is_numeric = re.match(r'^[\d\s\.,\-\/%$€]+$', block_text)
