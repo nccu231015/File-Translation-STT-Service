@@ -172,8 +172,9 @@ class PDFLayoutPreservingService:
                             # Protection Layer 1: Container Detection
                             # If kept block (small) is >50% inside current block (large), drop current
                             if kept_area > 0 and (intersect_area / kept_area) > 0.5:
-                                # Additional check: current must be significantly larger (1.3x) to be a container
-                                if curr_area > kept_area * 1.3:
+                                # Additional check: current must be barely larger (1.05x) to be a container
+                                # Aggressive check to kill any redundancy
+                                if curr_area > kept_area * 1.05:
                                     is_duplicate = True
                                     break
                             
@@ -280,7 +281,8 @@ class PDFLayoutPreservingService:
                             continue
                             
                         # Calculate Render Rect (Expanded)
-                        padding = 2.0
+                        # Reduced padding to prevent overlap with neighbors
+                        padding = 1.0 
                         render_rect = fitz.Rect(
                             raw_rect.x0 - padding,
                             raw_rect.y0 - padding,
@@ -373,6 +375,7 @@ class PDFLayoutPreservingService:
     def _insert_text_adaptive(self, page: fitz.Page, rect: fitz.Rect, text: str, target_lang: str, format_info: dict = None):
         """
         Insert translated text using insert_htmlbox for adaptive scaling.
+        Note: No wiping happens here to avoid overwriting neighbors.
         """
         if format_info is None:
             format_info = {"font": "helv", "fontsize": 12, "color": (0, 0, 0)}
@@ -387,9 +390,6 @@ class PDFLayoutPreservingService:
         css_font_size = "100%"
         if target_lang and target_lang.lower().startswith("en"):
             css_font_size = "85%"
-
-        # Erase Original Text
-        page.draw_rect(rect, color=(1, 1, 1), fill=(1, 1, 1), fill_opacity=1)
 
         # Try insert_htmlbox for adaptive scaling
         try:
