@@ -5,7 +5,8 @@ A high-performance AI productivity framework tailored for **Document Structure p
 ## 📋 Features
 
 ### 📄 Document Translation (Layout-Preserving)
-- **Visual Intelligence**: Uses **Detectron2 (Faster R-CNN)** to "see" the document layout before extracting text.
+- **Visual Intelligence**: Uses **DocLayout-YOLO** (PDF-Extract-Kit) to analyze document structure with **3-4x faster** inference than traditional Detectron2.
+- **Formula-Aware**: Automatically detects and skips mathematical formulas to prevent translation corruption.
 - **Layout Fidelity**: Overwrites translation onto the original PDF, preserving tables, columns, and document flow.
 - **Adaptive Scaling**: Automatically adjusts font sizes to prevent text overflow using the `htmlbox` rendering engine.
 - **Local Power**: Powered by **gpt-oss:20b** for robust English ↔ Traditional Chinese translation.
@@ -27,7 +28,7 @@ A high-performance AI productivity framework tailored for **Document Structure p
 | Component | Technology | Role |
 | :--- | :--- | :--- |
 | **Backend** | FastAPI (Python 3.10) | Async API Gateway |
-| **Vision** | LayoutParser (Detectron2) | Document Layout Analysis |
+| **Vision** | DocLayout-YOLO (PDF-Extract-Kit) | Document Layout Analysis |
 | **STT** | Faster-Whisper (CUDA 12.1) | Transcription Engine |
 | **LLM** | Ollama (gpt-oss:20b) | Translation & Reasoning |
 | **Frontend** | Next.js (Tailwind + Shadcn) | User Dashboard |
@@ -66,7 +67,25 @@ OLLAMA_BASE_URL=http://host.docker.internal:11434
 OLLAMA_MODEL=gpt-oss:20b
 FORCE_CPU=false
 REDIS_HOST=redis
+DOCLAYOUT_MODEL_PATH=/app/models/layout/doclayout_yolo_ft.pt
 ```
+
+---
+
+## 🧠 Technical Highlights
+
+### DocLayout-YOLO Integration
+We've migrated from traditional Detectron2 to **[DocLayout-YOLO](https://github.com/opendatalab/PDF-Extract-Kit)**, delivering:
+
+- **3-4x Faster Inference**: YOLO's single-stage architecture vs. Faster R-CNN's two-stage.
+- **Better Accuracy**: Trained on DocSynth-300K (diverse documents) vs. PubLayNet (academic-only).
+- **Formula Detection**: Automatically identifies and preserves mathematical equations.
+- **Smaller Footprint**: ~50MB model vs. ~250MB for Detectron2.
+
+**Official Resources**:
+- [PDF-Extract-Kit GitHub](https://github.com/opendatalab/PDF-Extract-Kit)
+- [DocLayout-YOLO Paper](https://arxiv.org/abs/2410.12628)
+- [Model Weights](https://huggingface.co/opendatalab/PDF-Extract-Kit-1.0)
 
 ---
 

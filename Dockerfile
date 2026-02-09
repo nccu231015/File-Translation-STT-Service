@@ -43,29 +43,23 @@ RUN uv pip install --system -r pyproject.toml
 COPY backend/app ./app
 COPY backend/.env.example ./.env
 
-# --- Install PyTorch with CUDA 12.1 support (Matches Base Image) ---
-# Detectron2 requires matching CUDA versions between System and PyTorch
+# --- Install PyTorch with CUDA 12.1 support ---
 RUN uv pip install --system torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
-# --- Install Detectron2 from Source ---
-# Using the main branch which supports PyTorch 2.x+
-RUN python -m pip install 'git+https://github.com/facebookresearch/detectron2.git'
+# --- Install DocLayout-YOLO for Layout Detection ---
+# Official: https://github.com/opendatalab/PDF-Extract-Kit
+RUN uv pip install --system doclayout-yolo==0.0.2
 
-# --- Install LayoutParser with Detectron2 support ---
-RUN uv pip install --system opencv-python-headless && \
-    uv pip install --system "layoutparser[detectron2]"
-
-# --- Pre-download Detectron2 PubLayNet Model (faster_rcnn_R_50_FPN_3x) ---
-# Direct link from LayoutParser Model Zoo
-RUN mkdir -p /root/.cache/layoutparser/models && \
-    wget -q --timeout=60 "https://www.dropbox.com/s/dgy9c10wykk4lq4/model_final.pth?dl=1" \
-         -O /root/.cache/layoutparser/models/faster_rcnn_R_50_FPN_3x.pth || \
-    wget -q "https://ghproxy.com/https://www.dropbox.com/s/dgy9c10wykk4lq4/model_final.pth?dl=1" \
-         -O /root/.cache/layoutparser/models/faster_rcnn_R_50_FPN_3x.pth || \
-    echo "WARNING: Detectron2 model download failed"
+# --- Download DocLayout-YOLO Pre-trained Model ---
+# Using official weights from HuggingFace
+RUN mkdir -p /app/models/layout && \
+    wget -q --show-progress \
+    https://huggingface.co/opendatalab/PDF-Extract-Kit-1.0/resolve/main/models/Layout/YOLO/doclayout_yolo_ft.pt \
+    -O /app/models/layout/doclayout_yolo_ft.pt || \
+    echo "WARNING: DocLayout-YOLO model download failed"
 
 # Verify installation
-RUN python -c "import detectron2; import layoutparser as lp; print(f'✓ LayoutParser + Detectron2 ready')"
+RUN python -c "from doclayout_yolo import YOLOv10; print('✓ DocLayout-YOLO ready')"
 
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -3,6 +3,7 @@ import requests
 import re
 from opencc import OpenCC
 from .pdf_layout_service import PDFLayoutPreservingService
+from .pdf_layout_detector_yolo import PDFLayoutDetectorYOLO
 
 class PDFService:
     def __init__(self, engine="ollama", target_lang="zh-TW"):
@@ -12,8 +13,11 @@ class PDFService:
         self.ollama_model = os.getenv("OLLAMA_MODEL", "gpt-oss:20b")
         self.s2tw = OpenCC("s2tw")
         
+        # Initialize with DocLayout-YOLO detector
+        print("[PDF Service] Initializing with DocLayout-YOLO...", flush=True)
         self.layout_translator = PDFLayoutPreservingService(
-            translate_func=self._translate_ollama
+            translate_func=self._translate_ollama,
+            layout_detector=PDFLayoutDetectorYOLO()
         )
 
     def _clean_llm_response(self, text: str) -> str:

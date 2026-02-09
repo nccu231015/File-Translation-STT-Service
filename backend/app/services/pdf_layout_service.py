@@ -184,6 +184,11 @@ class PDFLayoutPreservingService:
                         # --- ADVANCED SKIP LOGIC ---
                         if not block_text: continue
                         
+                        # Skip formula blocks (NEW: enabled by DocLayout-YOLO)
+                        if block.type == 'Formula':
+                            print(f"[PDF Layout] Skipping formula block (avoid corrupting math)", flush=True)
+                            continue
+                        
                         is_numeric = re.match(r'^[\d\s\.,\-\/%$€]+$', block_text)
                         
                         # Only skip purely numeric blocks unless they are specifically titles
@@ -193,7 +198,7 @@ class PDFLayoutPreservingService:
                         # Extract formatting
                         format_info = self._extract_format_info(page, pdf_rect, block_type=block.type)
                         
-                        print(f"[PDF Layout] Page {page_num+1} | Block {idx+1}/{len(text_blocks)}: Translating '{block_text[:20]}...'", flush=True)
+                        print(f"[PDF Layout] Page {page_num+1} | Block {idx+1}/{len(text_blocks)}: Translating '{block_text[:20]}...'\", flush=True)
                         
                         # STEP 3: Translation (This is where it usually 'sits' for a while)
                         translated_text = self.translate_func(block_text, target_lang, page_context)
