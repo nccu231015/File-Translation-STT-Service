@@ -1,5 +1,5 @@
 import os
-import requests
+import httpx
 import re
 from opencc import OpenCC
 from .pdf_layout_service import PDFLayoutPreservingService
@@ -66,9 +66,9 @@ class PDFService:
 
         return cleaned
 
-    def _translate_ollama(self, text: str, target_lang: str = "zh-TW", context: str = "") -> str:
+    async def _translate_ollama(self, text: str, target_lang: str = "zh-TW", context: str = "") -> str:
         """
-        Translates text using Ollama API, handling smart chunking if necessary.
+        Translates text using Ollama API (Async), handling smart chunking if necessary.
         """
         base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         base_url = base_url.rstrip("/")
@@ -84,7 +84,7 @@ class PDFService:
         MAX_CHUNK_SIZE = 3000 
         if len(text) > MAX_CHUNK_SIZE:
             print(f"[PDF] Long text ({len(text)} chars). Chunking...", flush=True)
-            return self._translate_with_chunking(text, target_lang, context, api_url)
+            return await self._translate_with_chunking(text, target_lang, context, api_url)
         
         # Single Block Translation
         system_prompt = "Translator. Output translation only. Natural Traditional Chinese."
@@ -97,56 +97,56 @@ class PDFService:
         ]
 
         max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                print(f"  [Ollama] Sending block ({len(text)} chars) to {self.ollama_model}...", flush=True)
-                r = requests.post(
-                    api_url,
-                    json={
-                        "model": self.ollama_model,
-                        "messages": messages,
-                        "stream": False,
-                        "options": {
-                            "temperature": 0.1,
-                            "num_predict": 4096,
-                            "top_p": 0.9,
-                        },
-                    },
-                    timeout=180, 
-                )
+        # Use AsyncClient for non-blocking I/O
+        async with httpx.AsyncClient(timeout=180.0) as client:
+            for attempt in range(max_retries):
+                try:
+                    print(f"  [Ollama] Sending block ({len(text)} chars) to {self.ollama_model}...", flush=True)
+                    r = await client.post(
+                        api_url,
+                        json={
+                            "model": self.ollama_model,
+                            "messages": messages,
+                            "stream": False,
+                            "options": {
+                                "temperature": 0.1,
+                                "num_predict": 4096,
+                                "top_p": 0.9,
+                            },
+                        }
+                    )
 
-                if r.status_code == 200:
-                    raw_out = r.json().get("message", {}).get("content", "").strip()
-                    
-                    if not raw_out:
-                        print(f"  [Ollama] DEBUG: Model returned empty response.", flush=True)
+                    if r.status_code == 200:
+                        raw_out = r.json().get("message", {}).get("content", "").strip()
+                        
+                        if not raw_out:
+                            print(f"  [Ollama] DEBUG: Model returned empty response.", flush=True)
+                        else:
+                            preview = raw_out[:100].replace('\n', ' ')
+                            # print(f"  [Ollama] RAW Response (first 100 chars): {preview}...", flush=True)
+                        
+                        cleaned = self._clean_llm_response(raw_out)
+                        
+                        if not cleaned and raw_out:
+                             print(f"  [Ollama] WARNING: Response empty after cleaning.", flush=True)
+
+                        if not cleaned: 
+                             print(f"  [Ollama] Empty response (Attempt {attempt+1})", flush=True)
+                             continue
+                             
+                        result = self.s2tw.convert(cleaned) if target_lang == "zh-TW" else cleaned
+                        print(f"  [Ollama] Success! Result: '{result[:30]}...'", flush=True)
+                        return result
                     else:
-                        preview = raw_out[:100].replace('\n', ' ')
-                        print(f"  [Ollama] RAW Response (first 100 chars): {preview}...", flush=True)
-                    
-                    cleaned = self._clean_llm_response(raw_out)
-                    
-                    if not cleaned and raw_out:
-                         print(f"  [Ollama] WARNING: Response empty after cleaning.", flush=True)
-
-                    if not cleaned: 
-                         print(f"  [Ollama] Empty response (Attempt {attempt+1})", flush=True)
-                         continue
-                         
-                    result = self.s2tw.convert(cleaned) if target_lang == "zh-TW" else cleaned
-                    print(f"  [Ollama] Success! Result: '{result[:30]}...'", flush=True)
-                    return result
-                else:
-                    print(f"  [Ollama] Failed: Status {r.status_code}", flush=True)
-            except Exception as e:
-                print(f"  [Ollama] Error (Attempt {attempt+1}): {e}", flush=True)
+                        print(f"  [Ollama] Failed: Status {r.status_code}", flush=True)
+                except Exception as e:
+                    print(f"  [Ollama] Error (Attempt {attempt+1}): {e}", flush=True)
         
         return text
 
-    def _translate_with_chunking(self, text: str, target_lang: str, context: str, api_url: str) -> str:
+    async def _translate_with_chunking(self, text: str, target_lang: str, context: str, api_url: str) -> str:
         """
-        Split long text into chunks at natural boundaries and translate separately.
-        Used only for exceptionally long blocks (>3000 chars).
+        Async chunked translation.
         """
         import re
         
@@ -178,74 +178,75 @@ class PDFService:
         translated_chunks = []
         previous_translation = ""
         
-        for idx, chunk in enumerate(combined_chunks):
-            if not chunk.strip():
-                continue
+        async with httpx.AsyncClient(timeout=180.0) as client:
+            for idx, chunk in enumerate(combined_chunks):
+                if not chunk.strip():
+                    continue
+                    
+                system_prompt = "Translator. Output translation only. Natural Traditional Chinese."
+                if is_cn_to_en:
+                    system_prompt = "Translator. Output translation only. Fluent English."
                 
-            system_prompt = "Translator. Output translation only. Natural Traditional Chinese."
-            if is_cn_to_en:
-                system_prompt = "Translator. Output translation only. Fluent English."
-            
-            if previous_translation:
-                system_prompt += f"\nContext: {previous_translation[-200:]}..."
+                if previous_translation:
+                    system_prompt += f"\nContext: {previous_translation[-200:]}..."
 
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Text:\n{chunk}"},
-            ]
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"Text:\n{chunk}"},
+                ]
 
-            max_retries = 3
-            chunk_translation = None
-            
-            for attempt in range(max_retries):
-                try:
-                    print(f"  [Ollama-Chunk] Sending chunk {idx+1}/{len(combined_chunks)} to {self.ollama_model}...", flush=True)
-                    r = requests.post(
-                        api_url,
-                        json={
-                            "model": self.ollama_model,
-                            "messages": messages,
-                            "stream": False,
-                            "options": {
-                                "temperature": 0.1,
-                                "num_predict": 4096,
-                                "top_p": 0.9,
-                            },
-                        },
-                        timeout=180,
-                    )
-
-                    if r.status_code == 200:
-                        raw_out = r.json().get("message", {}).get("content", "").strip()
-                        chunk_translation = self._clean_llm_response(raw_out)
+                max_retries = 3
+                chunk_translation = None
+                
+                for attempt in range(max_retries):
+                    try:
+                        print(f"  [Ollama-Chunk] Sending chunk {idx+1}/{len(combined_chunks)} to {self.ollama_model}...", flush=True)
                         
-                        if chunk_translation:
-                            if target_lang == "zh-TW":
-                                chunk_translation = self.s2tw.convert(chunk_translation)
-                            print(f"  [Ollama-Chunk] Success! ({len(chunk_translation)} chars)", flush=True)
-                            break
-                        else:
-                             print(f"  [Ollama-Chunk] Empty response (Attempt {attempt+1})", flush=True)
-                    else:
-                         print(f"  [Ollama-Chunk] Failed: {r.status_code}", flush=True)
+                        r = await client.post(
+                            api_url,
+                            json={
+                                "model": self.ollama_model,
+                                "messages": messages,
+                                "stream": False,
+                                "options": {
+                                    "temperature": 0.1,
+                                    "num_predict": 4096,
+                                    "top_p": 0.9,
+                                },
+                            }
+                        )
 
-                except Exception as e:
-                    print(f"  [Ollama-Chunk] Chunk {idx+1} error: {e}", flush=True)
-            
-            if chunk_translation:
-                translated_chunks.append(chunk_translation)
-                previous_translation = chunk_translation
-            else:
-                print(f"  [Ollama-Chunk] FAILED chunk {idx+1}. Using original.", flush=True)
-                translated_chunks.append(chunk)
+                        if r.status_code == 200:
+                            raw_out = r.json().get("message", {}).get("content", "").strip()
+                            chunk_translation = self._clean_llm_response(raw_out)
+                            
+                            if chunk_translation:
+                                if target_lang == "zh-TW":
+                                    chunk_translation = self.s2tw.convert(chunk_translation)
+                                print(f"  [Ollama-Chunk] Success! ({len(chunk_translation)} chars)", flush=True)
+                                break
+                            else:
+                                 print(f"  [Ollama-Chunk] Empty response (Attempt {attempt+1})", flush=True)
+                        else:
+                             print(f"  [Ollama-Chunk] Failed: {r.status_code}", flush=True)
+
+                    except Exception as e:
+                        print(f"  [Ollama-Chunk] Chunk {idx+1} error: {e}", flush=True)
+                
+                if chunk_translation:
+                    translated_chunks.append(chunk_translation)
+                    previous_translation = chunk_translation
+                else:
+                    print(f"  [Ollama-Chunk] FAILED chunk {idx+1}. Using original.", flush=True)
+                    translated_chunks.append(chunk)
         
         final_translation = " ".join(translated_chunks)
         print(f"[PDF] Chunked translation complete. Original: {len(text)} chars -> Translated: {len(final_translation)} chars", flush=True)
         return final_translation
 
-    def process_pdf(self, input_pdf_path: str, force_target_lang: str = None, debug_mode: bool = False):
+    async def process_pdf(self, input_pdf_path: str, force_target_lang: str = None, debug_mode: bool = False):
         """
-        Processes the PDF: Uses PyMuPDF to preserve layout and translation.
+        Processes the PDF (Async Entry Point).
         """
         if not os.path.exists(input_pdf_path):
             raise FileNotFoundError(f"File not found: {input_pdf_path}")
@@ -259,7 +260,8 @@ class PDFService:
         output_pdf_path = os.path.join(dir_name, f"{base_name}_translated.pdf")
         
         try:
-            self.layout_translator.translate_pdf(
+            # AWAIT the async translation process
+            await self.layout_translator.translate_pdf(
                 input_path=input_pdf_path,
                 output_path=output_pdf_path,
                 target_lang=target_lang,

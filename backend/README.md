@@ -21,6 +21,7 @@ FastAPI-based intelligence engine providing high-fidelity document translation a
 ### 3. LLM Orchestration (`app/services/llm_service.py`)
 - **Model**: gpt-oss:20b (via Ollama).
 - **Optimization**: Smart cleaning of `<think>` tags and conversational prefixes.
+- **Concurrency**: Fully async pipeline using `httpx` to handle multiple requests without blocking.
 
 ## 🛠️ Installation (Local Dev)
 1. **Requirements**: Python 3.10 + `uv`.

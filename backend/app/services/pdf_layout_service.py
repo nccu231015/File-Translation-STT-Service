@@ -22,9 +22,9 @@ class PDFLayoutPreservingService:
         self.translate_func = translate_func
         self.layout_detector = layout_detector
 
-    def translate_pdf(self, input_path: str, output_path: str, target_lang: str = "zh-TW", debug_mode: bool = False):
+    async def translate_pdf(self, input_path: str, output_path: str, target_lang: str = "zh-TW", debug_mode: bool = False):
         """
-        Translates the PDF using the new 5-step pipeline.
+        Main pipeline: Detect -> Extract -> Translate (Async) -> Render.
         If debug_mode is True, draws bounding boxes and skips translation.
         """
         doc = fitz.open(input_path)
@@ -267,8 +267,8 @@ class PDFLayoutPreservingService:
                         
                         print(f"[PDF Layout] Translating block {i+1}/{len(processed_queue)}...", flush=True)
                         
-                        # Translation
-                        translated_text = self.translate_func(block_text, target_lang, page_context)
+                        # Translation (Async Await)
+                        translated_text = await self.translate_func(block_text, target_lang, page_context)
                         
                         if not translated_text or not translated_text.strip():
                             continue
