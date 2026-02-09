@@ -174,15 +174,13 @@ class PDFLayoutPreservingService:
                         if curr_rect.intersects(kept_rect):
                             intersect_area = curr_rect.intersect(kept_rect).get_area()
                             
-                            # Protection Layer 1: Container Detection (ULTRA AGGRESSIVE)
-                            # If kept block (small) is >30% inside current block (large), drop current
-                            if kept_area > 0 and (intersect_area / kept_area) > 0.30:
-                                # Current must be barely larger (1.01x) to be considered a container
-                                # SUPER aggressive to prevent ANY duplication
-                                if curr_area > kept_area * 1.01:
-                                    is_duplicate = True
-                                    print(f"[PDF Layout] NMS: Dropped block {i} (container of kept block). Area ratio: {curr_area/kept_area:.2f}", flush=True)
-                                    break
+                            # Protection Layer 1: Container Detection (Refined)
+                            # If kept block (small) is >50% inside current block (large), drop current (large)
+                            # We want to keep the small, specific blocks and drop the large, vague containers.
+                            if kept_area > 0 and (intersect_area / kept_area) > 0.5:
+                                is_duplicate = True
+                                print(f"[PDF Layout] NMS: Dropped block {i} (container of kept block {unique_blocks.index(kept_block)}). Small block is {intersect_area/kept_area:.1%} inside.", flush=True)
+                                break
                             
                             # Protection Layer 2: Redundancy Detection (ULTRA AGGRESSIVE)
                             # If current block overlaps >40% with kept block, drop current
