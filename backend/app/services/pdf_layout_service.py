@@ -216,7 +216,16 @@ class PDFLayoutPreservingService:
                         # STEP 3: Translation (This is where it usually 'sits' for a while)
                         translated_text = self.translate_func(block_text, target_lang, page_context)
                         
-                        if not translated_text or translated_text.strip() == block_text:
+                        if not translated_text or not translated_text.strip():
+                            continue
+                            
+                        # If translation is suspiciously short (e.g. cleaning residue) for a long block
+                        # Example: Original "This is a detailed note..." -> Translated "." or ")"
+                        if len(block_text) > 10 and len(translated_text.strip()) < 2 and not translated_text.strip().isdigit():
+                             print(f"[PDF Layout] Translation too short ('{translated_text}'). Keeping original.")
+                             continue
+
+                        if translated_text.strip() == block_text:
                             continue
                         
                         # STEP 4 & 5: Wipe and Render
