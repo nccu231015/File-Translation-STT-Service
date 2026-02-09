@@ -195,6 +195,13 @@ class PDFLayoutPreservingService:
                 
                 print(f"[PDF Layout] Page {page_num+1}: Found {len(text_blocks)} translatable blocks", flush=True)
                 
+                # Context for translation
+                page_context = page.get_text()
+                
+                # Store processed blocks to avoid re-extraction logic duplication
+                # List of dict: { 'block': block, 'raw_rect': rect, 'text': str, 'format': dict }
+                processed_queue = []
+                
                 # --- PHASE 1: PREPARATION & WIPING ---
                 # We collect all blocks first, then wipe them ALL at once.
                 
