@@ -155,13 +155,17 @@ class PDFLayoutPreservingService:
                             ib.type = 'Text'
                             text_blocks.append(ib)
 
-                # NMS Deduplication with Triple Protection
-                # Strategy: Smallest First to preserve specific paragraphs
+                # NMS Deduplication (Largest First Strategy)
+                # We prioritize keeping the largest containers to preserve context (e.g. full lists),
+                # and drop the smaller fragments that are contained within them.
                 print(f"[PDF Layout] NMS: Starting with {len(text_blocks)} blocks", flush=True)
-                text_blocks.sort(key=lambda b: fitz.Rect(b.bbox).get_area(), reverse=False)
+                
+                # Sort by Area DESCENDING (Largest First)
+                text_blocks.sort(key=lambda b: fitz.Rect(b.bbox).get_area(), reverse=True)
                 
                 unique_blocks = []
                 dropped_count = 0
+                
                 for i, current_block in enumerate(text_blocks):
                     curr_rect = fitz.Rect(current_block.bbox)
                     curr_area = curr_rect.get_area()
@@ -174,19 +178,12 @@ class PDFLayoutPreservingService:
                         if curr_rect.intersects(kept_rect):
                             intersect_area = curr_rect.intersect(kept_rect).get_area()
                             
-                            # Protection Layer 1: Container Detection (Refined)
-                            # If kept block (small) is >50% inside current block (large), drop current (large)
-                            # We want to keep the small, specific blocks and drop the large, vague containers.
-                            if kept_area > 0 and (intersect_area / kept_area) > 0.5:
+                            # Container Check:
+                            # Since we are processing largest first, 'kept_block' is larger than 'current_block'.
+                            # If current block (small) is largely (>60%) inside kept block (large), drop current.
+                            if curr_area > 0 and (intersect_area / curr_area) > 0.60:
                                 is_duplicate = True
-                                print(f"[PDF Layout] NMS: Dropped block {i} (container of kept block {unique_blocks.index(kept_block)}). Small block is {intersect_area/kept_area:.1%} inside.", flush=True)
-                                break
-                            
-                            # Protection Layer 2: Redundancy Detection (ULTRA AGGRESSIVE)
-                            # If current block overlaps >40% with kept block, drop current
-                            if curr_area > 0 and (intersect_area / curr_area) > 0.40:
-                                is_duplicate = True
-                                print(f"[PDF Layout] NMS: Dropped block {i} (redundant overlap {intersect_area/curr_area:.1%})", flush=True)
+                                print(f"[PDF Layout] NMS: Dropped small block {i} (contained in block {unique_blocks.index(kept_block)}). Overlap: {intersect_area/curr_area:.1%}", flush=True)
                                 break
                     
                     if not is_duplicate:
@@ -195,8 +192,11 @@ class PDFLayoutPreservingService:
                         dropped_count += 1
                 
                 print(f"[PDF Layout] NMS: Kept {len(unique_blocks)} blocks, dropped {dropped_count} duplicates", flush=True)
+                
+                # Sort kept blocks by Y position for rendering order
+                unique_blocks.sort(key=lambda b: b.bbox[1])
                 text_blocks = unique_blocks
-
+                
                 # -----------------------------------------------------
                 # NEW PIPELINE: Separate Wipe and Render Phases
                 # -----------------------------------------------------
@@ -209,7 +209,7 @@ class PDFLayoutPreservingService:
                 # Store processed blocks to avoid re-extraction logic duplication
                 # List of dict: { 'block': block, 'raw_rect': rect, 'text': str, 'format': dict }
                 processed_queue = []
-                seen_texts = []  # Track extracted text to detect content duplication
+                # Removed text-based deduplication as geometric/Largest-First NMS is safer
                 
                 # --- PHASE 1: PREPARATION & WIPING ---
                 # We collect all blocks first, then wipe them ALL at once.
@@ -231,40 +231,12 @@ class PDFLayoutPreservingService:
                         
                         print(f"[PDF Layout] Block {idx}: Extracted {len(block_text)} chars: '{block_text[:50]}...'", flush=True)
                         
-                        # TEXT-BASED DEDUPLICATION (Critical Fix)
-                        # Check if this text is substantially similar to any previously extracted text
-                        is_duplicate_text = False
-                        for prev_text in seen_texts:
-                            # Normalize both texts (remove extra whitespace, lowercase)
-                            curr_normalized = ' '.join(block_text.lower().split())
-                            prev_normalized = ' '.join(prev_text.lower().split())
-                            
-                            # Only use substring containment (reliable method)
-                            if len(curr_normalized) > 0 and len(prev_normalized) > 0:
-                                shorter = min(len(curr_normalized), len(prev_normalized))
-                                longer = max(len(curr_normalized), len(prev_normalized))
-                                
-                                # Check if one is a substring of the other
-                                is_substring = curr_normalized in prev_normalized or prev_normalized in curr_normalized
-                                
-                                # CRITICAL FIX: Hybrid threshold
-                                # 1. If ratio > 70% (standard duplicate)
-                                # 2. OR if shared content > 30 chars (long meaningful overlap, ignore ratio)
-                                #    This catches cases like "g p\n[Long Content]" vs "[Long Content]"
-                                #    where ratio might be 55% but they are clearly the same content.
-                                if is_substring:
-                                    if (shorter / longer > 0.7) or (shorter > 30):
-                                        is_duplicate_text = True
-                                        print(f"[PDF Layout] Block {idx}: SKIPPED - Text is substring of previous block (Acc: {shorter/longer:.0%}, Len: {shorter})", flush=True)
-                                        break
-                        
-                        if is_duplicate_text:
-                            continue
-                        
-                        # Record this text as seen
-                        seen_texts.append(block_text)
-                        
                         # Skip purely numeric (unless Title)
+                        is_numeric = re.match(r'^[\d\s\.,\-\/%$€]+$', block_text)
+                        if is_numeric and block.type.lower() != 'title':
+                            continue
+                            
+                        # Format Extraction
                         is_numeric = re.match(r'^[\d\s\.,\-\/%$€]+$', block_text)
                         if is_numeric and block.type.lower() != 'title':
                             continue
