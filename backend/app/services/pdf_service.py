@@ -22,13 +22,12 @@ class PDFService:
 
     def _clean_llm_response(self, text: str) -> str:
         """
-        Removes common conversational filler prefixes and <think> blocks from LLM output.
-        Also removes translation notes and meta-commentary.
+        Cleans LLM output by removing think blocks, conversational fillers, and meta-commentary.
         """
         # Remove <think> blocks
         text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
         
-        # Remove translation notes (extremely aggressive)
+        # Remove translation notes
         translation_note_patterns = [
             r'\(translation note:.*?\)',
             r'\(note:.*?\)',
@@ -69,7 +68,7 @@ class PDFService:
 
     def _translate_ollama(self, text: str, target_lang: str = "zh-TW", context: str = "") -> str:
         """
-        Smart chunked translation with optimized parameters for speed.
+        Translates text using Ollama API, handling smart chunking if necessary.
         """
         base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         base_url = base_url.rstrip("/")
@@ -80,15 +79,14 @@ class PDFService:
 
         is_cn_to_en = target_lang.lower() in ['en', 'en-us', 'en-gb']
         
-        # --- SMART CHUNKING ---
-        # Drastically increased to 3000 to prevent unnecessary splitting.
-        # Modern models (gpt-oss:20b) can handle 4k+ tokens easily.
+        # Chunking Strategy
+        # Use simple chunking for very long blocks (>3000 chars)
         MAX_CHUNK_SIZE = 3000 
         if len(text) > MAX_CHUNK_SIZE:
             print(f"[PDF] Long text ({len(text)} chars). Chunking...", flush=True)
             return self._translate_with_chunking(text, target_lang, context, api_url)
         
-        # --- SINGLE CHUNK ---
+        # Single Block Translation
         system_prompt = "Translator. Output translation only. Natural Traditional Chinese."
         if is_cn_to_en:
             system_prompt = "Translator. Output translation only. Fluent English."
@@ -109,8 +107,8 @@ class PDFService:
                         "messages": messages,
                         "stream": False,
                         "options": {
-                            "temperature": 0.1,  # Lower temperature = faster search
-                            "num_predict": 4096, # Increased to prevent truncation for large blocks
+                            "temperature": 0.1,
+                            "num_predict": 4096,
                             "top_p": 0.9,
                         },
                     },
@@ -119,18 +117,17 @@ class PDFService:
 
                 if r.status_code == 200:
                     raw_out = r.json().get("message", {}).get("content", "").strip()
-                    # Enabled debug log to see EXACTLY what the model returned
+                    
                     if not raw_out:
-                        print(f"  [Ollama] DEBUG: Model returned literally nothing.", flush=True)
+                        print(f"  [Ollama] DEBUG: Model returned empty response.", flush=True)
                     else:
-                        # Extract preview without newlines (f-string can't contain backslash)
                         preview = raw_out[:100].replace('\n', ' ')
                         print(f"  [Ollama] RAW Response (first 100 chars): {preview}...", flush=True)
                     
                     cleaned = self._clean_llm_response(raw_out)
                     
                     if not cleaned and raw_out:
-                         print(f"  [Ollama] WARNING: Response empty after cleaning! Raw was: {len(raw_out)} chars.", flush=True)
+                         print(f"  [Ollama] WARNING: Response empty after cleaning.", flush=True)
 
                     if not cleaned: 
                          print(f"  [Ollama] Empty response (Attempt {attempt+1})", flush=True)
