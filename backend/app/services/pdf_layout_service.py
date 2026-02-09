@@ -93,6 +93,8 @@ class PDFLayoutPreservingService:
                 
                 # 1. Identify "Protected Areas" (Figures, Tables, Equations)
                 figure_blocks = [b for b in layout_blocks if b.type.lower() in ['figure', 'table', 'equation']]
+                print(f"[PDF Layout] Protected blocks: {len(figure_blocks)} ({', '.join([b.type for b in figure_blocks])})", flush=True)
+                
                 protected_rects = []
                 for fb in figure_blocks:
                     fb_rect = fitz.Rect(fb.bbox)
@@ -104,6 +106,7 @@ class PDFLayoutPreservingService:
                 
                 # 2. Identify Candidates (Text, Title, List) and filter overlaps
                 text_candidates = [b for b in layout_blocks if b.type.lower() in ['text', 'title', 'list']]
+                print(f"[PDF Layout] Text candidates: {len(text_candidates)} ({', '.join([b.type for b in text_candidates])})", flush=True)
                 
                 text_blocks = []
                 for tb in text_candidates:
