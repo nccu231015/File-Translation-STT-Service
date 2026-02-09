@@ -207,21 +207,14 @@ class PDFLayoutPreservingService:
                 
                 for idx, block in enumerate(text_blocks):
                     try:
-                        # 1. Coordinate Conversion
+                        # 1. Coordinate Conversion (Use exact YOLO bbox)
                         raw_rect = self.layout_detector.pixel_to_pdf_rect(
                             block.bbox, page, block.page_width, block.page_height
                         )
+                        raw_rect.intersect(page.rect) # Ensure within page bounds
                         
-                        # Fix: Do NOT inflate vertically. In fact, slightly shrink to avoid grabbing neighbor text.
-                        # Using exact rect or slightly inset rect prevents "Manufacturing processes" from being
-                        # grabbed by the list block below it.
-                        search_rect = fitz.Rect(raw_rect.x0, raw_rect.y0 + 1, raw_rect.x1, raw_rect.y1 - 1)
-                        if search_rect.height <= 0:
-                            search_rect = raw_rect # Fallback for tiny boxes
-
-                        # 2. Text Extraction
-                        # Use search_rect (shrunk) to get text
-                        block_text = page.get_textbox(search_rect).strip()
+                        # 2. Text Extraction (Use exact bbox - no modifications)
+                        block_text = page.get_textbox(raw_rect).strip()
                         
                         # Filter Logic
                         if not block_text: continue
@@ -243,9 +236,13 @@ class PDFLayoutPreservingService:
                             'sort_key': raw_rect.y0 # Key for sorting
                         })
                         
-                        # EXECUTE WIPE IMMEDIATELY (Accumulative Wiping)
-                        # We use a slightly tighter wipe rect to ensure we don't kill boundaries
-                        wipe_rect = fitz.Rect(raw_rect.x0-0.5, raw_rect.y0-0.5, raw_rect.x1+0.5, raw_rect.y1+0.5)
+                        # EXECUTE WIPE (Slightly expanded to ensure full coverage)
+                        wipe_rect = fitz.Rect(
+                            raw_rect.x0 - 1,
+                            raw_rect.y0 - 1,
+                            raw_rect.x1 + 1,
+                            raw_rect.y1 + 1
+                        )
                         page.draw_rect(wipe_rect, color=(1, 1, 1), fill=(1, 1, 1), fill_opacity=1)
                         
                     except Exception as e:
@@ -280,16 +277,8 @@ class PDFLayoutPreservingService:
                         if translated_text.strip() == block_text:
                             continue
                             
-                        # Calculate Render Rect (Expanded)
-                        # Reduced padding to prevent overlap with neighbors
-                        padding = 1.0 
-                        render_rect = fitz.Rect(
-                            raw_rect.x0 - padding,
-                            raw_rect.y0 - padding,
-                            raw_rect.x1 + (padding*2),
-                            raw_rect.y1 + padding
-                        )
-                        render_rect.intersect(page.rect)
+                        # Render using exact bbox (no expansion to prevent overflow)
+                        render_rect = raw_rect
                         
                         # Render
                         self._insert_text_adaptive(page, render_rect, translated_text, target_lang, item['format'])
