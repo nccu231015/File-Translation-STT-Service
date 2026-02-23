@@ -41,56 +41,6 @@ class PDFLayoutPreservingService:
                 print(f"[PDF Layout] Step 1: Detecting layout...", flush=True)
                 layout_blocks = self.layout_detector.detect_layout(input_path, page_num, page.rect.width, page.rect.height)
 
-                # --- DEBUG MODE VISUALIZATION ---
-                if debug_mode:
-                    print(f"[PDF Layout] Debug mode enabled. Drawing {len(layout_blocks)} blocks.")
-                    
-                    if len(layout_blocks) == 0:
-                        print(f"[PDF Layout] WARNING: No layout blocks detected on page {page_num + 1}")
-                    
-                    # Color mapping for different block types (RGB tuples)
-                    color_map = {
-                        "Text": (1, 0, 0),      # Red
-                        "Title": (0, 0, 1),     # Blue
-                        "List": (0, 0.5, 0),    # Dark Green
-                        "Table": (1, 0.5, 0),   # Orange
-                        "Figure": (0.5, 0, 0.5) # Purple
-                    }
-                    default_color = (0.5, 0.5, 0.5) # Grey for unknown
-
-                    for idx, block in enumerate(layout_blocks):
-                        try:
-                            if block.page_width == 0 or block.page_height == 0:
-                                continue
-                            
-                            color = color_map.get(block.type, default_color)
-
-                            pdf_rect = self.layout_detector.pixel_to_pdf_rect(
-                                block.bbox, page, block.page_width, block.page_height
-                            )
-                            
-                            if pdf_rect.is_empty or pdf_rect.width < 1 or pdf_rect.height < 1:
-                                continue
-
-                            page.draw_rect(pdf_rect, color=color, width=1.5)
-                            
-                            label = f"{block.type} ({block.confidence:.2f})"
-                            text_point = (pdf_rect.x0, pdf_rect.y0 - 5 if pdf_rect.y0 > 10 else pdf_rect.y0 + 10)
-                            
-                            page.insert_text(
-                                text_point,
-                                label, 
-                                fontsize=8, 
-                                color=color
-                            )
-                            
-                        except Exception as block_err:
-                            print(f"[PDF Layout] ERROR drawing block {idx}: {block_err}")
-                            continue
-                    
-                    print(f"[PDF Layout] Debug visualization completed for page {page_num + 1}")
-                    continue # Skip to next page
-                
                 # 1. Identify "Protected Areas" (Figures, Tables, Equations)
                 figure_blocks = [b for b in layout_blocks if b.type.lower() in ['figure', 'table', 'equation']]
                 print(f"[PDF Layout] Protected blocks: {len(figure_blocks)} ({', '.join([b.type for b in figure_blocks])})", flush=True)
@@ -168,27 +118,28 @@ class PDFLayoutPreservingService:
                 
                 for pb in page_blocks:
                     if pb.get("type") != 0: continue
-                    pb_rect = fitz.Rect(pb["bbox"])
-                    if pb_rect.is_empty or pb_rect.width < 10 or pb_rect.height < 5:
-                        continue
-                    
-                    overlap_ratio = 0
-                    for kr in known_rects:
-                        if pb_rect.intersects(kr):
-                            overlap_ratio = max(overlap_ratio, pb_rect.intersect(kr).get_area() / pb_rect.get_area())
-                            if overlap_ratio > 0.4: break
-                                
-                    if overlap_ratio <= 0.4:
-                        pb_text = "".join(span.get("text", "") for line in pb.get("lines", []) for span in line.get("spans", [])).strip()
-                        if len(pb_text) > 4 and (any('\u4e00' <= c <= '\u9fff' for c in pb_text) or ' ' in pb_text):
-                            print(f"[PDF Layout] Orphan rescue: '{pb_text[:30]}'", flush=True)
-                            scale_x = page.rect.width / pg_w
-                            scale_y = page.rect.height / pg_h
-                            orphan = LayoutBlock(
-                                bbox=(pb_rect.x0 / scale_x, pb_rect.y0 / scale_y, pb_rect.x1 / scale_x, pb_rect.y1 / scale_y),
-                                type='Text', confidence=1.0, page_width=pg_w, page_height=pg_h
-                            )
-                            text_blocks.append(orphan)
+                    for line in pb.get("lines", []):
+                        line_rect = fitz.Rect(line["bbox"])
+                        if line_rect.is_empty or line_rect.width < 10 or line_rect.height < 5:
+                            continue
+                        
+                        overlap_ratio = 0
+                        for kr in known_rects:
+                            if line_rect.intersects(kr):
+                                overlap_ratio = max(overlap_ratio, line_rect.intersect(kr).get_area() / line_rect.get_area())
+                                if overlap_ratio > 0.4: break
+                                    
+                        if overlap_ratio <= 0.4:
+                            line_text = "".join(span.get("text", "") for span in line.get("spans", [])).strip()
+                            if len(line_text) > 4 and (any('\u4e00' <= c <= '\u9fff' for c in line_text) or ' ' in line_text):
+                                print(f"[PDF Layout] Orphan line rescue: '{line_text[:30]}'", flush=True)
+                                scale_x = page.rect.width / pg_w
+                                scale_y = page.rect.height / pg_h
+                                orphan = LayoutBlock(
+                                    bbox=(line_rect.x0 / scale_x, line_rect.y0 / scale_y, line_rect.x1 / scale_x, line_rect.y1 / scale_y),
+                                    type='Text', confidence=1.0, page_width=pg_w, page_height=pg_h
+                                )
+                                text_blocks.append(orphan)
 
                 # NMS Deduplication (Largest First Strategy)
                 # We prioritize keeping the largest containers to preserve context (e.g. full lists),
@@ -233,6 +184,63 @@ class PDFLayoutPreservingService:
                 unique_blocks.sort(key=lambda b: b.bbox[1])
                 text_blocks = unique_blocks
                 
+                # --- DEBUG MODE VISUALIZATION ---
+                if debug_mode:
+                    # Collect all blocks we want to visualize:
+                    # 1. Original Layout blocks (like Figure, Table, Equation)
+                    # 2. Rescued text blocks (from text_blocks list that aren't in layout_blocks)
+                    blocks_to_draw = list(layout_blocks)
+                    for tb in text_blocks:
+                        if tb not in blocks_to_draw:
+                            blocks_to_draw.append(tb)
+
+                    print(f"[PDF Layout] Debug mode enabled. Drawing {len(blocks_to_draw)} blocks.")
+                    
+                    # Color mapping for different block types (RGB tuples)
+                    color_map = {
+                        "Text": (1, 0, 0),      # Red
+                        "Title": (0, 0, 1),     # Blue
+                        "List": (0, 0.5, 0),    # Dark Green
+                        "Table": (1, 0.5, 0),   # Orange
+                        "Figure": (0.5, 0, 0.5) # Purple
+                    }
+                    default_color = (0.5, 0.5, 0.5) # Grey for unknown
+
+                    for idx, block in enumerate(blocks_to_draw):
+                        try:
+                            if block.page_width == 0 or block.page_height == 0:
+                                continue
+                            
+                            color = color_map.get(block.type, default_color)
+
+                            pdf_rect = self.layout_detector.pixel_to_pdf_rect(
+                                block.bbox, page, block.page_width, block.page_height
+                            )
+                            
+                            if pdf_rect.is_empty or pdf_rect.width < 1 or pdf_rect.height < 1:
+                                continue
+
+                            page.draw_rect(pdf_rect, color=color, width=1.5)
+                            
+                            # If it's a rescued block, label it nicely
+                            conf_label = "RESCUED" if block.confidence == 1.0 else f"{block.confidence:.2f}"
+                            label = f"{block.type} ({conf_label})"
+                            text_point = (pdf_rect.x0, pdf_rect.y0 - 5 if pdf_rect.y0 > 10 else pdf_rect.y0 + 10)
+                            
+                            page.insert_text(
+                                text_point,
+                                label, 
+                                fontsize=8, 
+                                color=color
+                            )
+                            
+                        except Exception as block_err:
+                            print(f"[PDF Layout] ERROR drawing block {idx}: {block_err}")
+                            continue
+                    
+                    print(f"[PDF Layout] Debug visualization completed for page {page_num + 1}")
+                    continue # Skip to next page
+
                 # -----------------------------------------------------
                 # NEW PIPELINE: Separate Wipe and Render Phases
                 # -----------------------------------------------------
