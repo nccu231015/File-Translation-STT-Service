@@ -334,10 +334,11 @@ class PDFLayoutPreservingService:
                             'sort_key': raw_rect.y0 # Key for sorting
                         })
                         
-                        # EXECUTE WIPE using actual text bbox (more precise than YOLO bbox)
-                        # Use PyMuPDF's real span positions + 1pt margin to avoid destroying nearby lines/tables
+                        # REGISTER REDACTION — use precise span union as the area to erase.
+                        # This REMOVES the text from the PDF content stream (not just a visual overlay).
+                        # graphics=False (applied later) ensures table borders are untouched.
                         wipe_rect = self._get_precise_wipe_rect(page, raw_rect, margin=1)
-                        page.draw_rect(wipe_rect, color=(1, 1, 1), fill=(1, 1, 1), fill_opacity=1)
+                        page.add_redact_annot(wipe_rect, fill=(1, 1, 1))  # white fill for the cleared area
                         
                     except Exception as e:
                         print(f"[PDF Layout] Prep Error Block {idx}: {e}")
@@ -345,6 +346,26 @@ class PDFLayoutPreservingService:
 
                 # Sort by vertical position (Top to Bottom) to ensure logical rendering order
                 processed_queue.sort(key=lambda x: x['sort_key'])
+
+                # --- APPLY REDACTIONS (between Phase 1 and Phase 2) ---
+                # This permanently removes the original text from the PDF content stream.
+                # graphics=False: keeps vector graphics (table borders, lines, etc.) intact.
+                # images=fitz.PDF_REDACT_IMAGE_NONE: leaves raster images untouched.
+                try:
+                    page.apply_redactions(
+                        images=fitz.PDF_REDACT_IMAGE_NONE,
+                        graphics=False
+                    )
+                    print(f"[PDF Layout] Redactions applied for page {page_num+1}", flush=True)
+                except Exception as redact_err:
+                    print(f"[PDF Layout] Redaction Error page {page_num+1}: {redact_err} — falling back to draw_rect", flush=True)
+                    # Fallback: draw white rects for each queued block
+                    for item in processed_queue:
+                        try:
+                            wipe_rect = self._get_precise_wipe_rect(page, item['raw_rect'], margin=1)
+                            page.draw_rect(wipe_rect, color=(1, 1, 1), fill=(1, 1, 1), fill_opacity=1)
+                        except Exception:
+                            pass
 
                 # --- PHASE 2: TRANSLATION & RENDERING ---
                 # Now that the canvas is clean, we can write text without fear of it being erased.
