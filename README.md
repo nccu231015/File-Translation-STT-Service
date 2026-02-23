@@ -6,8 +6,10 @@ A high-performance AI productivity framework tailored for **Document Structure p
 
 ### 📄 Document Translation (Layout-Preserving)
 - **Visual Intelligence**: Uses **DocLayout-YOLO** (PDF-Extract-Kit) to analyze document structure with **3-4x faster** inference than traditional Detectron2.
+- **Multi-Layer Text Detection**: Combines YOLO visual detection with PyMuPDF span-level scanning to ensure no text block is missed — including annotations, footnotes, and colored inline notes.
 - **Formula-Aware**: Automatically detects and skips mathematical formulas to prevent translation corruption.
 - **Layout Fidelity**: Overwrites translation onto the original PDF, preserving tables, columns, and document flow.
+- **Precise Text Erasure**: Uses PyMuPDF's **Redaction API** to permanently remove original text from the PDF content stream (instead of a visual white-overlay), eliminating transparent bleed-through artifacts.
 - **Adaptive Scaling**: Automatically adjusts font sizes to prevent text overflow using the `htmlbox` rendering engine.
 - **Local Power**: Powered by **gpt-oss:20b** for robust English ↔ Traditional Chinese translation.
 
@@ -86,6 +88,37 @@ We've migrated from traditional Detectron2 to **[DocLayout-YOLO](https://github.
 - [PDF-Extract-Kit GitHub](https://github.com/opendatalab/PDF-Extract-Kit)
 - [DocLayout-YOLO Paper](https://arxiv.org/abs/2410.12628)
 - [Model Weights](https://huggingface.co/opendatalab/PDF-Extract-Kit-1.0)
+
+---
+
+### PDF Translation Pipeline (v2)
+
+The translation pipeline uses a multi-stage approach designed for robustness and accuracy:
+
+#### 1. Layout Detection
+YOLO runs on a 3x-zoom render of the page to detect content blocks (Title, Text, List, Table, Figure, Formula, Abandon).
+
+#### 2. Multi-Layer Text Rescue
+Blocks missed or mis-classified by YOLO are recovered via two mechanisms:
+- **Abandon Rescue**: YOLO passes `abandon`-typed blocks downstream; the service rescues any that contain meaningful text content.
+- **Orphan Line Rescue**: PyMuPDF scans every text line on the page. Lines not covered (>40%) by any YOLO block are added as independent translation targets.
+
+#### 3. Two-Pass NMS (Non-Maximum Suppression)
+- **Pass 1 — Container Shell Removal**: If a large block is covered ≥60% by two or more smaller child blocks, the large block is discarded in favour of the precise children. This ensures wipe rectangles are as tight as possible.
+- **Pass 2 — Standard Overlap Dedup**: Drops any remaining block that is >80% contained within an already-kept block.
+
+#### 4. Wipe Phase — Redaction API
+For each retained block, the pipeline:
+1. Searches for text spans within the YOLO bbox ± 3pt (to catch boundary glyphs).
+2. Computes the **natural union** of found span bboxes (no artificial margin added).
+3. Registers a **PDF redaction annotation** (`add_redact_annot`) on that area.
+
+After all blocks are registered, `apply_redactions(images=PDF_REDACT_IMAGE_NONE, graphics=False)` is called once per page. This:
+- **Permanently removes** original text from the PDF content stream (not just a visual overlay).
+- Preserves vector graphics, table borders, and raster images.
+
+#### 5. Render Phase
+Translated text is inserted using `insert_htmlbox` with adaptive CSS scaling, preserving the original font weight, colour, and text alignment.
 
 ---
 
