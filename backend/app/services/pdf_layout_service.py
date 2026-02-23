@@ -136,22 +136,23 @@ class PDFLayoutPreservingService:
                         text_blocks.append(tb)
 
                 # Rescue misclassified components
-                # FIX: Only rescue 'Abandon' or unknown blocks.
-                # NEVER rescue 'Figure', 'Table', or 'Equation' because converting them causes content to be wiped/erased!
+                # Rescue 'Abandon' blocks that YOLO passed through (could be notes/captions).
+                # NEVER rescue 'Figure', 'Table', 'Formula', or 'Equation' — wiping them destroys content!
+                NEVER_RESCUE = {'figure', 'table', 'formula', 'equation'}
                 ignored_blocks = [
                     b for b in layout_blocks 
-                    if b.type.lower() not in ['text', 'title', 'list', 'figure', 'table', 'equation']
+                    if b.type.lower() not in ['text', 'title', 'list'] + list(NEVER_RESCUE)
                 ]
                 
                 for ib in ignored_blocks:
                     ib_rect = self.layout_detector.pixel_to_pdf_rect(ib.bbox, page, ib.page_width, ib.page_height)
-                    ib_text = page.get_textbox(ib_rect).strip()
+                    ib_text = page.get_text("text", clip=ib_rect).strip()
                     
-                    # If clean paragraph found, force reclassify as Text
-                    if len(ib_text) > 15:
-                        has_content = any('\u4e00' <= c <= '\u9fff' for c in ib_text) or ' ' in ib_text
+                    # Rescue if the block contains meaningful text content (>10 chars, CJK or spaced words)
+                    if len(ib_text) > 10:
+                        has_content = any('\u4e00' <= c <= '\u9fff' for c in ib_text) or (' ' in ib_text and len(ib_text.split()) >= 2)
                         if has_content:
-                            print(f"[PDF Layout] Rescuing text from {ib.type} block.", flush=True)
+                            print(f"[PDF Layout] Rescuing text from {ib.type} block: '{ib_text[:40]}'", flush=True)
                             ib.type = 'Text'
                             text_blocks.append(ib)
 
@@ -180,10 +181,11 @@ class PDFLayoutPreservingService:
                             
                             # Container Check:
                             # Since we are processing largest first, 'kept_block' is larger than 'current_block'.
-                            # If current block (small) is largely (>60%) inside kept block (large), drop current.
-                            if curr_area > 0 and (intersect_area / curr_area) > 0.60:
+                            # Only drop if current block is almost entirely (>80%) inside a kept block.
+                            # Was 60% — raised to 80% to avoid dropping legitimate adjacent text blocks.
+                            if curr_area > 0 and (intersect_area / curr_area) > 0.80:
                                 is_duplicate = True
-                                print(f"[PDF Layout] NMS: Dropped small block {i} (contained in block {unique_blocks.index(kept_block)}). Overlap: {intersect_area/curr_area:.1%}", flush=True)
+                                print(f"[PDF Layout] NMS: Dropped block {i} (>80% inside block {unique_blocks.index(kept_block)}). Overlap: {intersect_area/curr_area:.1%}", flush=True)
                                 break
                     
                     if not is_duplicate:
@@ -231,12 +233,7 @@ class PDFLayoutPreservingService:
                         
                         print(f"[PDF Layout] Block {idx}: Extracted {len(block_text)} chars: '{block_text[:50]}...'", flush=True)
                         
-                        # Skip purely numeric (unless Title)
-                        is_numeric = re.match(r'^[\d\s\.,\-\/%$€]+$', block_text)
-                        if is_numeric and block.type.lower() != 'title':
-                            continue
-                            
-                        # Format Extraction
+                        # Skip purely numeric blocks (unless Title, e.g. "1.2.3")
                         is_numeric = re.match(r'^[\d\s\.,\-\/%$€]+$', block_text)
                         if is_numeric and block.type.lower() != 'title':
                             continue
@@ -253,13 +250,10 @@ class PDFLayoutPreservingService:
                             'sort_key': raw_rect.y0 # Key for sorting
                         })
                         
-                        # EXECUTE WIPE (Slightly expanded to ensure full coverage)
-                        wipe_rect = fitz.Rect(
-                            raw_rect.x0 - 1,
-                            raw_rect.y0 - 1,
-                            raw_rect.x1 + 1,
-                            raw_rect.y1 + 1
-                        )
+                        # EXECUTE WIPE using actual text bbox (more precise than YOLO bbox)
+                        # YOLO bbox has ~1-2pt coordinate error after pixel->PDF conversion.
+                        # Use PyMuPDF's real span positions + 3pt margin for complete coverage.
+                        wipe_rect = self._get_precise_wipe_rect(page, raw_rect, margin=3)
                         page.draw_rect(wipe_rect, color=(1, 1, 1), fill=(1, 1, 1), fill_opacity=1)
                         
                     except Exception as e:
@@ -315,6 +309,50 @@ class PDFLayoutPreservingService:
         doc.save(output_path, garbage=4, deflate=True)
         doc.close()
         print(f"\n[PDF Layout] Success! Translation saved to {output_path}", flush=True)
+
+    def _get_precise_wipe_rect(self, page: fitz.Page, clip_rect: fitz.Rect, margin: int = 3) -> fitz.Rect:
+        """
+        Compute a precise wipe rectangle from actual text glyph positions inside clip_rect.
+
+        YOLO bboxes have ~1-2pt coordinate error after pixel->PDF conversion.
+        Using PyMuPDF's real span positions gives us the exact area where ink is rendered,
+        so the white rectangle covers every character fully.
+
+        Falls back to clip_rect + margin if no text spans are found.
+        """
+        try:
+            blocks = page.get_text("dict", clip=clip_rect)["blocks"]
+            span_rects = []
+            for block in blocks:
+                if block.get("type") != 0:  # only text blocks
+                    continue
+                for line in block.get("lines", []):
+                    for span in line.get("spans", []):
+                        if span.get("text", "").strip():
+                            span_rects.append(fitz.Rect(span["bbox"]))
+
+            if span_rects:
+                # Union of all span bboxes = tightest rect that still covers every glyph
+                united = span_rects[0]
+                for r in span_rects[1:]:
+                    united = united | r          # fitz.Rect supports | for union
+                # Expand by margin to catch ascenders/descenders outside the reported bbox
+                return fitz.Rect(
+                    united.x0 - margin,
+                    united.y0 - margin,
+                    united.x1 + margin,
+                    united.y1 + margin
+                )
+        except Exception as e:
+            print(f"[PDF Layout] _get_precise_wipe_rect fallback: {e}", flush=True)
+
+        # Fallback: YOLO bbox + margin
+        return fitz.Rect(
+            clip_rect.x0 - margin,
+            clip_rect.y0 - margin,
+            clip_rect.x1 + margin,
+            clip_rect.y1 + margin
+        )
 
     def _extract_format_info(self, page: fitz.Page, rect: fitz.Rect, block_type: str = "text") -> dict:
         """

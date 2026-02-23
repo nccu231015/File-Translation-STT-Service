@@ -187,10 +187,11 @@ class PDFLayoutDetectorYOLO:
             cls_id = int(cls)
             raw_type = self.id_to_names.get(cls_id, 'unknown')
             
-            # Skip 'abandon' regions (watermarks, decorations)
+            # Some legitimate text (notes, captions near figures) gets misclassified
+            # as 'abandon' by YOLO. We pass them through so that pdf_layout_service.py's
+            # rescue mechanism can decide whether they contain translatable text.
             if raw_type == 'abandon':
                 abandon_count += 1
-                continue
             
             mapped_type = self.type_mapping.get(raw_type, 'Text')
             
@@ -204,9 +205,9 @@ class PDFLayoutDetectorYOLO:
             blocks.append(block)
         
         if abandon_count > 0:
-            print(f"[DocLayout-YOLO] Filtered {abandon_count} abandon regions", flush=True)
+            print(f"[DocLayout-YOLO] Passed-through {abandon_count} 'abandon' regions for rescue check", flush=True)
         
-        print(f"[DocLayout-YOLO] Detected {len(blocks)} blocks", flush=True)
+        print(f"[DocLayout-YOLO] Detected {len(blocks)} blocks (including abandon candidates)", flush=True)
         return blocks
     
     def pixel_to_pdf_rect(self, pixel_bbox, page, page_width, page_height):
