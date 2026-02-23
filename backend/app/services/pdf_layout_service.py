@@ -156,6 +156,40 @@ class PDFLayoutPreservingService:
                             ib.type = 'Text'
                             text_blocks.append(ib)
 
+                # Rescue completely undetected text (Orphans) using PyMuPDF blocks
+                # This catches fine-print or metadata completely ignored by YOLO.
+                print(f"[PDF Layout] Checking for completely un-detected text blocks...", flush=True)
+                known_rects = [self.layout_detector.pixel_to_pdf_rect(b.bbox, page, b.page_width, b.page_height) for b in layout_blocks]
+                page_blocks = page.get_text("dict").get("blocks", [])
+                
+                pg_w = layout_blocks[0].page_width if layout_blocks else page.rect.width
+                pg_h = layout_blocks[0].page_height if layout_blocks else page.rect.height
+                from .pdf_layout_detector_yolo import LayoutBlock
+                
+                for pb in page_blocks:
+                    if pb.get("type") != 0: continue
+                    pb_rect = fitz.Rect(pb["bbox"])
+                    if pb_rect.is_empty or pb_rect.width < 10 or pb_rect.height < 5:
+                        continue
+                    
+                    overlap_ratio = 0
+                    for kr in known_rects:
+                        if pb_rect.intersects(kr):
+                            overlap_ratio = max(overlap_ratio, pb_rect.intersect(kr).get_area() / pb_rect.get_area())
+                            if overlap_ratio > 0.4: break
+                                
+                    if overlap_ratio <= 0.4:
+                        pb_text = "".join(span.get("text", "") for line in pb.get("lines", []) for span in line.get("spans", [])).strip()
+                        if len(pb_text) > 4 and (any('\u4e00' <= c <= '\u9fff' for c in pb_text) or ' ' in pb_text):
+                            print(f"[PDF Layout] Orphan rescue: '{pb_text[:30]}'", flush=True)
+                            scale_x = page.rect.width / pg_w
+                            scale_y = page.rect.height / pg_h
+                            orphan = LayoutBlock(
+                                bbox=(pb_rect.x0 / scale_x, pb_rect.y0 / scale_y, pb_rect.x1 / scale_x, pb_rect.y1 / scale_y),
+                                type='Text', confidence=1.0, page_width=pg_w, page_height=pg_h
+                            )
+                            text_blocks.append(orphan)
+
                 # NMS Deduplication (Largest First Strategy)
                 # We prioritize keeping the largest containers to preserve context (e.g. full lists),
                 # and drop the smaller fragments that are contained within them.
@@ -251,9 +285,8 @@ class PDFLayoutPreservingService:
                         })
                         
                         # EXECUTE WIPE using actual text bbox (more precise than YOLO bbox)
-                        # YOLO bbox has ~1-2pt coordinate error after pixel->PDF conversion.
-                        # Use PyMuPDF's real span positions + 3pt margin for complete coverage.
-                        wipe_rect = self._get_precise_wipe_rect(page, raw_rect, margin=3)
+                        # Use PyMuPDF's real span positions + 1pt margin to avoid destroying nearby lines/tables
+                        wipe_rect = self._get_precise_wipe_rect(page, raw_rect, margin=1)
                         page.draw_rect(wipe_rect, color=(1, 1, 1), fill=(1, 1, 1), fill_opacity=1)
                         
                     except Exception as e:
@@ -292,7 +325,7 @@ class PDFLayoutPreservingService:
                         render_rect = raw_rect
                         
                         # Render
-                        self._insert_text_adaptive(page, render_rect, translated_text, target_lang, item['format'])
+                        self._insert_text_adaptive(page, render_rect, translated_text, target_lang, item['format'], item['block'].type)
                         
                     except Exception as render_err:
                          print(f"[PDF Layout] Render Error Item {i}: {render_err}")
@@ -416,7 +449,7 @@ class PDFLayoutPreservingService:
             
         return format_info
 
-    def _insert_text_adaptive(self, page: fitz.Page, rect: fitz.Rect, text: str, target_lang: str, format_info: dict = None):
+    def _insert_text_adaptive(self, page: fitz.Page, rect: fitz.Rect, text: str, target_lang: str, format_info: dict = None, block_type: str = "text"):
         """
         Insert translated text using insert_htmlbox for adaptive scaling.
         Note: No wiping happens here to avoid overwriting neighbors.
@@ -444,8 +477,16 @@ class PDFLayoutPreservingService:
             text_align = "left"
             if rect.width < 150:
                 text_align = "center"
+                
+            # HTML Escaping and Newline formatting
+            safe_text = text.replace('<', '&lt;').replace('>', '&gt;')
+            if block_type.lower() == 'list':
+                html_text = safe_text.replace('\n', '<br/>')
+            else:
+                # Remove single newlines to allow natural HTML wrapping. Keep double newlines as paragraphs.
+                html_text = safe_text.replace('\n\n', '<br/><br/>').replace('\n', ' ')
             
-            html = f'<div style="font-family: {font_family}; color: {color_hex}; font-weight: {font_weight}; margin: 0; padding: 0;">{text}</div>'
+            html = f'<div style="font-family: {font_family}; color: {color_hex}; font-weight: {font_weight}; margin: 0; padding: 0;">{html_text}</div>'
             
             css_style = (
                 f"div {{ "
