@@ -393,18 +393,26 @@ class PDFLayoutPreservingService:
         doc.close()
         print(f"\n[PDF Layout] Success! Translation saved to {output_path}", flush=True)
 
-    def _get_precise_wipe_rect(self, page: fitz.Page, clip_rect: fitz.Rect, margin: int = 3) -> fitz.Rect:
+    def _get_precise_wipe_rect(self, page: fitz.Page, clip_rect: fitz.Rect, margin: int = 1) -> fitz.Rect:
         """
-        Compute a precise wipe rectangle from actual text glyph positions inside clip_rect.
+        Compute a precise wipe rectangle from actual text span positions.
 
-        YOLO bboxes have ~1-2pt coordinate error after pixel->PDF conversion.
-        Using PyMuPDF's real span positions gives us the exact area where ink is rendered,
-        so the white rectangle covers every character fully.
-
-        Falls back to clip_rect + margin if no text spans are found.
+        Strategy:
+        - Search with a SLIGHTLY LARGER rect (3pt) so YOLO boundary chars are captured.
+        - Use the NATURAL UNION of found spans as wipe rect (no added margin).
+        - This is safe: we only find spans very close to the block edge; the natural
+          union is bounded by actual ink, not an arbitrary pixel expansion.
+        - Falls back to clip_rect if no text spans are found.
         """
+        SEARCH_EXPAND = 3  # pts — how far outside clip_rect to look for boundary spans
         try:
-            blocks = page.get_text("dict", clip=clip_rect)["blocks"]
+            search_rect = fitz.Rect(
+                clip_rect.x0 - SEARCH_EXPAND,
+                clip_rect.y0 - SEARCH_EXPAND,
+                clip_rect.x1 + SEARCH_EXPAND,
+                clip_rect.y1 + SEARCH_EXPAND,
+            )
+            blocks = page.get_text("dict", clip=search_rect)["blocks"]
             span_rects = []
             for block in blocks:
                 if block.get("type") != 0:  # only text blocks
@@ -415,27 +423,18 @@ class PDFLayoutPreservingService:
                             span_rects.append(fitz.Rect(span["bbox"]))
 
             if span_rects:
-                # Union of all span bboxes = tightest rect that still covers every glyph
+                # Natural union of span bboxes: tightly covers every glyph,
+                # no artificial margin that could touch neighbouring table lines.
                 united = span_rects[0]
                 for r in span_rects[1:]:
-                    united = united | r          # fitz.Rect supports | for union
-                # Expand by margin to catch ascenders/descenders outside the reported bbox
-                return fitz.Rect(
-                    united.x0 - margin,
-                    united.y0 - margin,
-                    united.x1 + margin,
-                    united.y1 + margin
-                )
+                    united = united | r
+                return united
+
         except Exception as e:
             print(f"[PDF Layout] _get_precise_wipe_rect fallback: {e}", flush=True)
 
-        # Fallback: YOLO bbox + margin
-        return fitz.Rect(
-            clip_rect.x0 - margin,
-            clip_rect.y0 - margin,
-            clip_rect.x1 + margin,
-            clip_rect.y1 + margin
-        )
+        # Fallback: YOLO bbox only (no expansion)
+        return fitz.Rect(clip_rect)
 
     def _extract_format_info(self, page: fitz.Page, rect: fitz.Rect, block_type: str = "text") -> dict:
         """
