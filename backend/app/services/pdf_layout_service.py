@@ -141,46 +141,88 @@ class PDFLayoutPreservingService:
                                 )
                                 text_blocks.append(orphan)
 
-                # NMS Deduplication (Largest First Strategy)
-                # We prioritize keeping the largest containers to preserve context (e.g. full lists),
-                # and drop the smaller fragments that are contained within them.
+                # NMS Deduplication — Two-Pass Strategy
+                # PASS 1 — Detect "container" blocks (large shells that simply
+                #   wrap multiple smaller boxes). If ≥2 child blocks together
+                #   cover ≥60% of a parent block, the parent is a shell →
+                #   drop the parent and let the precise children do the wipe.
+                # PASS 2 — Standard overlap dedup on the remaining blocks.
+                # ------------------------------------------------------------
                 print(f"[PDF Layout] NMS: Starting with {len(text_blocks)} blocks", flush=True)
                 
                 # Sort by Area DESCENDING (Largest First)
                 text_blocks.sort(key=lambda b: fitz.Rect(b.bbox).get_area(), reverse=True)
-                
+
+                # --- PASS 1: Remove container/shell blocks ---
+                container_indices = set()
+                for i in range(len(text_blocks)):
+                    if i in container_indices:
+                        continue
+                    rect_i = fitz.Rect(text_blocks[i].bbox)
+                    area_i = rect_i.get_area()
+                    if area_i == 0:
+                        continue
+
+                    child_area_sum = 0
+                    child_count = 0
+                    for j in range(i + 1, len(text_blocks)):
+                        if j in container_indices:
+                            continue
+                        rect_j = fitz.Rect(text_blocks[j].bbox)
+                        area_j = rect_j.get_area()
+                        if area_j == 0 or area_j >= area_i:
+                            continue  # only look at strictly smaller blocks
+                        if rect_i.intersects(rect_j):
+                            inter = rect_i.intersect(rect_j).get_area()
+                            # Child is ≥70% inside the parent candidate
+                            if area_j > 0 and inter / area_j > 0.70:
+                                child_area_sum += area_j
+                                child_count += 1
+
+                    # Parent is a container shell if ≥2 children cover ≥60% of it
+                    if child_count >= 2 and child_area_sum / area_i > 0.60:
+                        container_indices.add(i)
+                        print(
+                            f"[PDF Layout] NMS Pass1: Block {i} is a container shell "
+                            f"({child_count} children cover {child_area_sum/area_i:.0%}). Dropping parent.",
+                            flush=True
+                        )
+
+                # Remove container shells from the candidate list
+                text_blocks = [b for idx, b in enumerate(text_blocks) if idx not in container_indices]
+                print(f"[PDF Layout] NMS Pass1: Removed {len(container_indices)} container shells, {len(text_blocks)} blocks remain", flush=True)
+
+                # --- PASS 2: Standard overlap dedup ---
                 unique_blocks = []
                 dropped_count = 0
-                
+
                 for i, current_block in enumerate(text_blocks):
                     curr_rect = fitz.Rect(current_block.bbox)
                     curr_area = curr_rect.get_area()
                     is_duplicate = False
-                    
+
                     for kept_block in unique_blocks:
                         kept_rect = fitz.Rect(kept_block.bbox)
-                        kept_area = kept_rect.get_area()
-                        
                         if curr_rect.intersects(kept_rect):
                             intersect_area = curr_rect.intersect(kept_rect).get_area()
-                            
-                            # Container Check:
-                            # Since we are processing largest first, 'kept_block' is larger than 'current_block'.
-                            # Only drop if current block is almost entirely (>80%) inside a kept block.
-                            # Was 60% — raised to 80% to avoid dropping legitimate adjacent text blocks.
+                            # Drop if current block is >80% inside a kept block
                             if curr_area > 0 and (intersect_area / curr_area) > 0.80:
                                 is_duplicate = True
-                                print(f"[PDF Layout] NMS: Dropped block {i} (>80% inside block {unique_blocks.index(kept_block)}). Overlap: {intersect_area/curr_area:.1%}", flush=True)
+                                print(
+                                    f"[PDF Layout] NMS Pass2: Dropped block {i} "
+                                    f"(>80% inside kept block). Overlap: {intersect_area/curr_area:.1%}",
+                                    flush=True
+                                )
                                 break
-                    
+
                     if not is_duplicate:
                         unique_blocks.append(current_block)
                     else:
                         dropped_count += 1
-                
-                print(f"[PDF Layout] NMS: Kept {len(unique_blocks)} blocks, dropped {dropped_count} duplicates", flush=True)
-                
-                # Sort kept blocks by Y position for rendering order
+
+                print(f"[PDF Layout] NMS Pass2: Kept {len(unique_blocks)} blocks, dropped {dropped_count}", flush=True)
+
+                # Sort by Y position for top-to-bottom rendering order
                 unique_blocks.sort(key=lambda b: b.bbox[1])
                 text_blocks = unique_blocks
                 
