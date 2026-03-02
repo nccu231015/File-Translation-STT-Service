@@ -31,7 +31,8 @@ import { DashboardHome } from './dashboard-home';
 // Types
 export interface User {
     username: string;
-    email: string;
+    name: string;
+    dpt: string;
 }
 
 interface MainDashboardProps {
@@ -75,16 +76,16 @@ export function MainDashboard({ user, onLogout }: MainDashboardProps) {
                             <DropdownMenuTrigger asChild>
                                 <Button variant="ghost" className="gap-2 hover:bg-slate-100 rounded-full px-2">
                                     <div className="size-8 rounded-full bg-gradient-to-br from-blue-500 to-indigo-500 flex items-center justify-center text-white font-semibold shadow-sm">
-                                        {user.username.charAt(0).toUpperCase()}
+                                        {(user.name || user.username).charAt(0).toUpperCase()}
                                     </div>
-                                    <span className="hidden md:inline font-medium text-slate-700">{user.username}</span>
+                                    <span className="hidden md:inline font-medium text-slate-700">{user.name || user.username}</span>
                                 </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end" className="w-56">
                                 <DropdownMenuLabel>
                                     <div className="py-1">
-                                        <p className="font-semibold text-sm">{user.username}</p>
-                                        <p className="text-xs text-slate-500 truncate">{user.email}</p>
+                                        <p className="font-semibold text-sm">{user.name || user.username}</p>
+                                        <p className="text-xs text-slate-500 truncate">{user.dpt} | {user.username}</p>
                                     </div>
                                 </DropdownMenuLabel>
                                 <DropdownMenuSeparator />
@@ -153,7 +154,7 @@ export function MainDashboard({ user, onLogout }: MainDashboardProps) {
                     <div className="flex flex-col md:flex-row justify-between items-center text-sm text-slate-500 gap-2">
                         <p>© 2026 全一電子 AI 助手 - 地端部署版本 v1.0.0</p>
                         <div className="flex items-center gap-4">
-                            <span>當前使用者：<span className="font-medium text-slate-700">{user.username}</span></span>
+                            <span>當前使用者：<span className="font-medium text-slate-700">{user.name || user.username}</span></span>
                             <span className="hidden md:inline text-slate-300">|</span>
                             <span>系統狀態：<span className="text-green-600 font-medium">正常</span></span>
                         </div>

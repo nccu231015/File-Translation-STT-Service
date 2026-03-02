@@ -1,8 +1,9 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect, Dispatch, SetStateAction, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, Dispatch, SetStateAction, ReactNode } from 'react';
 import { toast } from 'sonner';
 import { analyzeMeetingAudio } from '@/lib/api/stt';
+import { useUser } from '@/context/user-context';
 
 export interface ActionItem {
     task: string;
@@ -32,16 +33,16 @@ interface VoiceContextType {
 
 const VoiceContext = createContext<VoiceContextType | undefined>(undefined);
 
-const STORAGE_KEY = 'meeting_records';
-
 export function VoiceProvider({ children }: { children: ReactNode }) {
+    const { user } = useUser();
+    const storageKey = `meeting_records_${user?.username ?? 'guest'}`;
+
     const [isProcessing, setIsProcessing] = useState(false);
     const [processingFilename, setProcessingFilename] = useState<string | null>(null);
 
     const [records, setRecords] = useState<ProcessedRecord[]>(() => {
-        // Initialize from localStorage
         if (typeof window === 'undefined') return [];
-        const saved = localStorage.getItem(STORAGE_KEY);
+        const saved = localStorage.getItem(`meeting_records_${user?.username ?? 'guest'}`);
         if (!saved) return [];
         try {
             const parsed = JSON.parse(saved);
@@ -54,10 +55,26 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
         }
     });
 
-    // Persistence
+    const storageKeyRef = useRef(storageKey);
+    useEffect(() => { storageKeyRef.current = storageKey; });
+
+    // Save whenever records change (NOT when storageKey changes to avoid overwriting new user's data)
     useEffect(() => {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
-    }, [records]);
+        localStorage.setItem(storageKeyRef.current, JSON.stringify(records));
+    }, [records]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Reload when user switches
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        const saved = localStorage.getItem(storageKey);
+        if (!saved) { setRecords([]); return; }
+        try {
+            const parsed = JSON.parse(saved);
+            setRecords(parsed.map((r: any) => ({ ...r, processedAt: new Date(r.processedAt) })));
+        } catch {
+            setRecords([]);
+        }
+    }, [storageKey]);
 
     const processAudio = async (file: File) => {
         setIsProcessing(true);

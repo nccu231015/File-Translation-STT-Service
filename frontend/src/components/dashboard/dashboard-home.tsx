@@ -17,7 +17,8 @@ import {
 interface DashboardHomeProps {
     user: {
         username: string;
-        email: string;
+        name: string;
+        dpt: string;
     };
     onNavigate: (view: 'qa' | 'report' | 'translation' | 'voice') => void;
 }
@@ -83,7 +84,7 @@ export function DashboardHome({ user, onNavigate }: DashboardHomeProps) {
         <div className="space-y-6">
             {/* Welcome Section */}
             <div className="bg-gradient-to-r from-blue-600 to-indigo-600 rounded-xl p-8 text-white shadow-lg">
-                <h2 className="text-3xl font-bold mb-2">歡迎回來，{user.username}！</h2>
+                <h2 className="text-3xl font-bold mb-2">歡迎回來，{user.name || user.username}！</h2>
                 <p className="text-blue-100">開始使用企業級 AI 工具，提升工作效率</p>
             </div>
 

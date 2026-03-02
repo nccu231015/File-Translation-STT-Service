@@ -1,6 +1,7 @@
 import os
 import shutil
 import tempfile
+import httpx
 from fastapi import FastAPI, UploadFile, File, HTTPException, Body, Response, Form, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from app.services.stt_service import stt_service
@@ -32,6 +33,38 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/api/login")
+async def login(body: LoginRequest):
+    """
+    Proxy to LDAP login API. Validates employee credentials and returns
+    user info (username, name, dpt) on success, or 401 on failure.
+    """
+    LDAP_URL = "http://api.jebsee.com.tw:8081/api/LDAPLogin"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                LDAP_URL,
+                data={"username": body.username, "password": body.password},
+            )
+        data = resp.json()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"LDAP service unavailable: {e}")
+
+    if str(data.get("chkIdentity", "false")).lower() != "true":
+        raise HTTPException(status_code=401, detail=data.get("msg", "登入失敗"))
+
+    return {
+        "username": data.get("username", body.username),
+        "name": data.get("name", ""),
+        "dpt": data.get("dpt", ""),
+    }
 
 
 @app.get("/")

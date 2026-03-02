@@ -1,7 +1,8 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import { toast } from 'sonner';
+import { useUser } from '@/context/user-context';
 
 export interface TranslationFile {
     id: string;
@@ -24,13 +25,14 @@ interface TranslationContextType {
 
 const TranslationContext = createContext<TranslationContextType | undefined>(undefined);
 
-const STORAGE_KEY = 'translation_files';
-
 export function TranslationProvider({ children }: { children: ReactNode }) {
+    const { user } = useUser();
+    const storageKey = `translation_files_${user?.username ?? 'guest'}`;
+
     const [files, setFiles] = useState<TranslationFile[]>(() => {
-        // Initialize from localStorage
+        // Initialize from localStorage using user-specific key
         if (typeof window === 'undefined') return [];
-        const saved = localStorage.getItem(STORAGE_KEY);
+        const saved = localStorage.getItem(`translation_files_${user?.username ?? 'guest'}`);
         if (!saved) return [];
         try {
             const parsed = JSON.parse(saved);
@@ -47,10 +49,35 @@ export function TranslationProvider({ children }: { children: ReactNode }) {
         }
     });
 
+    // Keep a ref to the latest storageKey so the save effect always writes
+    // to the correct key WITHOUT including storageKey as a dependency.
+    // If storageKey were a dependency, switching users would fire the save effect
+    // with the current (empty) files and overwrite the new user's saved records.
+    const storageKeyRef = useRef(storageKey);
+    useEffect(() => { storageKeyRef.current = storageKey; });
+
     // Save to localStorage whenever files change
     useEffect(() => {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(files));
-    }, [files]);
+        localStorage.setItem(storageKeyRef.current, JSON.stringify(files));
+    }, [files]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Reload records when user changes (e.g. different employee logs in)
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        const saved = localStorage.getItem(storageKey);
+        if (!saved) { setFiles([]); return; }
+        try {
+            const parsed = JSON.parse(saved);
+            setFiles(parsed.map((f: any) => ({
+                ...f,
+                uploadedAt: new Date(f.uploadedAt),
+                originalUrl: undefined,
+                downloadUrl: undefined
+            })));
+        } catch {
+            setFiles([]);
+        }
+    }, [storageKey]);
 
     const updateFileStatus = (id: string, updates: Partial<TranslationFile>) => {
         setFiles(prev => prev.map(f => f.id === id ? { ...f, ...updates } : f));

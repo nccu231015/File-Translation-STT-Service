@@ -4,6 +4,11 @@ A high-performance AI productivity framework tailored for **Document Structure p
 
 ## 📋 Features
 
+### 🔐 Authentication & User Isolation
+- **LDAP SSO**: Employees log in with their company employee ID (工號) and password. Backend proxies to the internal LDAP API, avoiding CORS issues.
+- **Per-user record isolation**: Translation history and meeting records are stored in `localStorage` namespaced by employee ID — each employee only sees their own records.
+- **Persistent session**: User session survives page refresh; no re-login required until explicit logout.
+
 ### 📄 Document Translation (Layout-Preserving)
 - **Visual Intelligence**: Uses **DocLayout-YOLO** (PDF-Extract-Kit) to analyze document structure with **3-4x faster** inference than traditional Detectron2.
 - **Multi-Layer Text Detection**: Combines YOLO visual detection with PyMuPDF span-level scanning to ensure no text block is missed — including annotations, footnotes, and colored inline notes.
@@ -30,11 +35,12 @@ A high-performance AI productivity framework tailored for **Document Structure p
 | Component | Technology | Role |
 | :--- | :--- | :--- |
 | **Backend** | FastAPI (Python 3.10) | Async API Gateway |
+| **Auth** | LDAP via httpx proxy | Employee SSO |
 | **Vision** | DocLayout-YOLO (PDF-Extract-Kit) | Document Layout Analysis |
 | **STT** | Faster-Whisper (CUDA 12.1) | Transcription Engine |
 | **LLM** | Ollama (gpt-oss:20b) | Translation & Reasoning |
 | **Frontend** | Next.js (Tailwind + Shadcn) | User Dashboard |
-| **Storage** | Redis + Local Storage | Cache & Temporary Files |
+| **Storage** | localStorage (per-user namespaced) | Client-side Record Persistence |
 
 ---
 

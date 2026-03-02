@@ -2,6 +2,27 @@
 
 FastAPI-based intelligence engine providing high-fidelity document translation and speech-to-text capabilities.
 
+## 🔐 Authentication
+
+### `POST /api/login`
+Proxies employee credentials to the company LDAP server and returns user identity.
+
+**Request:**
+```json
+{ "username": "P0001196", "password": "****" }
+```
+
+**Response (success):**
+```json
+{ "username": "P0001196", "name": "王小明", "dpt": "業務部" }
+```
+
+**Response (failure):** HTTP 401 with LDAP error message.
+
+> The proxy exists to avoid browser CORS restrictions when calling the internal LDAP API directly from the frontend.
+
+---
+
 ## 🚀 Key Modules
 
 ### 1. PDF Layout Preservation (`app/services/`)
