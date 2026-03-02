@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import { toast } from 'sonner';
 import { useUser } from '@/context/user-context';
+import { saveBlob, loadBlob, deleteBlob } from '@/lib/pdf-storage';
 
 export interface TranslationFile {
     id: string;
@@ -30,55 +31,117 @@ export function TranslationProvider({ children }: { children: ReactNode }) {
     const storageKey = `translation_files_${user?.username ?? 'guest'}`;
 
     const [files, setFiles] = useState<TranslationFile[]>(() => {
-        // Initialize from localStorage using user-specific key
+        // Initialize metadata from localStorage (blob URLs are NOT stored here)
         if (typeof window === 'undefined') return [];
         const saved = localStorage.getItem(`translation_files_${user?.username ?? 'guest'}`);
         if (!saved) return [];
         try {
             const parsed = JSON.parse(saved);
-            // Convert date strings back to Date objects
-            // Note: blob URLs (originalUrl, downloadUrl) cannot be persisted
             return parsed.map((f: any) => ({
                 ...f,
                 uploadedAt: new Date(f.uploadedAt),
-                originalUrl: undefined, // Blob URLs don't survive refresh
-                downloadUrl: undefined
+                originalUrl: undefined,  // will be restored from IndexedDB below
+                downloadUrl: undefined   // will be restored from IndexedDB below
             }));
         } catch {
             return [];
         }
     });
 
-    // Keep a ref to the latest storageKey so the save effect always writes
-    // to the correct key WITHOUT including storageKey as a dependency.
-    // If storageKey were a dependency, switching users would fire the save effect
-    // with the current (empty) files and overwrite the new user's saved records.
+    // ─── Restore blob URLs from IndexedDB on mount ───────────────────────────────
+    // On page refresh, files are loaded from localStorage without blob URLs.
+    // We look up the actual PDF binaries from IndexedDB and create fresh blob URLs.
+    useEffect(() => {
+        (async () => {
+            const updates: { id: string; changes: Partial<TranslationFile> }[] = [];
+
+            for (const f of files) {
+                const changes: Partial<TranslationFile> = {};
+
+                // Restore original (source) PDF
+                const origBlob = await loadBlob(`${f.id}_original`);
+                if (origBlob) changes.originalUrl = URL.createObjectURL(origBlob);
+
+                // Restore translated PDF (only for completed records)
+                if (f.status === 'completed') {
+                    const transBlob = await loadBlob(`${f.id}_translated`);
+                    if (transBlob) changes.downloadUrl = URL.createObjectURL(transBlob);
+                }
+
+                if (Object.keys(changes).length > 0) {
+                    updates.push({ id: f.id, changes });
+                }
+            }
+
+            if (updates.length > 0) {
+                setFiles(prev =>
+                    prev.map(f => {
+                        const update = updates.find(u => u.id === f.id);
+                        return update ? { ...f, ...update.changes } : f;
+                    })
+                );
+            }
+        })();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []); // Run once on mount; `files` is stable from useState initializer
+
+    // ─── Persist metadata to localStorage on file changes ────────────────────────
+    // useRef avoids the race condition where a storageKey change fires the save
+    // effect with empty files, overwriting the new user's saved records.
     const storageKeyRef = useRef(storageKey);
     useEffect(() => { storageKeyRef.current = storageKey; });
 
-    // Save to localStorage whenever files change
     useEffect(() => {
-        localStorage.setItem(storageKeyRef.current, JSON.stringify(files));
+        // Strip blob URLs before saving (they are session-only; IndexedDB holds the binaries)
+        const serializable = files.map(f => ({
+            ...f,
+            originalUrl: undefined,
+            downloadUrl: undefined,
+        }));
+        localStorage.setItem(storageKeyRef.current, JSON.stringify(serializable));
     }, [files]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    // Reload records when user changes (e.g. different employee logs in)
+    // ─── Reload records when user changes ────────────────────────────────────────
     useEffect(() => {
         if (typeof window === 'undefined') return;
         const saved = localStorage.getItem(storageKey);
         if (!saved) { setFiles([]); return; }
         try {
             const parsed = JSON.parse(saved);
-            setFiles(parsed.map((f: any) => ({
+            const newFiles = parsed.map((f: any) => ({
                 ...f,
                 uploadedAt: new Date(f.uploadedAt),
                 originalUrl: undefined,
                 downloadUrl: undefined
-            })));
+            }));
+            setFiles(newFiles);
+
+            // Restore blob URLs for the newly loaded user's records
+            (async () => {
+                const updates: { id: string; changes: Partial<TranslationFile> }[] = [];
+                for (const f of newFiles) {
+                    const changes: Partial<TranslationFile> = {};
+                    const origBlob = await loadBlob(`${f.id}_original`);
+                    if (origBlob) changes.originalUrl = URL.createObjectURL(origBlob);
+                    if (f.status === 'completed') {
+                        const transBlob = await loadBlob(`${f.id}_translated`);
+                        if (transBlob) changes.downloadUrl = URL.createObjectURL(transBlob);
+                    }
+                    if (Object.keys(changes).length > 0) updates.push({ id: f.id, changes });
+                }
+                if (updates.length > 0) {
+                    setFiles(prev => prev.map(f => {
+                        const u = updates.find(x => x.id === f.id);
+                        return u ? { ...f, ...u.changes } : f;
+                    }));
+                }
+            })();
         } catch {
             setFiles([]);
         }
-    }, [storageKey]);
+    }, [storageKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
+    // ─── Helpers ─────────────────────────────────────────────────────────────────
     const updateFileStatus = (id: string, updates: Partial<TranslationFile>) => {
         setFiles(prev => prev.map(f => f.id === id ? { ...f, ...updates } : f));
     };
@@ -93,7 +156,6 @@ export function TranslationProvider({ children }: { children: ReactNode }) {
 
         try {
             updateFileStatus(fileRecord.id, { status: 'processing', progress: 60 });
-            // ... (rest of function)
             const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
             const res = await fetch(`${API_URL}/pdf-translation`, {
@@ -105,8 +167,11 @@ export function TranslationProvider({ children }: { children: ReactNode }) {
 
             const blob = await res.blob();
             const pdfBlob = new Blob([blob], { type: 'application/pdf' });
-            const url = URL.createObjectURL(pdfBlob);
 
+            // Persist translated PDF to IndexedDB so it survives page refresh
+            await saveBlob(`${fileRecord.id}_translated`, pdfBlob);
+
+            const url = URL.createObjectURL(pdfBlob);
             updateFileStatus(fileRecord.id, {
                 status: 'completed',
                 progress: 100,
@@ -126,9 +191,10 @@ export function TranslationProvider({ children }: { children: ReactNode }) {
 
         pdfFiles.forEach(file => {
             const originalUrl = URL.createObjectURL(file);
+            const id = Date.now().toString() + Math.random();
 
             const newFile: TranslationFile = {
-                id: Date.now().toString() + Math.random(),
+                id,
                 name: file.name,
                 size: file.size,
                 sourceLang,
@@ -136,11 +202,13 @@ export function TranslationProvider({ children }: { children: ReactNode }) {
                 status: 'uploading',
                 progress: 0,
                 uploadedAt: new Date(),
-                originalUrl: originalUrl
+                originalUrl
             };
 
+            // Persist original PDF to IndexedDB so preview survives refresh
+            saveBlob(`${id}_original`, file).catch(console.error);
+
             setFiles(prev => [newFile, ...prev]);
-            // Fire and forget
             uploadAndTranslate(newFile, file, debug);
         });
     };
@@ -154,6 +222,9 @@ export function TranslationProvider({ children }: { children: ReactNode }) {
             }
             return prev.filter(f => f.id !== fileId);
         });
+        // Also clean up IndexedDB blobs
+        deleteBlob(`${fileId}_original`).catch(console.error);
+        deleteBlob(`${fileId}_translated`).catch(console.error);
     };
 
     return (
