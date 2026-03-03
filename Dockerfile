@@ -52,12 +52,15 @@ RUN uv pip install --system torch torchvision torchaudio --index-url https://dow
 RUN pip install doclayout-yolo --extra-index-url=https://pypi.org/simple
 
 # --- Download DocLayout-YOLO Pre-trained Model ---
-# Using official weights from HuggingFace
+# Using the official DocLayout-YOLO DocStructBench model, recommended by the official README:
+# "fine-tuned on DocStructBench for prediction, capable of handling various document types"
+# Source: https://github.com/opendatalab/DocLayout-YOLO?tab=readme-ov-file
+# Model: https://huggingface.co/juliozhao/DocLayout-YOLO-DocStructBench
 RUN mkdir -p /app/models/layout && \
     wget -q --show-progress \
-    https://huggingface.co/opendatalab/PDF-Extract-Kit-1.0/resolve/main/models/Layout/YOLO/doclayout_yolo_ft.pt \
-    -O /app/models/layout/doclayout_yolo_ft.pt || \
-    echo "WARNING: DocLayout-YOLO model download failed"
+    https://huggingface.co/juliozhao/DocLayout-YOLO-DocStructBench/resolve/main/doclayout_yolo_docstructbench_imgsz1024.pt \
+    -O /app/models/layout/doclayout_yolo_docstructbench_imgsz1024.pt || \
+    echo "WARNING: DocLayout-YOLO DocStructBench model download failed"
 
 # Verify installation
 RUN python -c "from doclayout_yolo import YOLOv10; print('✓ DocLayout-YOLO ready')"

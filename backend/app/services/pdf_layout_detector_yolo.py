@@ -27,22 +27,16 @@ class PDFLayoutDetectorYOLO:
     """
     DocLayout-YOLO wrapper for PDF layout detection.
     
-    This implementation follows the official PDF-Extract-Kit approach while
-    maintaining compatibility with the existing pdf_layout_service.py interface.
+    Uses the official DocStructBench fine-tuned model recommended by the DocLayout-YOLO README:
+    "We provide model fine-tuned on DocStructBench for prediction, which is capable of
+     handling various document types."
     
-    Official Source:
-    - Model: https://github.com/opendatalab/PDF-Extract-Kit/blob/main/pdf_extract_kit/tasks/layout_detection/models/yolo.py
-    - Config: https://github.com/opendatalab/PDF-Extract-Kit/blob/main/configs/layout_detection.yaml
+    Model: juliozhao/DocLayout-YOLO-DocStructBench (doclayout_yolo_docstructbench_imgsz1024.pt)
+    Source: https://github.com/opendatalab/DocLayout-YOLO
     """
     
     def __init__(self):
-        """
-        Initialize DocLayout-YOLO model following official PDF-Extract-Kit method.
-        
-        Official documentation:
-        https://pdf-extract-kit.readthedocs.io/en/latest/algorithm/layout_detection.html
-        """
-        print("[DocLayout-YOLO] Initializing model...", flush=True)
+        print("[DocLayout-YOLO] Initializing DocStructBench model...", flush=True)
         
         # Official class mapping from PDF-Extract-Kit
         # Source: pdf_extract_kit/tasks/layout_detection/models/yolo.py#L18-27
@@ -78,23 +72,26 @@ class PDFLayoutDetectorYOLO:
             from doclayout_yolo import YOLOv10
             
             # Model path (configurable via env var)
+            # Default: DocStructBench fine-tuned model (recommended by official README)
             model_path = os.getenv(
                 "DOCLAYOUT_MODEL_PATH", 
-                "/app/models/layout/doclayout_yolo_ft.pt"
+                "/app/models/layout/doclayout_yolo_docstructbench_imgsz1024.pt"
             )
             
             if not os.path.exists(model_path):
                 raise FileNotFoundError(
-                    f"DocLayout-YOLO model not found at {model_path}. "
-                    f"Please ensure the model was downloaded during Docker build."
+                    f"DocLayout-YOLO DocStructBench model not found at {model_path}. "
+                    f"Please rebuild the Docker image to re-download the model."
                 )
             
             # Official initialization
             self.model = YOLOv10(model_path)
             
-            # Official default configuration
-            self.img_size = int(os.getenv("DOCLAYOUT_IMG_SIZE", "1280"))
-            self.conf_thres = float(os.getenv("DOCLAYOUT_CONF_THRES", "0.15"))
+            # imgsz=1024: matches the DocStructBench model's training resolution
+            # (the model filename itself is 'doclayout_yolo_docstructbench_imgsz1024.pt')
+            self.img_size = int(os.getenv("DOCLAYOUT_IMG_SIZE", "1024"))
+            # conf=0.2: official demo value; DocStructBench is precise enough not to need lower
+            self.conf_thres = float(os.getenv("DOCLAYOUT_CONF_THRES", "0.2"))
             self.iou_thres = float(os.getenv("DOCLAYOUT_IOU_THRES", "0.30"))
             
             print(f"[DocLayout-YOLO] ✓ Model loaded: {model_path}", flush=True)
