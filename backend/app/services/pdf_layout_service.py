@@ -85,62 +85,6 @@ class PDFLayoutPreservingService:
                     if not is_protected:
                         text_blocks.append(tb)
 
-                # Rescue misclassified components
-                # Rescue 'Abandon' blocks that YOLO passed through (could be notes/captions).
-                # NEVER rescue 'Figure', 'Table', 'Formula', or 'Equation' — wiping them destroys content!
-                NEVER_RESCUE = {'figure', 'table', 'formula', 'equation'}
-                ignored_blocks = [
-                    b for b in layout_blocks 
-                    if b.type.lower() not in ['text', 'title', 'list'] + list(NEVER_RESCUE)
-                ]
-                
-                for ib in ignored_blocks:
-                    ib_rect = self.layout_detector.pixel_to_pdf_rect(ib.bbox, page, ib.page_width, ib.page_height)
-                    ib_text = page.get_text("text", clip=ib_rect).strip()
-                    
-                    # Rescue if the block contains meaningful text content (>10 chars, CJK or spaced words)
-                    if len(ib_text) > 10:
-                        has_content = any('\u4e00' <= c <= '\u9fff' for c in ib_text) or (' ' in ib_text and len(ib_text.split()) >= 2)
-                        if has_content:
-                            print(f"[PDF Layout] Rescuing text from {ib.type} block: '{ib_text[:40]}'", flush=True)
-                            ib.type = 'Text'
-                            text_blocks.append(ib)
-
-                # Rescue completely undetected text (Orphans) using PyMuPDF blocks
-                # This catches fine-print or metadata completely ignored by YOLO.
-                print(f"[PDF Layout] Checking for completely un-detected text blocks...", flush=True)
-                known_rects = [self.layout_detector.pixel_to_pdf_rect(b.bbox, page, b.page_width, b.page_height) for b in layout_blocks]
-                page_blocks = page.get_text("dict").get("blocks", [])
-                
-                pg_w = layout_blocks[0].page_width if layout_blocks else page.rect.width
-                pg_h = layout_blocks[0].page_height if layout_blocks else page.rect.height
-                from .pdf_layout_detector_yolo import LayoutBlock
-                
-                for pb in page_blocks:
-                    if pb.get("type") != 0: continue
-                    for line in pb.get("lines", []):
-                        line_rect = fitz.Rect(line["bbox"])
-                        if line_rect.is_empty or line_rect.width < 10 or line_rect.height < 5:
-                            continue
-                        
-                        overlap_ratio = 0
-                        for kr in known_rects:
-                            if line_rect.intersects(kr):
-                                overlap_ratio = max(overlap_ratio, line_rect.intersect(kr).get_area() / line_rect.get_area())
-                                if overlap_ratio > 0.4: break
-                                    
-                        if overlap_ratio <= 0.4:
-                            line_text = "".join(span.get("text", "") for span in line.get("spans", [])).strip()
-                            if len(line_text) > 4 and (any('\u4e00' <= c <= '\u9fff' for c in line_text) or ' ' in line_text):
-                                print(f"[PDF Layout] Orphan line rescue: '{line_text[:30]}'", flush=True)
-                                scale_x = page.rect.width / pg_w
-                                scale_y = page.rect.height / pg_h
-                                orphan = LayoutBlock(
-                                    bbox=(line_rect.x0 / scale_x, line_rect.y0 / scale_y, line_rect.x1 / scale_x, line_rect.y1 / scale_y),
-                                    type='Text', confidence=1.0, page_width=pg_w, page_height=pg_h
-                                )
-                                text_blocks.append(orphan)
-
                 # NMS Deduplication — Two-Pass Strategy
                 # PASS 1 — Detect "container" blocks (large shells that simply
                 #   wrap multiple smaller boxes). If ≥2 child blocks together

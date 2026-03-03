@@ -1,94 +1,83 @@
-# 🐍 AI Backend: Document & Audio Intelligence
+# 🐍 AI Backend：文件翻譯 & 語音智能
 
-FastAPI-based intelligence engine providing high-fidelity document translation and speech-to-text capabilities.
+FastAPI 驅動的 AI 引擎，提供版面保留 PDF 翻譯與語音轉文字兩大核心服務。
 
-## 🔐 Authentication
+## 🔐 驗證
 
 ### `POST /api/login`
-Proxies employee credentials to the company LDAP server and returns user identity.
+代理員工帳密至公司 LDAP 伺服器，回傳使用者身份。
 
-**Request:**
+**Request：**
 ```json
 { "username": "P0001196", "password": "****" }
 ```
-
-**Response (success):**
+**Response（成功）：**
 ```json
 { "username": "P0001196", "name": "王小明", "dpt": "業務部" }
 ```
-
-**Response (failure):** HTTP 401 with LDAP error message.
-
-> The proxy exists to avoid browser CORS restrictions when calling the internal LDAP API directly from the frontend.
+**Response（失敗）：** HTTP 401
 
 ---
 
-## 🚀 Key Modules
+## 🚀 核心模組
 
-### 1. PDF Layout Preservation (`app/services/`)
+### 1. PDF 版面保留翻譯（`app/services/`）
 
-Core files: `pdf_service.py` → `pdf_layout_service.py` → `pdf_layout_detector_yolo.py`
+呼叫鏈：`pdf_service.py` → `pdf_layout_service.py` → `pdf_layout_detector_yolo.py`
 
-#### Detection Layer (`pdf_layout_detector_yolo.py`)
-- **Engine**: DocLayout-YOLO (PDF-Extract-Kit), 3-4x faster than Detectron2.
-- YOLO renders the page at **3x zoom** and detects blocks: `Title`, `Text`, `List`, `Table`, `Figure`, `Formula`, `Abandon`.
-- `Abandon` blocks are **passed through** (not filtered) to allow the rescue mechanism to evaluate them.
+#### 版面偵測（`pdf_layout_detector_yolo.py`）
+- **模型**：DocLayout-YOLO **DocStructBench** fine-tuned 版本
+  - HF Repo：`juliozhao/DocLayout-YOLO-DocStructBench`
+  - 模型檔：`doclayout_yolo_docstructbench_imgsz1024.pt`（專為各種文件類型設計）
+- 頁面以 **3x zoom**（216 DPI）渲染成 numpy array 傳入 YOLO
+- 推論參數：`imgsz=1024, conf=0.2, iou=0.30`（官方 demo.py 預設值）
+- 偵測 10 類區塊：`title / plain text / abandon / figure / figure_caption / table / table_caption / table_footnote / isolate_formula / formula_caption`
 
-#### Translation Pipeline (`pdf_layout_service.py`) — v2
+#### 翻譯 Pipeline（`pdf_layout_service.py`）
 
-The pipeline is split into two clean phases per page:
+**Phase 0 — 區塊候選篩選**
 
-**Phase 0 — Block Candidate Assembly**
+| 步驟 | 說明 |
+|------|------|
+| 保護區標記 | `Figure`、`Table`、`Formula` 標為保護區；與保護區重疊 >80% 的文字區塊捨棄 |
+| Two-Pass NMS | **Pass 1**：移除容器殼（面積被 ≥2 子區塊覆蓋 ≥60%）。**Pass 2**：標準重疊去重（>80% 在已保留區塊內則捨棄） |
 
-| Step | Description |
-|------|-------------|
-| Protected areas | `Figure`, `Table`, `Equation` blocks are marked as protected; overlapping text blocks are dropped. |
-| Abandon rescue | Blocks typed `Abandon` by YOLO that contain meaningful text (>10 chars, CJK or multi-word) are reclassified as `Text`. |
-| Orphan line rescue | PyMuPDF scans every text **line** on the page. Lines with ≤40% overlap with any YOLO bbox are added as independent `Text` blocks (catches colored inline notes, footnotes, headers). |
-| Two-Pass NMS | **Pass 1**: Drops "container shell" blocks whose area is ≥60% covered by ≥2 smaller child blocks — preserves precise children for tighter wipe rects. **Pass 2**: Standard overlap dedup; drops blocks >80% inside another kept block. |
+**Phase 1 — Wipe（Redaction API）**
 
-**Phase 1 — Wipe**
+1. 將 YOLO pixel bbox 轉換為 PDF point 座標
+2. 在 `bbox ± 3pt` 內搜尋文字 span，取其**自然聯集**作為擦除範圍
+3. `page.add_redact_annot` 登記擦除標記
+4. `page.apply_redactions(images=PDF_REDACT_IMAGE_NONE, graphics=False)` — 從 content stream 永久移除原文，保留向量圖形
 
-1. Convert each block's bbox from YOLO pixel space to PDF point space.
-2. Search for text spans within `bbox ± 3pt` using `page.get_text("dict")`.
-3. Compute the **natural union** of found span bboxes (no artificial margin).
-4. Register a **PDF redaction annotation** (`page.add_redact_annot`) on that area.
-5. After all blocks are registered: `page.apply_redactions(images=PDF_REDACT_IMAGE_NONE, graphics=False)`.
-   - Permanently **removes** original text from the content stream (not just a visual overlay).
-   - `graphics=False` preserves table borders and vector graphics.
+**Phase 2 — 翻譯 & Render**
 
-**Phase 2 — Translate & Render**
+- 每個區塊傳入 `gpt-oss:20b`（Ollama）進行翻譯（附頁面脈絡）
+- `page.insert_htmlbox` + 自適應 CSS：保留原始字重、顏色、對齊
 
-- Each block is sent to the LLM (`gpt-oss:20b` via Ollama) for translation with page-level context.
-- Translated text is rendered using `page.insert_htmlbox` with adaptive CSS: font family, size, weight, and colour are extracted from the original spans via weighted voting.
-- Single newlines are stripped so English text wraps naturally; double newlines become `<br/><br/>` paragraph breaks.
+### 2. 語音處理（`app/services/stt_service.py`）
+- **引擎**：`faster-whisper`（large-v3）
+- **GPU 鎖定**：`threading.Lock()` 保護推論，`run_in_threadpool` 非阻塞執行
 
-### 2. Audio Processing (`app/services/stt_service.py`)
-- **Engine**: `faster-whisper` (Large-v3).
-- **GPU Locking**: Serialized inference to prevent CUDA collision, wrapped in a non-blocking threadpool.
-
-### 3. LLM Orchestration (`app/services/llm_service.py`)
-- **Model**: gpt-oss:20b (via Ollama).
-- **Optimization**: Smart cleaning of `<think>` tags and conversational prefixes.
-- **Concurrency**: Fully async pipeline using `httpx` to handle multiple requests without blocking.
+### 3. LLM 協調（`app/services/llm_service.py`）
+- **模型**：gpt-oss:20b（Ollama）
+- **會議分析**：Map-Reduce 策略，chunk_size=15000 字，輸出結構化 JSON
+- **後處理**：OpenCC `s2tw` 確保輸出為繁體中文（台灣）
 
 ---
 
-## 🛠️ Installation (Local Dev)
-1. **Requirements**: Python 3.10 + `uv`.
-2. **Setup**:
-   ```bash
-   uv sync
-   uv run uvicorn app.main:app --reload
-   ```
+## 🛠️ 本地開發
+```bash
+cd backend
+uv sync
+uv run uvicorn app.main:app --reload
+```
 
-## 🐳 Docker (Production)
-The Dockerfile uses **NVIDIA CUDA 12.1** to support Faster-Whisper and DocLayout-YOLO.
+## 🐳 Docker（生產）
 ```bash
 docker compose up -d --build
 ```
 
-## 📦 Model Dependencies
-- **Layout Detection**: [DocLayout-YOLO](https://github.com/opendatalab/PDF-Extract-Kit) (~50MB, auto-downloaded)
-- **STT**: faster-whisper large-v3 (auto-downloaded on first run)
-- **LLM**: ollama gpt-oss:20b (requires manual `ollama pull`)
+## 📦 模型依賴
+- **版面偵測**：DocLayout-YOLO DocStructBench（~41MB，Dockerfile 自動下載）
+- **STT**：faster-whisper large-v3（首次請求時自動下載）
+- **LLM**：gpt-oss:20b（需手動 `ollama pull gpt-oss:20b`）
