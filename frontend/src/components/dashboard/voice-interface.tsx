@@ -21,7 +21,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useVoice } from '@/context/voice-context';
 
 export function VoiceInterface() {
-    const { isProcessing, processingFilename, records, processAudio, setRecords } = useVoice();
+    const { isProcessing, processingFilename, records, processAudio, removeRecord } = useVoice();
     const [selectedFile, setSelectedFile] = useState<File | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -44,7 +44,7 @@ export function VoiceInterface() {
 
     const deleteRecord = (id: string) => {
         if (confirm('確定要刪除此筆會議記錄嗎？')) {
-            setRecords((prev: any[]) => prev.filter(r => r.id !== id));
+            removeRecord(id);
         }
     };
 

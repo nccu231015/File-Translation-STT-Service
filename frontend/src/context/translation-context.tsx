@@ -4,6 +4,7 @@ import React, { createContext, useContext, useState, useEffect, useRef, ReactNod
 import { toast } from 'sonner';
 import { useUser } from '@/context/user-context';
 import { saveBlob, loadBlob, deleteBlob } from '@/lib/pdf-storage';
+import { translatePDF } from '@/lib/api/translation';
 
 export interface TranslationFile {
     id: string;
@@ -149,24 +150,11 @@ export function TranslationProvider({ children }: { children: ReactNode }) {
     const uploadAndTranslate = async (fileRecord: TranslationFile, fileObj: File, debug: boolean = false) => {
         updateFileStatus(fileRecord.id, { status: 'uploading', progress: 30 });
 
-        const formData = new FormData();
-        formData.append('file', fileObj);
-        formData.append('target_lang', fileRecord.targetLang);
-        formData.append('debug', debug.toString());
-
         try {
             updateFileStatus(fileRecord.id, { status: 'processing', progress: 60 });
-            const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
-            const res = await fetch(`${API_URL}/pdf-translation`, {
-                method: 'POST',
-                body: formData
-            });
-
-            if (!res.ok) throw new Error('Translation failed');
-
-            const blob = await res.blob();
-            const pdfBlob = new Blob([blob], { type: 'application/pdf' });
+            // Delegate API call to lib/api/translation.ts (browser-side, direct backend)
+            const pdfBlob = await translatePDF(fileObj, fileRecord.targetLang, debug);
 
             // Persist translated PDF to IndexedDB so it survives page refresh
             await saveBlob(`${fileRecord.id}_translated`, pdfBlob);

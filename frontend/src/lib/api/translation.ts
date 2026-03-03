@@ -1,26 +1,36 @@
+/**
+ * translation.ts
+ *
+ * Client-side (browser) API utility for PDF translation.
+ * Runs in the browser — calls the backend directly via NEXT_PUBLIC_API_URL.
+ * No Next.js Route Handler involved → no timeout risk.
+ *
+ * Mirrors the pattern used by lib/api/stt.ts for voice processing.
+ */
 
-export const translatePDF = async (file: File, sourceLang: string, targetLang: string) => {
+const getApiUrl = () =>
+    process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
+export const translatePDF = async (
+    file: File,
+    targetLang: string = 'zh-TW',
+    debug: boolean = false,
+): Promise<Blob> => {
     const formData = new FormData();
     formData.append('file', file);
-    // Backend relies on internal logic or defaults, but if we need to pass languages:
-    // formData.append('source_lang', sourceLang);
-    // formData.append('target_lang', targetLang); 
+    formData.append('target_lang', targetLang);
+    formData.append('debug', debug.toString());
 
-    // In our current backend implementation (from memory), /upload path handles everything.
-    // But our proxy is set to /api/* -> Backend /*
-    // So we call /api/pdf-translation which maps to Backend /pdf-translation ideally.
-    // Wait, let's check backend routes.
-    // Assuming the backend has a specific endpoint. 
-    // Based on "File Translation" task, it likely expects a file upload.
-
-    const response = await fetch('/api/pdf-translation', {
+    const response = await fetch(`${getApiUrl()}/pdf-translation`, {
         method: 'POST',
         body: formData,
     });
 
     if (!response.ok) {
-        throw new Error('PDF Translation failed');
+        const errText = await response.text();
+        throw new Error(`PDF Translation failed: ${response.status} ${errText}`);
     }
 
-    return response.json();
+    const blob = await response.blob();
+    return new Blob([blob], { type: 'application/pdf' });
 };

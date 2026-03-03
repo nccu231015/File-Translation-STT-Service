@@ -1,9 +1,10 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect, useRef, Dispatch, SetStateAction, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import { toast } from 'sonner';
 import { analyzeMeetingAudio } from '@/lib/api/stt';
 import { useUser } from '@/context/user-context';
+import { saveBlob, loadBlob, deleteBlob } from '@/lib/pdf-storage';
 
 export interface ActionItem {
     task: string;
@@ -27,11 +28,14 @@ interface VoiceContextType {
     isProcessing: boolean;
     processingFilename: string | null;
     records: ProcessedRecord[];
-    setRecords: Dispatch<SetStateAction<ProcessedRecord[]>>;
     processAudio: (file: File) => Promise<void>;
+    removeRecord: (id: string) => void;
 }
 
 const VoiceContext = createContext<VoiceContextType | undefined>(undefined);
+
+/** IndexedDB key for a record's Word document blob */
+const docxKey = (id: string) => `${id}_docx`;
 
 export function VoiceProvider({ children }: { children: ReactNode }) {
     const { user } = useUser();
@@ -48,34 +52,86 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
             const parsed = JSON.parse(saved);
             return parsed.map((r: any) => ({
                 ...r,
-                processedAt: new Date(r.processedAt)
+                processedAt: new Date(r.processedAt),
+                downloadUrl: undefined,   // blob URLs are session-only; restored from IndexedDB below
             }));
         } catch {
             return [];
         }
     });
 
+    // ─── Persist metadata to localStorage on record changes ──────────────────────
+    // useRef avoids race condition where storageKey change fires the save effect
+    // with empty records, overwriting the new user's saved data.
     const storageKeyRef = useRef(storageKey);
     useEffect(() => { storageKeyRef.current = storageKey; });
 
-    // Save whenever records change (NOT when storageKey changes to avoid overwriting new user's data)
     useEffect(() => {
-        localStorage.setItem(storageKeyRef.current, JSON.stringify(records));
+        // Strip downloadUrl before saving (session-only blob URL; binary lives in IndexedDB)
+        const serializable = records.map(r => ({ ...r, downloadUrl: undefined }));
+        localStorage.setItem(storageKeyRef.current, JSON.stringify(serializable));
     }, [records]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    // Reload when user switches
+    // ─── Restore Word blob URLs from IndexedDB on mount ──────────────────────────
+    useEffect(() => {
+        (async () => {
+            const updates: { id: string; downloadUrl: string }[] = [];
+            for (const r of records) {
+                const blob = await loadBlob(docxKey(r.id));
+                if (blob) {
+                    updates.push({ id: r.id, downloadUrl: URL.createObjectURL(blob) });
+                }
+            }
+            if (updates.length > 0) {
+                setRecords(prev =>
+                    prev.map(r => {
+                        const u = updates.find(x => x.id === r.id);
+                        return u ? { ...r, downloadUrl: u.downloadUrl } : r;
+                    })
+                );
+            }
+        })();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []); // Run once on mount; `records` is stable from useState initializer
+
+    // ─── Reload records when user switches ────────────────────────────────────────
     useEffect(() => {
         if (typeof window === 'undefined') return;
         const saved = localStorage.getItem(storageKey);
         if (!saved) { setRecords([]); return; }
         try {
             const parsed = JSON.parse(saved);
-            setRecords(parsed.map((r: any) => ({ ...r, processedAt: new Date(r.processedAt) })));
+            const newRecords: ProcessedRecord[] = parsed.map((r: any) => ({
+                ...r,
+                processedAt: new Date(r.processedAt),
+                downloadUrl: undefined,
+            }));
+            setRecords(newRecords);
+
+            // Restore Word blobs for newly loaded user's records
+            (async () => {
+                const updates: { id: string; downloadUrl: string }[] = [];
+                for (const r of newRecords) {
+                    const blob = await loadBlob(docxKey(r.id));
+                    if (blob) {
+                        updates.push({ id: r.id, downloadUrl: URL.createObjectURL(blob) });
+                    }
+                }
+                if (updates.length > 0) {
+                    setRecords(prev =>
+                        prev.map(r => {
+                            const u = updates.find(x => x.id === r.id);
+                            return u ? { ...r, downloadUrl: u.downloadUrl } : r;
+                        })
+                    );
+                }
+            })();
         } catch {
             setRecords([]);
         }
-    }, [storageKey]);
+    }, [storageKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
+    // ─── Process audio file ───────────────────────────────────────────────────────
     const processAudio = async (file: File) => {
         setIsProcessing(true);
         setProcessingFilename(file.name);
@@ -83,22 +139,28 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
             const data = await analyzeMeetingAudio(file);
             const analysis = data.analysis;
 
-            // Handle Word document download
+            // Decode Base64 Word document and persist to IndexedDB
             let downloadUrl = '';
-            if (data.file_download && data.file_download.content_base64) {
+            const recordId = Date.now().toString();
+
+            if (data.file_download?.content_base64) {
                 const binaryString = window.atob(data.file_download.content_base64);
                 const bytes = new Uint8Array(binaryString.length);
                 for (let i = 0; i < binaryString.length; i++) {
                     bytes[i] = binaryString.charCodeAt(i);
                 }
                 const blob = new Blob([bytes], {
-                    type: data.file_download.mime_type || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                    type: data.file_download.mime_type ||
+                        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
                 });
+
+                // Persist Word blob to IndexedDB so download survives page refresh
+                await saveBlob(docxKey(recordId), blob);
                 downloadUrl = URL.createObjectURL(blob);
             }
 
             const newRecord: ProcessedRecord = {
-                id: Date.now().toString(),
+                id: recordId,
                 fileName: file.name,
                 duration: 'Unknown',
                 processedAt: new Date(),
@@ -106,7 +168,7 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
                 summary: analysis.summary,
                 decisions: analysis.decisions,
                 actionItems: analysis.action_items,
-                downloadUrl: downloadUrl
+                downloadUrl,
             };
 
             setRecords(prev => [newRecord, ...prev]);
@@ -120,8 +182,22 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
         }
     };
 
+    // ─── Remove a record and clean up all associated resources ───────────────────
+    const removeRecord = (id: string) => {
+        setRecords(prev => {
+            const record = prev.find(r => r.id === id);
+            // Revoke the session blob URL to avoid memory leaks
+            if (record?.downloadUrl) {
+                URL.revokeObjectURL(record.downloadUrl);
+            }
+            return prev.filter(r => r.id !== id);
+        });
+        // Clean up the Word document binary from IndexedDB
+        deleteBlob(docxKey(id)).catch(console.error);
+    };
+
     return (
-        <VoiceContext.Provider value={{ isProcessing, processingFilename, records, setRecords, processAudio }}>
+        <VoiceContext.Provider value={{ isProcessing, processingFilename, records, processAudio, removeRecord }}>
             {children}
         </VoiceContext.Provider>
     );
