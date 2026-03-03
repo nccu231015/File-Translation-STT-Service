@@ -149,12 +149,13 @@ class PDFLayoutPreservingService:
                         kept_rect = fitz.Rect(kept_block.bbox)
                         if curr_rect.intersects(kept_rect):
                             intersect_area = curr_rect.intersect(kept_rect).get_area()
-                            # Drop if current block is >80% inside a kept block
-                            if curr_area > 0 and (intersect_area / curr_area) > 0.80:
+                            # Drop if current block is >60% inside a kept block
+                            # (lowered from >80% to catch partially-overlapping YOLO duplicates)
+                            if curr_area > 0 and (intersect_area / curr_area) > 0.60:
                                 is_duplicate = True
                                 print(
                                     f"[PDF Layout] NMS Pass2: Dropped block {i} "
-                                    f"(>80% inside kept block). Overlap: {intersect_area/curr_area:.1%}",
+                                    f"(>{int(intersect_area/curr_area*100)}% inside kept block).",
                                     flush=True
                                 )
                                 break

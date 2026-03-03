@@ -92,7 +92,7 @@ class PDFLayoutDetectorYOLO:
             self.img_size = int(os.getenv("DOCLAYOUT_IMG_SIZE", "1024"))
             # conf=0.2: official demo value; DocStructBench is precise enough not to need lower
             self.conf_thres = float(os.getenv("DOCLAYOUT_CONF_THRES", "0.2"))
-            self.iou_thres = float(os.getenv("DOCLAYOUT_IOU_THRES", "0.30"))
+            self.iou_thres = float(os.getenv("DOCLAYOUT_IOU_THRES", "0.45"))
             
             print(f"[DocLayout-YOLO] ✓ Model loaded: {model_path}", flush=True)
             print(f"[DocLayout-YOLO] ✓ Config: img_size={self.img_size}, conf={self.conf_thres}, iou={self.iou_thres}", flush=True)
