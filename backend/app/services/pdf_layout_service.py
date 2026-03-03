@@ -2,6 +2,7 @@ import fitz  # PyMuPDF
 import os
 from typing import Callable
 import re
+from .pdf_layout_detector_yolo import LayoutBlock
 
 class PDFLayoutPreservingService:
     """
@@ -37,53 +38,81 @@ class PDFLayoutPreservingService:
             print(f"\n[PDF Layout] ===== Processing page {page_num + 1}/{total_pages} =====", flush=True)
             
             try:
-                # STEP 1: Layout Detection
-                print(f"[PDF Layout] Step 1: Detecting layout...", flush=True)
-                layout_blocks = self.layout_detector.detect_layout(input_path, page_num, page.rect.width, page.rect.height)
+                # STEP 1: YOLO — detect protected areas only
+                # (Figure, Table, Formula must NOT be erased or translated)
+                print(f"[PDF Layout] Step 1: YOLO detecting protected areas...", flush=True)
+                layout_blocks = self.layout_detector.detect_layout(
+                    input_path, page_num, page.rect.width, page.rect.height
+                )
 
-                # 1. Identify "Protected Areas" (Figures, Tables, Equations)
-                figure_blocks = [b for b in layout_blocks if b.type.lower() in ['figure', 'table', 'equation']]
-                print(f"[PDF Layout] Protected blocks: {len(figure_blocks)} ({', '.join([b.type for b in figure_blocks])})", flush=True)
-                
-                protected_rects = []
-                for fb in figure_blocks:
-                    fb_rect = fitz.Rect(fb.bbox)
-                    fb_rect.x0 -= 10
-                    fb_rect.y0 -= 10
-                    fb_rect.x1 += 10
-                    fb_rect.y1 += 10
-                    protected_rects.append(fb_rect)
-                
-                # 2. Identify Candidates (Text, Title, List) and filter overlaps
-                text_candidates = [b for b in layout_blocks if b.type.lower() in ['text', 'title', 'list']]
-                print(f"[PDF Layout] Text candidates: {len(text_candidates)} ({', '.join([b.type for b in text_candidates])})", flush=True)
-                
+                PROTECTED_TYPES = {'figure', 'table', 'equation', 'formula'}
+                protected_rects_pdf = []
+                for b in layout_blocks:
+                    if b.type.lower() in PROTECTED_TYPES:
+                        # Convert YOLO pixel bbox → PDF point coords
+                        pdf_rect = self.layout_detector.pixel_to_pdf_rect(
+                            b.bbox, page, b.page_width, b.page_height
+                        )
+                        # Small buffer so borders don't bleed into adjacent text
+                        protected_rects_pdf.append(fitz.Rect(
+                            pdf_rect.x0 - 5, pdf_rect.y0 - 5,
+                            pdf_rect.x1 + 5, pdf_rect.y1 + 5,
+                        ))
+                print(f"[PDF Layout] Protected areas: {len(protected_rects_pdf)}", flush=True)
+
+                # STEP 2: PyMuPDF — exhaustive text block discovery
+                # Every text block on the page is a translation candidate unless
+                # it overlaps substantially with a YOLO-protected area.
+                # PyMuPDF blocks are already in PDF point coordinates and
+                # non-overlapping by construction, so duplicate-box issues
+                # that plague YOLO detections cannot occur here.
+                print(f"[PDF Layout] Step 2: PyMuPDF full text scan...", flush=True)
+
+                pdf_page_w = page.rect.width   # used as page_width so pixel_to_pdf_rect = identity
+                pdf_page_h = page.rect.height
+
                 text_blocks = []
-                for tb in text_candidates:
-                    tb_rect = fitz.Rect(tb.bbox)
-                    is_protected = False
-                    
-                    for p_rect in protected_rects:
-                        if tb_rect.intersects(p_rect):
-                            intersect_area = tb_rect.intersect(p_rect).get_area()
-                            tb_area = tb_rect.get_area()
-                            
-                            # Only drop if substantially covered (>80%) and not a wide paragraph
-                            is_wide_block = tb_rect.width > 150
-                            
-                            if tb_area > 0 and (intersect_area / tb_area) > 0.8:
-                                if is_wide_block:
-                                    print(f"[PDF Layout] Wide block overlap > 80%, preserving.", flush=True)
-                                else:
-                                    is_protected = True
-                                    break
-                    
-                    # Titles are never protected
-                    if tb.type.lower() == 'title':
-                        is_protected = False
-                    
-                    if not is_protected:
-                        text_blocks.append(tb)
+                for pb in page.get_text("dict").get("blocks", []):
+                    if pb.get("type") != 0:          # skip image/drawing blocks
+                        continue
+
+                    block_rect = fitz.Rect(pb["bbox"])
+                    if block_rect.is_empty or block_rect.width < 5 or block_rect.height < 5:
+                        continue
+
+                    # Drop blocks that are substantially inside a protected area (>30%)
+                    block_area = block_rect.get_area()
+                    is_protected = any(
+                        block_area > 0
+                        and block_rect.intersects(p)
+                        and block_rect.intersect(p).get_area() / block_area > 0.30
+                        for p in protected_rects_pdf
+                    )
+                    if is_protected:
+                        continue
+
+                    # Verify the block contains meaningful text
+                    block_text = "".join(
+                        span.get("text", "")
+                        for line in pb.get("lines", [])
+                        for span in line.get("spans", [])
+                    ).strip()
+                    if not block_text or len(block_text) < 2:
+                        continue
+
+                    # Build a LayoutBlock in PDF coordinate space.
+                    # Setting page_width/height = PDF page dims makes
+                    # pixel_to_pdf_rect an identity transform (scale = 1.0).
+                    text_blocks.append(LayoutBlock(
+                        bbox=(block_rect.x0, block_rect.y0,
+                              block_rect.x1, block_rect.y1),
+                        type='Text',
+                        confidence=1.0,
+                        page_width=int(pdf_page_w),
+                        page_height=int(pdf_page_h),
+                    ))
+
+                print(f"[PDF Layout] Text candidates (PyMuPDF): {len(text_blocks)}", flush=True)
 
                 # NMS Deduplication — Two-Pass Strategy
                 # PASS 1 — Detect "container" blocks (large shells that simply
