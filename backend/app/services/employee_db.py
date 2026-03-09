@@ -93,7 +93,7 @@ async def get_employee(empid: str) -> Optional[dict]:
             async with conn.cursor(aiomysql.DictCursor) as cur:
                 await cur.execute(
                     "SELECT EMPID, EMPNAME, DEPTNAME, DUTYNAME "
-                    "FROM employees WHERE EMPID = %s LIMIT 1",
+                    "FROM JEB_HR WHERE EMPID = %s LIMIT 1",
                     (empid,),
                 )
                 row = await cur.fetchone()
@@ -117,7 +117,7 @@ async def get_department_employees(deptname: str) -> list[dict]:
             async with conn.cursor(aiomysql.DictCursor) as cur:
                 await cur.execute(
                     "SELECT EMPID, EMPNAME, DEPTNAME, DUTYNAME "
-                    "FROM employees WHERE DEPTNAME LIKE %s ORDER BY EMPNAME",
+                    "FROM JEB_HR WHERE DEPTNAME LIKE %s ORDER BY EMPNAME",
                     (f"{root}%",),
                 )
                 rows = await cur.fetchall()
