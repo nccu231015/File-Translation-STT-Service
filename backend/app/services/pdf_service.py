@@ -90,19 +90,22 @@ class PDFService:
         system_prompt = (
             "Professional Translator. Translate to Traditional Chinese (Taiwan)."
             " RULES:"
-            " 1. Output ONLY the translated text."
+            " 1. Output ONLY the translated text corresponding to the 'Target Text'."
             " 2. Do NOT include the original English text."
             " 3. Do NOT output 'English (Chinese)'. Just the Chinese."
-            " 4. Ignore obvious OCR noise (e.g. random letters like 'g p')."
-            " 5. Maintain formatting (lists, bullets)."
+            " 4. Ignore obvious OCR noise."
+            " 5. The 'Target Text' may be a sentence fragment. Use the provided 'Page Context' to understand the full sentence, but ONLY output the translation for the exact 'Target Text' provided. Ensure the translated fragment fits grammatically within the translated surrounding context."
         )
         if is_cn_to_en:
-            system_prompt = "Translator. Output translation only. Fluent English. No original text."
+            system_prompt = "Translator. Output translation only. Fluent English. No original text. Use 'Page Context' to translate fragmented 'Target Text' correctly, but translate ONLY the 'Target Text'."
 
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Text:\n{text}"},
         ]
+        if context:
+            # Provide context but limit length to avoid massive prompt bloat per block
+            messages.append({"role": "user", "content": f"Page Context for Reference:\n{context[:4000]}"})
+        messages.append({"role": "user", "content": f"Target Text to Translate:\n{text}"})
 
         max_retries = 3
         # Use AsyncClient for non-blocking I/O

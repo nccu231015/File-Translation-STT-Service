@@ -17,6 +17,7 @@ export interface TranslationFile {
     uploadedAt: Date;
     originalUrl?: string;
     downloadUrl?: string;
+    docxUrl?: string;
 }
 
 interface TranslationContextType {
@@ -42,7 +43,8 @@ export function TranslationProvider({ children }: { children: ReactNode }) {
                 ...f,
                 uploadedAt: new Date(f.uploadedAt),
                 originalUrl: undefined,  // will be restored from IndexedDB below
-                downloadUrl: undefined   // will be restored from IndexedDB below
+                downloadUrl: undefined,   // will be restored from IndexedDB below
+                docxUrl: undefined        // will be restored from IndexedDB below
             }));
         } catch {
             return [];
@@ -67,6 +69,9 @@ export function TranslationProvider({ children }: { children: ReactNode }) {
                 if (f.status === 'completed') {
                     const transBlob = await loadBlob(`${f.id}_translated`);
                     if (transBlob) changes.downloadUrl = URL.createObjectURL(transBlob);
+
+                    const docxBlob = await loadBlob(`${f.id}_translated_docx`);
+                    if (docxBlob) changes.docxUrl = URL.createObjectURL(docxBlob);
                 }
 
                 if (Object.keys(changes).length > 0) {
@@ -98,6 +103,7 @@ export function TranslationProvider({ children }: { children: ReactNode }) {
             ...f,
             originalUrl: undefined,
             downloadUrl: undefined,
+            docxUrl: undefined,
         }));
         localStorage.setItem(storageKeyRef.current, JSON.stringify(serializable));
     }, [files]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -113,7 +119,8 @@ export function TranslationProvider({ children }: { children: ReactNode }) {
                 ...f,
                 uploadedAt: new Date(f.uploadedAt),
                 originalUrl: undefined,
-                downloadUrl: undefined
+                downloadUrl: undefined,
+                docxUrl: undefined
             }));
             setFiles(newFiles);
 
@@ -127,6 +134,9 @@ export function TranslationProvider({ children }: { children: ReactNode }) {
                     if (f.status === 'completed') {
                         const transBlob = await loadBlob(`${f.id}_translated`);
                         if (transBlob) changes.downloadUrl = URL.createObjectURL(transBlob);
+                        
+                        const docxBlob = await loadBlob(`${f.id}_translated_docx`);
+                        if (docxBlob) changes.docxUrl = URL.createObjectURL(docxBlob);
                     }
                     if (Object.keys(changes).length > 0) updates.push({ id: f.id, changes });
                 }
@@ -154,16 +164,23 @@ export function TranslationProvider({ children }: { children: ReactNode }) {
             updateFileStatus(fileRecord.id, { status: 'processing', progress: 60 });
 
             // Delegate API call to lib/api/translation.ts (browser-side, direct backend)
-            const pdfBlob = await translatePDF(fileObj, fileRecord.targetLang, debug);
+            const { pdfBlob, docxBlob } = await translatePDF(fileObj, fileRecord.targetLang, debug);
 
             // Persist translated PDF to IndexedDB so it survives page refresh
             await saveBlob(`${fileRecord.id}_translated`, pdfBlob);
+            
+            let docxUrl = undefined;
+            if (docxBlob) {
+                await saveBlob(`${fileRecord.id}_translated_docx`, docxBlob);
+                docxUrl = URL.createObjectURL(docxBlob);
+            }
 
             const url = URL.createObjectURL(pdfBlob);
             updateFileStatus(fileRecord.id, {
                 status: 'completed',
                 progress: 100,
-                downloadUrl: url
+                downloadUrl: url,
+                docxUrl: docxUrl
             });
             toast.success(`${fileRecord.name} ${debug ? 'Debug 預覽' : '翻譯'}完成`);
 
@@ -207,12 +224,14 @@ export function TranslationProvider({ children }: { children: ReactNode }) {
             if (file) {
                 if (file.originalUrl) URL.revokeObjectURL(file.originalUrl);
                 if (file.downloadUrl) URL.revokeObjectURL(file.downloadUrl);
+                if (file.docxUrl) URL.revokeObjectURL(file.docxUrl);
             }
             return prev.filter(f => f.id !== fileId);
         });
         // Also clean up IndexedDB blobs
         deleteBlob(`${fileId}_original`).catch(console.error);
         deleteBlob(`${fileId}_translated`).catch(console.error);
+        deleteBlob(`${fileId}_translated_docx`).catch(console.error);
     };
 
     return (

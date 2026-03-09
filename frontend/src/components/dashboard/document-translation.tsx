@@ -311,7 +311,15 @@ export function DocumentTranslation() {
                                                 <a href={file.downloadUrl} download={`translated_${file.name}`}>
                                                     <Button size="sm" variant="outline" className="h-8">
                                                         <Download className="size-3.5 mr-2" />
-                                                        下載翻譯檔
+                                                        下載 PDF
+                                                    </Button>
+                                                </a>
+                                            )}
+                                            {file.status === 'completed' && file.docxUrl && (
+                                                <a href={file.docxUrl} download={`translated_${file.name.replace(/\.pdf$/i, '.docx')}`}>
+                                                    <Button size="sm" variant="outline" className="h-8 border-blue-200 text-blue-600 hover:bg-blue-50">
+                                                        <FileText className="size-3.5 mr-2" />
+                                                        下載 Word
                                                     </Button>
                                                 </a>
                                             )}

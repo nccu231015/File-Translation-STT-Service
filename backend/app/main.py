@@ -449,19 +449,40 @@ async def translate_pdf(
         # The service returns a list with one item containing the file_path
         output_pdf_path = result_list[0]["file_path"]
         
-        # Determine filename for download
-        filename_only = os.path.splitext(file.filename)[0]
-        download_filename = f"{filename_only}_translated.pdf"
+        # Convert translated PDF into DOCX
+        output_docx_path = output_pdf_path.replace(".pdf", ".docx")
+        with_docx = False
+        try:
+            from pdf2docx import Converter
+            print(f"[PDF2DOCX] Converting {output_pdf_path} to DOCX...")
+            cv = Converter(output_pdf_path)
+            cv.convert(output_docx_path, start=0, end=None)
+            cv.close()
+            with_docx = True
+            print("[PDF2DOCX] Conversion success")
+        except Exception as e:
+            print(f"[PDF2DOCX] Failed to convert to docx: {e}")
+        
+        # Encode to Base64
+        import base64
+        with open(output_pdf_path, 'rb') as f:
+            pdf_b64 = base64.b64encode(f.read()).decode('utf-8')
+            
+        docx_b64 = None
+        if with_docx and os.path.exists(output_docx_path):
+            with open(output_docx_path, 'rb') as f:
+                docx_b64 = base64.b64encode(f.read()).decode('utf-8')
         
         # Add cleanup tasks
         background_tasks.add_task(os.remove, temp_input_path)
         background_tasks.add_task(os.remove, output_pdf_path)
+        if with_docx and os.path.exists(output_docx_path):
+            background_tasks.add_task(os.remove, output_docx_path)
 
-        return FileResponse(
-            output_pdf_path, 
-            media_type="application/pdf", 
-            filename=download_filename
-        )
+        return {
+            "pdf_base64": pdf_b64,
+            "docx_base64": docx_b64
+        }
 
     except Exception as e:
         # Immediate cleanup if failure
