@@ -293,6 +293,58 @@ class LLMService:
             return {"summary": "分析失敗", "decisions": [], "action_items": []}
 
 
+    def translate_analysis(self, analysis: dict) -> dict:
+        """
+        Translate Chinese meeting analysis fields into English.
+
+        Input dict keys (same as analyze_meeting_transcript output):
+          meeting_objective, discussion_summary, attendees,
+          schedule_notes, decisions, action_items
+
+        Returns the same JSON structure with values in English.
+        Falls back to empty structure on error so docx can still be generated.
+        """
+        print("[LLM] Translating analysis to English for bilingual meeting minutes...", flush=True)
+
+        try:
+            analysis_json = json.dumps(analysis, ensure_ascii=False, indent=2)
+        except Exception:
+            analysis_json = str(analysis)
+
+        prompt = (
+            "You are a professional translator. "
+            "Translate ALL text values in the following JSON from Traditional Chinese to English.\n"
+            "Rules:\n"
+            "- Keep the same JSON structure and keys exactly as-is.\n"
+            "- Translate ONLY the values (strings and string items in lists).\n"
+            "- For action_items, translate the 'task', 'owner', and 'deadline' fields.\n"
+            "- Keep proper nouns, names, and numbers unchanged.\n"
+            "- Output ONLY valid JSON, nothing else.\n\n"
+            f"Input JSON:\n{analysis_json}"
+        )
+
+        messages = [
+            {"role": "system", "content": "You translate JSON values from Chinese to English. Output only valid JSON."},
+            {"role": "user", "content": prompt},
+        ]
+
+        try:
+            response = self.client.chat(model=self.model, messages=messages, format="json")
+            content = self._clean_llm_response(response["message"]["content"])
+            translated = json.loads(content)
+            print("[LLM] Analysis translation complete.", flush=True)
+            return translated
+        except Exception as e:
+            print(f"[LLM] translate_analysis error: {e}", flush=True)
+            return {
+                "meeting_objective": "",
+                "discussion_summary": "",
+                "attendees": [],
+                "schedule_notes": "",
+                "decisions": [],
+                "action_items": [],
+            }
+
     def translate_segments(
         self,
         segments: list[dict],

@@ -151,16 +151,30 @@ async def transcribe_audio(
             if not isinstance(safe_action_items, list):
                 safe_action_items = []
 
-            # 2. Generate Word document using SAFE structured data
+            # 2. Translate analysis to English (for bilingual meeting minutes)
+            print("[Meeting] Translating analysis to English...", flush=True)
+            en_analysis = await run_in_threadpool(
+                llm_service.translate_analysis,
+                analysis,
+            )
+
+            # 3. Generate bilingual Word document
             minutes_service = MeetingMinutesDocxService()
             docx_bytes = minutes_service.generate_minutes(
                 file_name=file.filename,
+                # Chinese content
                 meeting_objective=analysis.get('meeting_objective', ''),
-                discussion_summary=disc_sum,  # Pass original structure, formatter handles it
-                decisions=safe_decisions,     # Pass SAFE list
-                action_items=safe_action_items, # Pass SAFE list
+                discussion_summary=disc_sum,
+                decisions=safe_decisions,
+                action_items=safe_action_items,
                 attendees=analysis.get('attendees', []),
-                schedule_notes=analysis.get('schedule_notes', '')
+                schedule_notes=analysis.get('schedule_notes', ''),
+                # English translations
+                en_meeting_objective=en_analysis.get('meeting_objective', ''),
+                en_discussion_summary=en_analysis.get('discussion_summary', ''),
+                en_decisions=en_analysis.get('decisions', []),
+                en_action_items=en_analysis.get('action_items', []),
+                en_schedule_notes=en_analysis.get('schedule_notes', ''),
             )
             
             output_filename = f"meeting_minutes_{os.path.splitext(file.filename)[0]}.docx"
