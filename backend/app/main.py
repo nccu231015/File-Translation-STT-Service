@@ -8,6 +8,7 @@ from app.services.stt_service import stt_service
 from app.services.llm_service import llm_service
 from app.services.pdf_service import pdf_service
 from app.services.meeting_minutes_docx import MeetingMinutesDocxService
+from app.services.transcript_docx_service import TranscriptDocxService
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -174,12 +175,43 @@ async def transcribe_audio(
                 "action_items": safe_action_items
             }
 
+            # 3. Generate bilingual transcript (segments → translate → docx)
+            print("[Meeting] Generating bilingual transcript...", flush=True)
+            segments = stt_result.get("segments", [])
+            detected_lang = stt_result.get("language", "zh")
+
+            # Determine language labels for document headers
+            is_chinese = detected_lang.lower().startswith("zh")
+            src_label = "中文" if is_chinese else "英文"
+            tgt_label = "英文" if is_chinese else "繁體中文"
+
+            bilingual_segments = await run_in_threadpool(
+                llm_service.translate_segments,
+                segments,
+                detected_lang,
+            )
+
+            transcript_service = TranscriptDocxService()
+            transcript_bytes = transcript_service.generate(
+                file_name=file.filename,
+                segments=bilingual_segments,
+                src_lang=src_label,
+                tgt_lang=tgt_label,
+            )
+            transcript_filename = f"bilingual_transcript_{os.path.splitext(file.filename)[0]}.docx"
+            transcript_base64 = base64.b64encode(transcript_bytes).decode("utf-8")
+
             return {
                 "transcription": stt_result,
                 "analysis": frontend_analysis,
                 "file_download": {
                     "filename": output_filename,
                     "content_base64": docx_base64,
+                    "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                },
+                "transcript_download": {
+                    "filename": transcript_filename,
+                    "content_base64": transcript_base64,
                     "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 }
             }

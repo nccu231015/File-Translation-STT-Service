@@ -21,7 +21,8 @@ export interface ProcessedRecord {
     summary: string;
     decisions: string[];
     actionItems: (string | ActionItem)[];
-    downloadUrl?: string;
+    downloadUrl?: string;     // Meeting minutes docx (blob URL)
+    transcriptUrl?: string;   // Bilingual transcript docx (blob URL)
 }
 
 interface VoiceContextType {
@@ -34,8 +35,19 @@ interface VoiceContextType {
 
 const VoiceContext = createContext<VoiceContextType | undefined>(undefined);
 
-/** IndexedDB key for a record's Word document blob */
+/** IndexedDB key for a record's meeting-minutes Word document */
 const docxKey = (id: string) => `${id}_docx`;
+/** IndexedDB key for a record's bilingual transcript Word document */
+const transcriptKey = (id: string) => `${id}_transcript`;
+
+/** Decode a base64 string into a Blob. */
+function _base64ToBlob(base64: string, mimeType?: string): Blob {
+    const mime = mimeType || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    const binary = window.atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return new Blob([bytes], { type: mime });
+}
 
 export function VoiceProvider({ children }: { children: ReactNode }) {
     const { user } = useUser();
@@ -53,7 +65,8 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
             return parsed.map((r: any) => ({
                 ...r,
                 processedAt: new Date(r.processedAt),
-                downloadUrl: undefined,   // blob URLs are session-only; restored from IndexedDB below
+                downloadUrl: undefined,    // blob URLs are session-only; restored from IndexedDB
+                transcriptUrl: undefined,  // restored from IndexedDB
             }));
         } catch {
             return [];
@@ -67,26 +80,28 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
     useEffect(() => { storageKeyRef.current = storageKey; });
 
     useEffect(() => {
-        // Strip downloadUrl before saving (session-only blob URL; binary lives in IndexedDB)
-        const serializable = records.map(r => ({ ...r, downloadUrl: undefined }));
+        // Strip blob URLs before saving (session-only; binaries live in IndexedDB)
+        const serializable = records.map(r => ({ ...r, downloadUrl: undefined, transcriptUrl: undefined }));
         localStorage.setItem(storageKeyRef.current, JSON.stringify(serializable));
     }, [records]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // ─── Restore Word blob URLs from IndexedDB on mount ──────────────────────────
     useEffect(() => {
         (async () => {
-            const updates: { id: string; downloadUrl: string }[] = [];
+            const updates: { id: string; downloadUrl?: string; transcriptUrl?: string }[] = [];
             for (const r of records) {
+                const upd: { id: string; downloadUrl?: string; transcriptUrl?: string } = { id: r.id };
                 const blob = await loadBlob(docxKey(r.id));
-                if (blob) {
-                    updates.push({ id: r.id, downloadUrl: URL.createObjectURL(blob) });
-                }
+                if (blob) upd.downloadUrl = URL.createObjectURL(blob);
+                const tBlob = await loadBlob(transcriptKey(r.id));
+                if (tBlob) upd.transcriptUrl = URL.createObjectURL(tBlob);
+                if (upd.downloadUrl || upd.transcriptUrl) updates.push(upd);
             }
             if (updates.length > 0) {
                 setRecords(prev =>
                     prev.map(r => {
                         const u = updates.find(x => x.id === r.id);
-                        return u ? { ...r, downloadUrl: u.downloadUrl } : r;
+                        return u ? { ...r, ...u } : r;
                     })
                 );
             }
@@ -105,25 +120,26 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
                 ...r,
                 processedAt: new Date(r.processedAt),
                 downloadUrl: undefined,
+                transcriptUrl: undefined,
             }));
             setRecords(newRecords);
 
-            // Restore Word blobs for newly loaded user's records
+            // Restore blobs for newly loaded user's records
             (async () => {
-                const updates: { id: string; downloadUrl: string }[] = [];
+                const updates: { id: string; downloadUrl?: string; transcriptUrl?: string }[] = [];
                 for (const r of newRecords) {
+                    const upd: { id: string; downloadUrl?: string; transcriptUrl?: string } = { id: r.id };
                     const blob = await loadBlob(docxKey(r.id));
-                    if (blob) {
-                        updates.push({ id: r.id, downloadUrl: URL.createObjectURL(blob) });
-                    }
+                    if (blob) upd.downloadUrl = URL.createObjectURL(blob);
+                    const tBlob = await loadBlob(transcriptKey(r.id));
+                    if (tBlob) upd.transcriptUrl = URL.createObjectURL(tBlob);
+                    if (upd.downloadUrl || upd.transcriptUrl) updates.push(upd);
                 }
                 if (updates.length > 0) {
-                    setRecords(prev =>
-                        prev.map(r => {
-                            const u = updates.find(x => x.id === r.id);
-                            return u ? { ...r, downloadUrl: u.downloadUrl } : r;
-                        })
-                    );
+                    setRecords(prev => prev.map(r => {
+                        const u = updates.find(x => x.id === r.id);
+                        return u ? { ...r, ...u } : r;
+                    }));
                 }
             })();
         } catch {
@@ -139,24 +155,28 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
             const data = await analyzeMeetingAudio(file);
             const analysis = data.analysis;
 
-            // Decode Base64 Word document and persist to IndexedDB
+            // Decode & persist meeting minutes docx
             let downloadUrl = '';
             const recordId = Date.now().toString();
 
             if (data.file_download?.content_base64) {
-                const binaryString = window.atob(data.file_download.content_base64);
-                const bytes = new Uint8Array(binaryString.length);
-                for (let i = 0; i < binaryString.length; i++) {
-                    bytes[i] = binaryString.charCodeAt(i);
-                }
-                const blob = new Blob([bytes], {
-                    type: data.file_download.mime_type ||
-                        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                });
-
-                // Persist Word blob to IndexedDB so download survives page refresh
+                const blob = _base64ToBlob(
+                    data.file_download.content_base64,
+                    data.file_download.mime_type,
+                );
                 await saveBlob(docxKey(recordId), blob);
                 downloadUrl = URL.createObjectURL(blob);
+            }
+
+            // Decode & persist bilingual transcript docx
+            let transcriptUrl = '';
+            if (data.transcript_download?.content_base64) {
+                const tBlob = _base64ToBlob(
+                    data.transcript_download.content_base64,
+                    data.transcript_download.mime_type,
+                );
+                await saveBlob(transcriptKey(recordId), tBlob);
+                transcriptUrl = URL.createObjectURL(tBlob);
             }
 
             const newRecord: ProcessedRecord = {
@@ -169,6 +189,7 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
                 decisions: analysis.decisions,
                 actionItems: analysis.action_items,
                 downloadUrl,
+                transcriptUrl,
             };
 
             setRecords(prev => [newRecord, ...prev]);
@@ -186,14 +207,12 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
     const removeRecord = (id: string) => {
         setRecords(prev => {
             const record = prev.find(r => r.id === id);
-            // Revoke the session blob URL to avoid memory leaks
-            if (record?.downloadUrl) {
-                URL.revokeObjectURL(record.downloadUrl);
-            }
+            if (record?.downloadUrl) URL.revokeObjectURL(record.downloadUrl);
+            if (record?.transcriptUrl) URL.revokeObjectURL(record.transcriptUrl);
             return prev.filter(r => r.id !== id);
         });
-        // Clean up the Word document binary from IndexedDB
         deleteBlob(docxKey(id)).catch(console.error);
+        deleteBlob(transcriptKey(id)).catch(console.error);
     };
 
     return (

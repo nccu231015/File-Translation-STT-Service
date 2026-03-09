@@ -196,11 +196,21 @@ export function VoiceInterface() {
                                 >
                                     <Trash2 className="size-4" />
                                 </Button>
+                                {/* Meeting minutes download */}
                                 {record.downloadUrl && (
                                     <a href={record.downloadUrl} download={`meeting_minutes_${record.fileName}.docx`}>
                                         <Button variant="outline" size="sm" className="gap-2">
                                             <Download className="size-4" />
-                                            匯出 (.docx)
+                                            摘要 (.docx)
+                                        </Button>
+                                    </a>
+                                )}
+                                {/* Bilingual transcript download */}
+                                {record.transcriptUrl && (
+                                    <a href={record.transcriptUrl} download={`bilingual_transcript_${record.fileName}.docx`}>
+                                        <Button variant="outline" size="sm" className="gap-2 border-emerald-300 text-emerald-700 hover:bg-emerald-50">
+                                            <FileText className="size-4" />
+                                            逐字稿 (.docx)
                                         </Button>
                                     </a>
                                 )}

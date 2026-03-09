@@ -293,5 +293,90 @@ class LLMService:
             return {"summary": "分析失敗", "decisions": [], "action_items": []}
 
 
+    def translate_segments(
+        self,
+        segments: list[dict],
+        detected_language: str,
+    ) -> list[dict]:
+        """
+        Translate Whisper segments to the paired language:
+          Chinese (zh / zh-TW / zh-CN)  →  English
+          English (en)                   →  Chinese (Traditional, Taiwan)
+          Other                          →  Chinese (Traditional, Taiwan)
+
+        Each segment dict has: {start, end, text}
+        Returns a list of {start, end, original, translated}.
+
+        Strategy: batch segments (≤30 per call) and use numbered lines so
+        the LLM output can be mapped 1-to-1 back to the original segments.
+        """
+        is_chinese = detected_language.lower().startswith("zh")
+        if is_chinese:
+            src_label = "Traditional Chinese"
+            tgt_label = "English"
+        else:
+            src_label = "English"
+            tgt_label = "Traditional Chinese (Taiwan)"
+
+        BATCH = 30
+        results: list[dict] = []
+
+        for batch_start in range(0, len(segments), BATCH):
+            batch = segments[batch_start: batch_start + BATCH]
+
+            # Build a numbered list for the LLM
+            numbered_lines = "\n".join(
+                f"{i + 1}. {seg['text'].strip()}"
+                for i, seg in enumerate(batch)
+            )
+
+            system_prompt = (
+                f"You are a professional translator. "
+                f"Translate each numbered line from {src_label} to {tgt_label}.\n"
+                "Rules:\n"
+                "- Keep the same numbering (1., 2., 3., …).\n"
+                "- Translate ONLY the text; do NOT add commentary or explanations.\n"
+                "- Output ONLY the numbered translated lines, nothing else.\n"
+                "- Preserve proper nouns, dates, and numbers as-is.\n"
+                f"- Target language: {tgt_label}."
+            )
+
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": numbered_lines},
+            ]
+
+            translated_lines: list[str] = [""] * len(batch)
+            try:
+                response = self.client.chat(model=self.model, messages=messages)
+                raw = response["message"]["content"].strip()
+
+                # Parse "N. translated text" lines
+                for line in raw.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    # Match lines starting with a number and period/dot
+                    m = re.match(r"^(\d+)[.、．]\s*(.*)", line)
+                    if m:
+                        idx = int(m.group(1)) - 1
+                        if 0 <= idx < len(batch):
+                            translated_lines[idx] = self.s2tw.convert(m.group(2).strip()) if not is_chinese else m.group(2).strip()
+
+            except Exception as e:
+                print(f"[LLM] translate_segments batch error: {e}", flush=True)
+
+            for i, seg in enumerate(batch):
+                results.append({
+                    "start": seg["start"],
+                    "end": seg["end"],
+                    "original": seg["text"].strip(),
+                    "translated": translated_lines[i],
+                })
+
+        print(f"[LLM] translate_segments complete: {len(results)} segments", flush=True)
+        return results
+
+
 # Global instance
 llm_service = LLMService()

@@ -2,7 +2,7 @@
 export interface STTResponse {
     transcription: {
         text: string;
-        segments?: any[]; // Keep flexible if we add segments later
+        segments?: any[];
         language?: string;
     };
     analysis: {
@@ -10,12 +10,18 @@ export interface STTResponse {
         decisions: string[];
         action_items: string[];
     };
-    llm_response?: string; // For chat mode
+    llm_response?: string;
     file_download?: {
         filename: string;
-        content?: string; // Legacy text content
-        content_base64?: string; // Base64 encoded binary content
-        mime_type?: string; // MIME type for download
+        content?: string;
+        content_base64?: string;
+        mime_type?: string;
+    };
+    /** Bilingual transcript Word document (base64 encoded) */
+    transcript_download?: {
+        filename: string;
+        content_base64?: string;
+        mime_type?: string;
     };
 }
 
