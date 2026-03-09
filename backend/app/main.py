@@ -291,11 +291,11 @@ async def transcribe_audio(
                 zh_d = str(safe_decisions[i]) if i < len(safe_decisions) else ""
                 en_d = str(en_decisions[i]) if i < len(en_decisions) else ""
                 if zh_d and en_d:
-                    frontend_decisions.append(f"{zh_d}\n[EN] {en_d}")
+                    frontend_decisions.append(f"{zh_d}\n{en_d}")
                 elif zh_d:
                     frontend_decisions.append(zh_d)
                 elif en_d:
-                    frontend_decisions.append(f"[EN] {en_d}")
+                    frontend_decisions.append(f"{en_d}")
 
             # Combine Action Items
             safe_action_items = analysis.get('action_items', [])
@@ -323,11 +323,11 @@ async def transcribe_audio(
                 en_str = _fmt_action(en_a) if en_a else ""
                 
                 if zh_str and en_str:
-                    frontend_actions.append(f"{zh_str}\n[EN] {en_str}")
+                    frontend_actions.append(f"{zh_str}\n{en_str}")
                 elif zh_str:
                     frontend_actions.append(zh_str)
                 elif en_str:
-                    frontend_actions.append(f"[EN] {en_str}")
+                    frontend_actions.append(f"{en_str}")
 
             # 3. Generate bilingual Word document
             minutes_service = MeetingMinutesDocxService()
