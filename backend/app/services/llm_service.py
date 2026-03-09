@@ -318,7 +318,7 @@ class LLMService:
             "- Keep the same JSON structure and keys exactly as-is.\n"
             "- Translate ONLY the values (strings and string items in lists).\n"
             "- For action_items, translate the 'task', 'owner', and 'deadline' fields.\n"
-            "- Keep proper nouns, names, and numbers unchanged.\n"
+            "- For 'owner' fields, translate job titles or roles into English (e.g. 'UI/UX 設計師' -> 'UI/UX Designer'). Only keep personal names (like 'John') unchanged.\n"
             "- Output ONLY valid JSON, nothing else.\n\n"
             f"Input JSON:\n{analysis_json}"
         )
