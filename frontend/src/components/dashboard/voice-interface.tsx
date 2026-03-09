@@ -224,7 +224,7 @@ export function VoiceInterface() {
                                 <FileText className="size-4 text-blue-600 mr-2" />
                                 會議摘要
                             </h4>
-                            <p className="text-slate-700 leading-relaxed pl-6 text-sm">
+                            <p className="text-slate-700 leading-relaxed pl-6 text-sm whitespace-pre-line">
                                 {record.summary}
                             </p>
                         </div>
@@ -240,7 +240,7 @@ export function VoiceInterface() {
                                     record.decisions.map((d: string, i: number) => (
                                         <div key={i} className="flex items-start gap-2 text-sm text-slate-700">
                                             <CheckCircle2 className="size-4 text-green-500 mt-0.5 shrink-0" />
-                                            <span>{typeof d === 'string' ? d : JSON.stringify(d)}</span>
+                                            <span className="whitespace-pre-line leading-relaxed">{typeof d === 'string' ? d : JSON.stringify(d)}</span>
                                         </div>
                                     ))
                                 ) : (
@@ -259,7 +259,7 @@ export function VoiceInterface() {
                                 {Array.isArray(record.actionItems) && record.actionItems.length > 0 ? (
                                     record.actionItems.map((item: any, i: number) => (
                                         <div key={i} className="bg-amber-50 p-3 rounded-lg border border-amber-100 flex items-start justify-between group">
-                                            <div className="text-sm text-slate-700">
+                                            <div className="text-sm text-slate-700 whitespace-pre-line leading-relaxed">
                                                 {typeof item === 'string' ? item : (
                                                     <span>{item.task} <span className="text-xs text-slate-400">({item.deadline})</span></span>
                                                 )}

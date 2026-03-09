@@ -223,14 +223,28 @@ async def transcribe_audio(
             print("Mode: Meeting - Analyzing Transcript in background...", flush=True)
             analysis = await run_in_threadpool(llm_service.analyze_meeting_transcript, user_text)
             
-            # 1. Prepare frontend summary and safe lists FIRST
-            # Combine objective and summary for the simplified frontend view
+            # 2. Translate analysis to English (for bilingual meeting minutes)
+            print("[Meeting] Translating analysis to English...", flush=True)
+            en_analysis = await run_in_threadpool(
+                llm_service.translate_analysis,
+                analysis,
+            )
+
+            # --- Bilingual Frontend Formatting ---
             frontend_summary = ""
-            if analysis.get('meeting_objective'):
-                frontend_summary += f"【會議目的】\n{analysis.get('meeting_objective')}\n\n"
+            if analysis.get('meeting_objective') or en_analysis.get('meeting_objective'):
+                frontend_summary += f"【會議目的 | Meeting Objective】\n"
+                if analysis.get('meeting_objective'):
+                    frontend_summary += f"{analysis.get('meeting_objective')}\n"
+                if en_analysis.get('meeting_objective'):
+                    frontend_summary += f"{en_analysis.get('meeting_objective')}\n"
+                frontend_summary += "\n"
             
             # Handle discussion_summary if it's a list (some LLMs output lists)
             disc_sum = analysis.get('discussion_summary', analysis.get('summary', ''))
+            en_disc_sum = en_analysis.get('discussion_summary', en_analysis.get('summary', ''))
+            
+            frontend_summary += f"【討論摘要 | Discussion Summary】\n"
             if isinstance(disc_sum, list):
                 try:
                     disc_text = ""
@@ -239,30 +253,81 @@ async def transcribe_audio(
                             disc_text += f"- {item.get('topic', '')}: {item.get('description', '')}\n"
                         else:
                             disc_text += f"- {str(item)}\n"
-                    frontend_summary += f"【討論摘要】\n{disc_text}"
+                    frontend_summary += f"{disc_text}\n"
                 except:
-                    frontend_summary += f"【討論摘要】\n{str(disc_sum)}"
-            else:
-                frontend_summary += f"【討論摘要】\n{disc_sum}"
+                    frontend_summary += f"{str(disc_sum)}\n"
+            elif disc_sum:
+                frontend_summary += f"{disc_sum}\n"
+                
+            if isinstance(en_disc_sum, list):
+                try:
+                    en_disc_text = ""
+                    for item in en_disc_sum:
+                        if isinstance(item, dict):
+                            en_disc_text += f"- {item.get('topic', '')}: {item.get('description', '')}\n"
+                        else:
+                            en_disc_text += f"- {str(item)}\n"
+                    frontend_summary += f"{en_disc_text}\n"
+                except:
+                    frontend_summary += f"{str(en_disc_sum)}\n"
+            elif en_disc_sum:
+                frontend_summary += f"{en_disc_sum}\n"
 
-            # Ensure lists are strictly lists to avoid bug where strings are iterated by char
+            # Combine Decisions
             safe_decisions = analysis.get('decisions', [])
             if not isinstance(safe_decisions, list):
                 if isinstance(safe_decisions, str):
                     safe_decisions = [safe_decisions]
                 else:
                     safe_decisions = []
+                    
+            frontend_decisions = []
+            en_decisions = en_analysis.get('decisions', [])
+            if not isinstance(en_decisions, list):
+                en_decisions = [en_decisions] if isinstance(en_decisions, str) else []
             
+            max_len = max(len(safe_decisions), len(en_decisions))
+            for i in range(max_len):
+                zh_d = str(safe_decisions[i]) if i < len(safe_decisions) else ""
+                en_d = str(en_decisions[i]) if i < len(en_decisions) else ""
+                if zh_d and en_d:
+                    frontend_decisions.append(f"{zh_d}\n[EN] {en_d}")
+                elif zh_d:
+                    frontend_decisions.append(zh_d)
+                elif en_d:
+                    frontend_decisions.append(f"[EN] {en_d}")
+
+            # Combine Action Items
             safe_action_items = analysis.get('action_items', [])
             if not isinstance(safe_action_items, list):
                 safe_action_items = []
-
-            # 2. Translate analysis to English (for bilingual meeting minutes)
-            print("[Meeting] Translating analysis to English...", flush=True)
-            en_analysis = await run_in_threadpool(
-                llm_service.translate_analysis,
-                analysis,
-            )
+                
+            frontend_actions = []
+            en_actions = en_analysis.get('action_items', [])
+            if not isinstance(en_actions, list):
+                en_actions = [en_actions] if isinstance(en_actions, str) else []
+                
+            max_len = max(len(safe_action_items), len(en_actions))
+            for i in range(max_len):
+                zh_a = safe_action_items[i] if i < len(safe_action_items) else ""
+                en_a = en_actions[i] if i < len(en_actions) else ""
+                
+                # If they are dicts, we could stringify them, but the frontend expects either string or {task, owner, deadline}
+                # Let's convert them to string to ensure safe rendering of bilingual content
+                def _fmt_action(a):
+                    if isinstance(a, dict):
+                        return f"[{a.get('owner', 'No Owner')}] {a.get('task', '')} ({a.get('deadline', '')})"
+                    return str(a)
+                
+                zh_str = _fmt_action(zh_a) if zh_a else ""
+                en_str = _fmt_action(en_a) if en_a else ""
+                
+                if zh_str and en_str:
+                    frontend_actions.append(f"{zh_str}\n[EN] {en_str}")
+                elif zh_str:
+                    frontend_actions.append(zh_str)
+                elif en_str:
+                    frontend_actions.append(f"[EN] {en_str}")
 
             # 3. Generate bilingual Word document
             minutes_service = MeetingMinutesDocxService()
@@ -278,8 +343,8 @@ async def transcribe_audio(
                 # English translations
                 en_meeting_objective=en_analysis.get('meeting_objective', ''),
                 en_discussion_summary=en_analysis.get('discussion_summary', ''),
-                en_decisions=en_analysis.get('decisions', []),
-                en_action_items=en_analysis.get('action_items', []),
+                en_decisions=en_decisions,
+                en_action_items=en_actions,
                 en_schedule_notes=en_analysis.get('schedule_notes', ''),
             )
             
@@ -290,9 +355,9 @@ async def transcribe_audio(
             docx_base64 = base64.b64encode(docx_bytes).decode('utf-8')
             
             frontend_analysis = {
-                "summary": frontend_summary,
-                "decisions": safe_decisions,
-                "action_items": safe_action_items
+                "summary": frontend_summary.strip(),
+                "decisions": frontend_decisions,
+                "action_items": frontend_actions
             }
 
             # 3. Generate bilingual transcript (segments → translate → docx)
