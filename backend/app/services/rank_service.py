@@ -75,7 +75,8 @@ _TITLE_TO_RANK: dict[str, int] = {
 }
 
 # Minimum rank level required to view subordinate records
-_MANAGER_RANK_THRESHOLD = 4
+# Modified: Anyone who potentially has lower-ranked subordinates (rank < 9) can access the view.
+_MANAGER_RANK_THRESHOLD = 8
 
 
 def get_rank(duty_name: str) -> int | None:
