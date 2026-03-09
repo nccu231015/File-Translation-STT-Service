@@ -3,9 +3,12 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 
 export interface User {
-    username: string; // 工號 — used as namespace key for localStorage
-    name: string;     // 姓名
-    dpt: string;      // 部門
+    username: string;       // 工號 — used as namespace key for localStorage
+    name: string;           // 姓名
+    dpt: string;            // 部門
+    title?: string;         // 職稱 (from MySQL)
+    rank?: number | null;   // 職級 1~9 (1 = highest, null = unknown)
+    canViewRecords?: boolean; // 是否有查閱員工紀錄的權限
 }
 
 interface UserContextType {

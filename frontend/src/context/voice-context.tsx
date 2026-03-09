@@ -194,6 +194,33 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
 
             setRecords(prev => [newRecord, ...prev]);
             toast.success('會議分析完成');
+
+            // ── Push metadata to backend for manager preview (non-blocking) ──
+            if (user?.username) {
+                const decisionsText = Array.isArray(analysis.decisions)
+                    ? analysis.decisions.join('\n')
+                    : String(analysis.decisions ?? '');
+                const actionText = Array.isArray(analysis.action_items)
+                    ? analysis.action_items.map((a: any) =>
+                        typeof a === 'object'
+                            ? `[${a.owner ?? ''}] ${a.task ?? ''}${a.deadline ? ` (${a.deadline})` : ''}`
+                            : String(a)
+                    ).join('\n')
+                    : String(analysis.action_items ?? '');
+
+                fetch(`${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'}/api/employee-records`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
+                    body: JSON.stringify({
+                        empid: user.username,
+                        type: 'voice',
+                        file_name: file.name,
+                        summary: analysis.summary ?? '',
+                        decisions: decisionsText,
+                        action_items: actionText,
+                    }),
+                }).catch(e => console.warn('[VoiceContext] Failed to sync record to backend:', e));
+            }
         } catch (error) {
             console.error(error);
             toast.error('處理失敗');

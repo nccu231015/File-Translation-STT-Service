@@ -2,6 +2,7 @@ import os
 import shutil
 import tempfile
 import httpx
+import json
 from fastapi import FastAPI, UploadFile, File, HTTPException, Body, Response, Form, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from app.services.stt_service import stt_service
@@ -9,13 +10,24 @@ from app.services.llm_service import llm_service
 from app.services.pdf_service import pdf_service
 from app.services.meeting_minutes_docx import MeetingMinutesDocxService
 from app.services.transcript_docx_service import TranscriptDocxService
+from app.services.employee_db import (
+    get_employee, get_subordinates,
+    save_employee_record, get_employee_records,
+    ensure_records_table,
+)
+from app.services.rank_service import get_rank, has_view_permission
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from typing import Optional
 
 app = FastAPI()
 
-# Trigger reload for env update
+
+@app.on_event("startup")
+async def startup_event():
+    """Ensure helper DB tables exist on startup."""
+    await ensure_records_table()
 
 
 # Middleware to help Ngrok bypass browser warning
@@ -44,8 +56,8 @@ class LoginRequest(BaseModel):
 @app.post("/api/login")
 async def login(body: LoginRequest):
     """
-    Proxy to LDAP login API. Validates employee credentials and returns
-    user info (username, name, dpt) on success, or 401 on failure.
+    Proxy to LDAP login API. On success, enriches response with employee
+    data from MySQL (title, rank, canViewRecords).
     """
     LDAP_URL = "http://api.jebsee.com.tw:8081/api/LDAPLogin"
     try:
@@ -61,11 +73,105 @@ async def login(body: LoginRequest):
     if str(data.get("chkIdentity", "false")).lower() != "true":
         raise HTTPException(status_code=401, detail=data.get("msg", "登入失敗"))
 
+    sso_username = data.get("username", body.username)
+
+    # ── Enrich with MySQL employee data ────────────────────────────────────
+    emp = await get_employee(sso_username)
+    if emp:
+        title = emp.get("DUTYNAME", "")
+        dept  = emp.get("DEPTNAME", data.get("dpt", ""))
+        name  = emp.get("EMPNAME", data.get("name", ""))
+    else:
+        # MySQL lookup failed — fall back to SSO data, no manager rights
+        print(f"[Login] Employee {sso_username} not found in MySQL, using SSO data.", flush=True)
+        title = ""
+        dept  = data.get("dpt", "")
+        name  = data.get("name", "")
+
+    rank = get_rank(title)
+    can_view = has_view_permission(rank)
+
+    print(
+        f"[Login] {sso_username} | {name} | {dept} | {title} | rank={rank} | canView={can_view}",
+        flush=True,
+    )
+
     return {
-        "username": data.get("username", body.username),
-        "name": data.get("name", ""),
-        "dpt": data.get("dpt", ""),
+        "username": sso_username,
+        "name": name,
+        "dpt": dept,
+        "title": title,
+        "rank": rank,
+        "canViewRecords": can_view,
     }
+
+
+@app.get("/api/records/{empid}")
+async def get_records_for_manager(empid: str):
+    """
+    Return a list of employees whose records the given manager can view.
+    Only employees in the same department with a lower authority rank are returned.
+    Raises 403 if the requester does not have view permission.
+    """
+    requester = await get_employee(empid)
+    if not requester:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    rank = get_rank(requester.get("DUTYNAME", ""))
+    if not has_view_permission(rank):
+        raise HTTPException(status_code=403, detail="No permission to view employee records")
+
+    dept = requester.get("DEPTNAME", "")
+    subordinates = await get_subordinates(empid, dept, rank)
+
+    return {
+        "requester": {
+            "empid": empid,
+            "name": requester.get("EMPNAME", ""),
+            "dept": dept,
+            "title": requester.get("DUTYNAME", ""),
+            "rank": rank,
+        },
+        "employees": subordinates,
+    }
+
+
+class SaveRecordRequest(BaseModel):
+    empid: str
+    type: str           # 'voice' | 'translation'
+    file_name: str
+    summary: Optional[str] = ""
+    decisions: Optional[str] = ""
+    action_items: Optional[str] = ""
+
+
+@app.post("/api/employee-records")
+async def create_employee_record(body: SaveRecordRequest):
+    """
+    Called by the frontend after completing a voice/translation process.
+    Stores text metadata so managers can preview it later.
+    """
+    record_id = await save_employee_record(
+        empid=body.empid,
+        record_type=body.type,
+        file_name=body.file_name,
+        summary=body.summary or "",
+        decisions=body.decisions or "",
+        action_items=body.action_items or "",
+    )
+    if record_id is None:
+        raise HTTPException(status_code=500, detail="Failed to save record")
+    return {"id": record_id, "success": True}
+
+
+@app.get("/api/employee-records/{empid}")
+async def fetch_employee_records(empid: str):
+    """
+    Return the usage records of a specific employee.
+    Called by managers viewing the records browser.
+    """
+    records = await get_employee_records(empid)
+    return {"empid": empid, "records": records}
 
 
 @app.get("/")

@@ -7,11 +7,12 @@ import {
     FileBarChart,
     Mic,
     LogOut,
-    User,
+    User as UserIcon,
     Home,
     Settings,
     HelpCircle,
-    Languages
+    Languages,
+    Users,
 } from 'lucide-react';
 import {
     DropdownMenu,
@@ -27,20 +28,15 @@ import { ReportInterface } from './report-interface';
 import { VoiceInterface } from './voice-interface';
 import { DocumentTranslation } from './document-translation';
 import { DashboardHome } from './dashboard-home';
-
-// Types
-export interface User {
-    username: string;
-    name: string;
-    dpt: string;
-}
+import { RecordsBrowser } from './records-browser';
+import { type User } from '@/context/user-context';
 
 interface MainDashboardProps {
     user: User;
     onLogout: () => void;
 }
 
-type ActiveView = 'home' | 'qa' | 'report' | 'translation' | 'voice';
+type ActiveView = 'home' | 'qa' | 'report' | 'translation' | 'voice' | 'records';
 
 export function MainDashboard({ user, onLogout }: MainDashboardProps) {
     const [activeView, setActiveView] = useState<ActiveView>('home');
@@ -51,6 +47,10 @@ export function MainDashboard({ user, onLogout }: MainDashboardProps) {
         { id: 'report' as const, label: '報表生成', icon: FileBarChart },
         { id: 'translation' as const, label: '文件翻譯', icon: Languages },
         { id: 'voice' as const, label: '語音處理', icon: Mic },
+        // Conditionally show records tab for managers
+        ...(user.canViewRecords
+            ? [{ id: 'records' as const, label: '員工紀錄', icon: Users }]
+            : []),
     ];
 
     return (
@@ -85,12 +85,13 @@ export function MainDashboard({ user, onLogout }: MainDashboardProps) {
                                 <DropdownMenuLabel>
                                     <div className="py-1">
                                         <p className="font-semibold text-sm">{user.name || user.username}</p>
-                                        <p className="text-xs text-slate-500 truncate">{user.dpt} | {user.username}</p>
+                                        <p className="text-xs text-slate-500 truncate">{user.title ? `${user.title} | ` : ''}{user.dpt}</p>
+                                        <p className="text-xs text-slate-400 font-mono">#{user.username}</p>
                                     </div>
                                 </DropdownMenuLabel>
                                 <DropdownMenuSeparator />
                                 <DropdownMenuItem className="cursor-pointer">
-                                    <User className="size-4 mr-2 text-slate-500" />
+                                    <UserIcon className="size-4 mr-2 text-slate-500" />
                                     個人資料
                                 </DropdownMenuItem>
                                 <DropdownMenuItem className="cursor-pointer">
@@ -146,6 +147,7 @@ export function MainDashboard({ user, onLogout }: MainDashboardProps) {
                 {activeView === 'report' && <ReportInterface />}
                 {activeView === 'translation' && <DocumentTranslation />}
                 {activeView === 'voice' && <VoiceInterface />}
+                {activeView === 'records' && user.canViewRecords && <RecordsBrowser />}
             </main>
 
             {/* Footer */}
