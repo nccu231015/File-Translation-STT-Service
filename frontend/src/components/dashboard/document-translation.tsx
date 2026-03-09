@@ -39,9 +39,11 @@ export function DocumentTranslation() {
     const [sourceLang, setSourceLang] = useState('');
     const [targetLang, setTargetLang] = useState('');
     const [isDragging, setIsDragging] = useState(false);
-    const [debugMode, setDebugMode] = useState(false); // Add debug state
+    const [debugMode, setDebugMode] = useState(false);
     const [showPasswordDialog, setShowPasswordDialog] = useState(false);
     const [password, setPassword] = useState('');
+    // Files staged before the user has picked a target language
+    const [pendingFiles, setPendingFiles] = useState<File[]>([]);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const handleDebugToggle = (checked: boolean) => {
@@ -94,18 +96,31 @@ export function DocumentTranslation() {
     };
 
     const processFiles = (fileList: File[]) => {
-        if (!targetLang) {
-            toast.warning("請先選擇目標語言");
-            return;
-        }
-
         const pdfFiles = fileList.filter(file => file.type === 'application/pdf');
         if (pdfFiles.length === 0 && fileList.length > 0) {
-            toast.error("僅支援 PDF 檔案");
+            toast.error('僅支援 PDF 檔案');
+            return;
+        }
+        if (pdfFiles.length === 0) return;
+
+        if (!targetLang) {
+            // Language not yet selected — stage the files and prompt the user
+            setPendingFiles(prev => [...prev, ...pdfFiles]);
+            toast.info(`已暫存 ${pdfFiles.length} 個檔案，請選擇目標語言後自動開始翻譯`);
             return;
         }
 
         addFiles(pdfFiles, sourceLang, targetLang, debugMode);
+    };
+
+    // When the user finally picks a target language, flush any pending files
+    const handleTargetLangChange = (lang: string) => {
+        setTargetLang(lang);
+        if (pendingFiles.length > 0) {
+            addFiles(pendingFiles, sourceLang, lang, debugMode);
+            setPendingFiles([]);
+            toast.success(`開始翻譯 ${pendingFiles.length} 個已暫存的檔案`);
+        }
     };
 
     const formatFileSize = (bytes: number) => {
@@ -151,7 +166,7 @@ export function DocumentTranslation() {
 
                         <div className="space-y-2">
                             <Label htmlFor="targetLang">目標語言</Label>
-                            <Select value={targetLang} onValueChange={setTargetLang}>
+                            <Select value={targetLang} onValueChange={handleTargetLangChange}>
                                 <SelectTrigger id="targetLang">
                                     <SelectValue placeholder="選擇目標語言" />
                                 </SelectTrigger>
@@ -225,23 +240,15 @@ export function DocumentTranslation() {
                         onDragLeave={handleDragLeave}
                         onDrop={handleDrop}
                         className={`
-              border-2 border-dashed rounded-lg p-12 text-center transition-all
+              border-2 border-dashed rounded-lg p-12 text-center transition-all cursor-pointer
               ${isDragging
                                 ? 'border-blue-600 bg-blue-50'
-                                : 'border-slate-300 hover:border-slate-400'
-                            }
-              ${!targetLang
-                                ? 'opacity-50 cursor-not-allowed'
-                                : 'cursor-pointer'
+                                : 'border-slate-300 hover:border-blue-400 hover:bg-slate-50'
                             }
             `}
                         onClick={(e) => {
                             e.stopPropagation();
-                            if (targetLang) {
-                                fileInputRef.current?.click();
-                            } else {
-                                toast.warning("請先選擇目標語言");
-                            }
+                            fileInputRef.current?.click();
                         }}
                     >
                         <input
@@ -254,21 +261,20 @@ export function DocumentTranslation() {
                                 handleFileSelect(e);
                                 e.target.value = '';
                             }}
-                            disabled={!targetLang}
                         />
 
                         <Upload className="size-12 mx-auto mb-4 text-slate-400" />
 
-                        {!targetLang ? (
-                            <div className="space-y-2">
-                                <p className="font-medium text-slate-600">請先選擇目標語言</p>
-                            </div>
-                        ) : (
-                            <div className="space-y-2">
-                                <p className="font-medium text-slate-900">拖放 PDF 文件到此處</p>
-                                <p className="text-sm text-slate-500">或點擊選擇文件上傳</p>
-                            </div>
-                        )}
+                        <div className="space-y-2">
+                            <p className="font-medium text-slate-900">拖放 PDF 文件到此處</p>
+                            <p className="text-sm text-slate-500">或點擊選擇文件上傳</p>
+                            {!targetLang && pendingFiles.length === 0 && (
+                                <p className="text-xs text-amber-600 mt-2">⚠ 請選擇目標語言（可先上傳，選完語言後自動翻譯）</p>
+                            )}
+                            {pendingFiles.length > 0 && (
+                                <p className="text-xs text-blue-600 mt-2">⏳ 已暫存 {pendingFiles.length} 個檔案，選擇目標語言即開始翻譯</p>
+                            )}
+                        </div>
                     </div>
                 </CardContent>
             </Card>

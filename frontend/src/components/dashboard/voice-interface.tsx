@@ -23,6 +23,7 @@ import { useVoice } from '@/context/voice-context';
 export function VoiceInterface() {
     const { isProcessing, processingFilename, records, processAudio, removeRecord } = useVoice();
     const [selectedFile, setSelectedFile] = useState<File | null>(null);
+    const [isDragging, setIsDragging] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -40,6 +41,33 @@ export function VoiceInterface() {
         if (!selectedFile) return;
         await processAudio(selectedFile);
         setSelectedFile(null);
+    };
+
+    const handleDragOver = (e: React.DragEvent) => {
+        e.preventDefault();
+        setIsDragging(true);
+    };
+
+    const handleDragLeave = (e: React.DragEvent) => {
+        e.preventDefault();
+        setIsDragging(false);
+    };
+
+    const handleDrop = (e: React.DragEvent) => {
+        e.preventDefault();
+        setIsDragging(false);
+        const file = e.dataTransfer.files[0];
+        if (file && file.type.startsWith('audio/')) {
+            setSelectedFile(file);
+        } else if (file) {
+            // Try accepting by extension for formats browsers may not type correctly
+            const ext = file.name.split('.').pop()?.toLowerCase();
+            if (['mp3', 'wav', 'm4a', 'ogg', 'flac', 'aac', 'webm'].includes(ext || '')) {
+                setSelectedFile(file);
+            } else {
+                alert('請上傳音訊檔案（WAV, MP3, M4A 等）');
+            }
+        }
     };
 
     const deleteRecord = (id: string) => {
@@ -86,7 +114,17 @@ export function VoiceInterface() {
                     <CardDescription>支援 WAV, MP3, M4A 格式</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                    <div className="border-2 border-dashed border-slate-300 rounded-lg p-8 text-center hover:border-blue-400 transition-colors">
+                    <div
+                        onDragOver={handleDragOver}
+                        onDragLeave={handleDragLeave}
+                        onDrop={handleDrop}
+                        onClick={() => fileInputRef.current?.click()}
+                        className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors cursor-pointer
+                            ${isDragging
+                                ? 'border-blue-500 bg-blue-50'
+                                : 'border-slate-300 hover:border-blue-400 hover:bg-slate-50'
+                            }`}
+                    >
                         <input
                             ref={fileInputRef}
                             type="file"
@@ -95,10 +133,9 @@ export function VoiceInterface() {
                             className="hidden"
                             id="audio-upload"
                         />
-                        <label htmlFor="audio-upload" className="cursor-pointer">
-                            <FileAudio className="size-12 mx-auto mb-3 text-slate-400" />
-                            <p className="font-medium mb-1">點擊上傳或拖放音訊檔案</p>
-                        </label>
+                        <FileAudio className={`size-12 mx-auto mb-3 ${isDragging ? 'text-blue-500' : 'text-slate-400'}`} />
+                        <p className="font-medium mb-1">點擊上傳或拖放音訊檔案</p>
+                        <p className="text-xs text-slate-400 mt-1">WAV &bull; MP3 &bull; M4A &bull; OGG &bull; FLAC</p>
                     </div>
 
                     {/* Show selected file ready for upload */}
