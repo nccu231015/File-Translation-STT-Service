@@ -101,8 +101,12 @@ class PDFService:
                 "Translator. Output translation only. Fluent English. No original text.\n"
                 "RULES:\n"
                 "1. If 'Target Text' is the START of a split phrase, translate the WHOLE phrase utilizing the 'Page Context' to complete the meaning.\n"
-                "2. If 'Target Text' is a meaningless tail/end fragment (e.g., '料)', '教，', or 'ing') that cannot stand alone, output EXACTLY '<SKIP>'.\n"
-                "3. Ensure the translation of the 'Target Text' is coherent within the provided context, avoiding literal translations of meaningless isolated characters."
+                "2. If 'Target Text' is a meaningless tail/end fragment that cannot stand alone, output EXACTLY '<SKIP>'.\n"
+                "3. Avoid literal translations of meaningless isolated characters.\n"
+                "EXAMPLES:\n"
+                "- Target Text: \"教，模型調教頻率為每個月進行\"\n  Output: \", and the model tuning is performed monthly.\" (DO NOT output 'Teaching')\n"
+                "- Target Text: \"料)\"\n  Output: \"<SKIP>\"\n"
+                "- Target Text: \"C.問題根因 (default 呈現本月的根因統計, highlight 前五大根因及其原始資\"\n  Output: \"C. Root Cause (default: display this month's root-cause statistics, highlighting the top five root causes and their original data\"\n"
             )
 
         messages = [
