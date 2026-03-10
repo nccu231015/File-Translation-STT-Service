@@ -343,6 +343,13 @@ class PDFLayoutPreservingService:
                         )
                         if not translated_text or not translated_text.strip():
                             continue
+                            
+                        # Intercept the <SKIP> token from LLM for completely meaningless fragments
+                        if "<SKIP>" in translated_text:
+                            translated_text = translated_text.replace("<SKIP>", "").strip()
+                            if not translated_text:
+                                print(f"[PDF Layout] Skipping meaningless fragment: '{item['text']}'", flush=True)
+                                continue
                         if (
                             len(item["text"]) > 10
                             and len(translated_text.strip()) < 2

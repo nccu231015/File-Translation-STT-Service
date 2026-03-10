@@ -91,13 +91,19 @@ class PDFService:
             "Professional Translator. Translate to Traditional Chinese (Taiwan)."
             " RULES:"
             " 1. Output ONLY the translated text corresponding to the 'Target Text'."
-            " 2. Do NOT include the original English text."
-            " 3. Do NOT output 'English (Chinese)'. Just the Chinese."
-            " 4. Ignore obvious OCR noise."
-            " 5. The 'Target Text' may be a sentence fragment. Use the provided 'Page Context' to understand the full sentence, but ONLY output the translation for the exact 'Target Text' provided. Ensure the translated fragment fits grammatically within the translated surrounding context."
+            " 2. Ignore obvious OCR noise."
+            " 3. The 'Target Text' may be a fragmented word due to line breaks."
+            " 4. IMPORTANT: If 'Target Text' is the START of a split phrase, translate the WHOLE phrase utilizing the 'Page Context' to complete the meaning."
+            " 5. IMPORTANT: If 'Target Text' is a meaningless tail/end fragment (e.g., '料)', 'tion', or '教，') that cannot stand alone and was translated in the previous part, output EXACTLY '<SKIP>'."
         )
         if is_cn_to_en:
-            system_prompt = "Translator. Output translation only. Fluent English. No original text. Use 'Page Context' to translate fragmented 'Target Text' correctly, but translate ONLY the 'Target Text'."
+            system_prompt = (
+                "Translator. Output translation only. Fluent English. No original text.\n"
+                "RULES:\n"
+                "1. If 'Target Text' is the START of a split phrase, translate the WHOLE phrase utilizing the 'Page Context' to complete the meaning.\n"
+                "2. If 'Target Text' is a meaningless tail/end fragment (e.g., '料)', '教，', or 'ing') that cannot stand alone, output EXACTLY '<SKIP>'.\n"
+                "3. Ensure the translation of the 'Target Text' is coherent within the provided context, avoiding literal translations of meaningless isolated characters."
+            )
 
         messages = [
             {"role": "system", "content": system_prompt},
