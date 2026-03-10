@@ -92,5 +92,5 @@ class STTService:
 
 
 # Global instance
-# Using "large-v3" model for maximum accuracy (requires GPU)
-stt_service = STTService(model_size="large-v3")
+# Changed to "medium" model as requested
+stt_service = STTService(model_size="medium")
