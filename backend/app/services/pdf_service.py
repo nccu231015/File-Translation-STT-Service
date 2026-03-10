@@ -17,6 +17,7 @@ class PDFService:
         print("[PDF Service] Initializing with DocLayout-YOLO...", flush=True)
         self.layout_translator = PDFLayoutPreservingService(
             translate_func=self._translate_ollama,
+            translate_batch_func=self._translate_batch_ollama,
             layout_detector=PDFLayoutDetectorYOLO()
         )
 
@@ -164,6 +165,114 @@ class PDFService:
                     print(f"  [Ollama] Error (Attempt {attempt+1}): {e}", flush=True)
         
         return text
+
+    async def _translate_batch_ollama(self, texts: list, target_lang: str = "zh-TW", context: str = "") -> list:
+        """
+        Batch-translates a list of texts in a single Ollama API call.
+        Returns a list of translations in the same order.
+        Falls back to individual translation for any missing entries.
+        """
+        if not texts:
+            return []
+
+        base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        api_url = f"{base_url.rstrip('/')}/api/chat"
+        is_cn_to_en = target_lang.lower() in ['en', 'en-us', 'en-gb']
+
+        # Build numbered input using ##N## as delimiter
+        numbered_input = "\n".join(f"##{i+1}## {t}" for i, t in enumerate(texts))
+
+        if is_cn_to_en:
+            system_prompt = (
+                "Batch Translator. Translate each numbered item from Chinese to fluent English.\n"
+                "RULES:\n"
+                "1. Respond ONLY with translations. No commentary, no original text.\n"
+                "2. Preserve the numbering format EXACTLY: ##N## [translation]\n"
+                "3. Each item on its own line. Do NOT merge or skip numbers.\n"
+                "4. If an item is a meaningless fragment, output: ##N## <SKIP>\n"
+                "5. If an item starts mid-word/mid-phrase, use the Page Context to complete its meaning.\n"
+                "EXAMPLE OUTPUT FORMAT:\n"
+                "##1## Root Cause Analysis\n"
+                "##2## <SKIP>\n"
+                "##3## The model tuning is performed monthly.\n"
+            )
+        else:
+            system_prompt = (
+                "批次翻譯員。將每個編號項目翻譯成繁體中文（台灣）。\n"
+                "規則：\n"
+                "1. 只輸出翻譯結果，不要輸出原文或任何說明。\n"
+                "2. 嚴格保留編號格式：##N## [翻譯]\n"
+                "3. 每個項目獨立一行，不得合併或跳過編號。\n"
+                "4. 若某項目是無法單獨成立的碎片詞尾，輸出：##N## <SKIP>\n"
+                "範例輸出格式：\n"
+                "##1## 根因分析\n"
+                "##2## <SKIP>\n"
+                "##3## 模型調教每月執行一次。\n"
+            )
+
+        messages = [{"role": "system", "content": system_prompt}]
+        if context:
+            messages.append({"role": "user", "content": f"Page Context:\n{context[:3000]}"})
+        messages.append({"role": "user", "content": f"Translate the following:\n{numbered_input}"})
+
+        total = len(texts)
+        print(f"  [Batch] Sending {total} blocks in 1 API call...", flush=True)
+
+        max_retries = 2
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            for attempt in range(max_retries):
+                try:
+                    r = await client.post(
+                        api_url,
+                        json={
+                            "model": self.ollama_model,
+                            "messages": messages,
+                            "stream": False,
+                            "options": {"temperature": 0.1, "num_predict": 8192, "top_p": 0.9},
+                        }
+                    )
+                    if r.status_code == 200:
+                        raw_out = self._clean_llm_response(
+                            r.json().get("message", {}).get("content", "")
+                        )
+                        # Parse ##N## format with regex
+                        parsed = {}
+                        for m in re.finditer(r'##(\d+)##\s*(.*?)(?=\n##\d+##|\Z)', raw_out, re.DOTALL):
+                            idx = int(m.group(1))
+                            val = m.group(2).strip()
+                            parsed[idx] = val
+
+                        print(f"  [Batch] Parsed {len(parsed)}/{total} translations.", flush=True)
+
+                        results = []
+                        fallback_indices = []
+                        for i, original_text in enumerate(texts):
+                            n = i + 1
+                            if n in parsed:
+                                translation = parsed[n]
+                                if target_lang == "zh-TW" and "<SKIP>" not in translation:
+                                    translation = self.s2tw.convert(translation)
+                                results.append(translation)
+                            else:
+                                results.append(None)
+                                fallback_indices.append(i)
+
+                        # Fallback: individually translate any missing blocks
+                        if fallback_indices:
+                            print(f"  [Batch] Fallback for {len(fallback_indices)} missing blocks.", flush=True)
+                            for fi in fallback_indices:
+                                fallback_result = await self._translate_ollama(texts[fi], target_lang, context)
+                                results[fi] = fallback_result
+
+                        return results
+                    else:
+                        print(f"  [Batch] Failed: {r.status_code}", flush=True)
+                except Exception as e:
+                    print(f"  [Batch] Error attempt {attempt+1}: {e}", flush=True)
+
+        # Full fallback: translate individually
+        print("  [Batch] Full fallback to individual translation.", flush=True)
+        return [await self._translate_ollama(t, target_lang, context) for t in texts]
 
     async def _translate_with_chunking(self, text: str, target_lang: str, context: str, api_url: str) -> str:
         """

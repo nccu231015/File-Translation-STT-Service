@@ -23,8 +23,9 @@ class PDFLayoutPreservingService:
     Final pages are merged in page-number order.
     """
 
-    def __init__(self, translate_func: Callable[[str, str, str], str], layout_detector=None):
+    def __init__(self, translate_func: Callable[[str, str, str], str], translate_batch_func=None, layout_detector=None):
         self.translate_func = translate_func
+        self.translate_batch_func = translate_batch_func
         self.layout_detector = layout_detector
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -331,25 +332,37 @@ class PDFLayoutPreservingService:
                         except Exception:
                             pass
 
-                # ── PHASE 2: Translate & Render ─────────────────────────────
+                # ── PHASE 2: Translate (Batch) & Render ──────────────────────
+                n_blocks = len(processed_queue)
                 print(
-                    f"[PDF Layout] Page {page_num+1}: Translating {len(processed_queue)} blocks...",
+                    f"[PDF Layout] Page {page_num+1}: Batch-translating {n_blocks} blocks...",
                     flush=True,
                 )
-                for i, item in enumerate(processed_queue):
+
+                all_texts = [item["text"] for item in processed_queue]
+
+                # Use batch func if available, otherwise fall back to sequential
+                if self.translate_batch_func and n_blocks > 1:
                     try:
-                        translated_text = await self.translate_func(
-                            item["text"], target_lang, page_context
-                        )
+                        translations = await self.translate_batch_func(all_texts, target_lang, page_context)
+                    except Exception as batch_err:
+                        print(f"[PDF Layout] Batch translate error, falling back: {batch_err}", flush=True)
+                        translations = [await self.translate_func(t, target_lang, page_context) for t in all_texts]
+                else:
+                    translations = [await self.translate_func(t, target_lang, page_context) for t in all_texts]
+
+                for i, (item, translated_text) in enumerate(zip(processed_queue, translations)):
+                    try:
                         if not translated_text or not translated_text.strip():
                             continue
-                            
-                        # Intercept the <SKIP> token from LLM for completely meaningless fragments
+
+                        # Intercept the <SKIP> token from LLM for meaningless fragments
                         if "<SKIP>" in translated_text:
                             translated_text = translated_text.replace("<SKIP>", "").strip()
                             if not translated_text:
-                                print(f"[PDF Layout] Skipping meaningless fragment: '{item['text']}'", flush=True)
+                                print(f"[PDF Layout] Skipping fragment: '{item['text']}'", flush=True)
                                 continue
+
                         if (
                             len(item["text"]) > 10
                             and len(translated_text.strip()) < 2
