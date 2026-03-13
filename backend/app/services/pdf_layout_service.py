@@ -528,8 +528,7 @@ class PDFLayoutPreservingService:
                     fontsize=fs, 
                     fontname=font_name,
                     color=format_info["color"],
-                    align=target_align,
-                    warn=False
+                    align=target_align
                 )
                 if rc >= 0:
                     return
@@ -544,10 +543,11 @@ class PDFLayoutPreservingService:
             font_weight = "bold" if format_info.get("bold") else "normal"
             text_align = format_info.get("align", "left")
 
+            safe_text = text.replace("<","&lt;").replace(">","&gt;").replace("\n","<br/>")
             html = (
                 f'<div style="font-family: {font_family}; color: {color_hex}; '
                 f'font-weight: {font_weight}; text-align: {text_align}; line-height: 1.1;">'
-                f'{text.replace("<","&lt;").replace(">","&gt;").replace("\\n","<br/>")}</div>'
+                f'{safe_text}</div>'
             )
             page.insert_htmlbox(rect, html, css="div { font-size: 100%; }", scale_low=0.1)
         except Exception:
