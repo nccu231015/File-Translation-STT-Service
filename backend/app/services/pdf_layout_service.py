@@ -136,7 +136,10 @@ class PDFLayoutPreservingService:
             PROTECTED_TYPES = {"figure", "table", "equation", "formula"}
             protected_rects_pdf = []
             for b in layout_blocks:
-                if b.type.lower() in PROTECTED_TYPES:
+                # Only protect if confidence is high enough (e.g. > 0.45).
+                # This prevents low-confidence misclassifications (like a single line of text 
+                # being mistaken for a 'table') from blocking translation.
+                if b.type.lower() in PROTECTED_TYPES and b.confidence > 0.45:
                     pdf_rect = self.layout_detector.pixel_to_pdf_rect(
                         b.bbox, page, b.page_width, b.page_height
                     )
