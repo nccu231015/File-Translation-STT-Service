@@ -64,7 +64,7 @@ class PDFLayoutDetectorYOLO:
             'table_footnote': 'Text',
             'isolate_formula': 'Formula',  # NEW: Formulas should NOT be translated
             'formula_caption': 'Text',
-            'abandon': 'Abandon'  # NEW: Skip these regions
+            'abandon': 'Text'  # Treat headers/footers as normal text for translation
         }
         
         # Load model following official pattern

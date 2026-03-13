@@ -498,54 +498,58 @@ class PDFLayoutPreservingService:
         block_type: str = "text",
     ):
         if format_info is None:
-            format_info = {"font": "helv", "fontsize": 12, "color": (0, 0, 0)}
+            format_info = {"font": "helv", "fontsize": 11, "color": (0, 0, 0), "bold": False, "align": "left"}
 
         is_chinese = any("\u4e00" <= c <= "\u9fff" for c in text)
-        r, g, b = format_info["color"]
-        color_hex = f"#{int(r*255):02x}{int(g*255):02x}{int(b*255):02x}"
-        css_font_size = "85%" if (target_lang and target_lang.lower().startswith("en")) else "100%"
+        
+        # ── Step 1: Font Selection ───────────────────────────────────────────
+        # For Word-friendly PDFs, CID fonts (china-t) are better than htmlbox fragments
+        if is_chinese:
+            font_name = "china-t"
+        else:
+            font_name = "helv-b" if format_info.get("bold") else "helv"
+
+        # ── Step 2: Native Textbox (Word-Friendly) ──────────────────────────
+        # Converters (Acrobat/Word) can easily parse these as actual text flows.
+        original_size = format_info.get("fontsize", 11)
+        align_map = {
+            "left": fitz.TEXT_ALIGN_LEFT,
+            "center": fitz.TEXT_ALIGN_CENTER,
+            "right": fitz.TEXT_ALIGN_RIGHT
+        }
+        target_align = align_map.get(format_info.get("align", "left"), fitz.TEXT_ALIGN_LEFT)
 
         try:
-            font_family = (
-                "'Noto Sans CJK TC', 'Microsoft JhengHei', 'Droid Sans Fallback', sans-serif"
-                if is_chinese
-                else "'Roboto', 'Noto Sans', 'Helvetica', 'Arial', sans-serif"
-            )
-            font_weight = "bold" if format_info.get("bold") else "normal"
-            text_align = "center" if rect.width < 150 else "left"
-
-            safe_text = text.replace("<", "&lt;").replace(">", "&gt;")
-            if block_type.lower() == "list":
-                html_text = safe_text.replace("\n", "<br/>")
-            else:
-                html_text = safe_text.replace("\n\n", "<br/><br/>").replace("\n", " ")
-
-            html = (
-                f'<div style="font-family: {font_family}; color: {color_hex}; '
-                f'font-weight: {font_weight}; margin: 0; padding: 0;">{html_text}</div>'
-            )
-            css_style = (
-                f"div {{ line-height: 1.25; font-size: {css_font_size}; "
-                f"text-align: {text_align}; overflow-wrap: break-word; word-break: break-word; }}"
-            )
-
-            page.insert_htmlbox(rect, html, css=css_style, scale_low=0.1)
-            return
+            # We try fitting the text natively first.
+            for fs in range(int(original_size + 1), 3, -1):
+                rc = page.insert_textbox(
+                    rect, 
+                    text, 
+                    fontsize=fs, 
+                    fontname=font_name,
+                    color=format_info["color"],
+                    align=target_align,
+                    warn=False
+                )
+                if rc >= 0:
+                    return
         except Exception:
             pass
 
-        # Fallback: insert_textbox with font size reduction
-        font_name = "china-t" if is_chinese else "helv"
-        original_size = format_info.get("fontsize", 12)
-        for fontsize in range(int(original_size * 1.2), 3, -1):
-            rc = page.insert_textbox(
-                rect, text, fontsize=fontsize, fontname=font_name,
-                color=format_info["color"], align=fitz.TEXT_ALIGN_LEFT,
-            )
-            if rc >= 0:
-                return
+        # ── Step 3: Htmlbox Fallback ────────────────────────────────────────
+        try:
+            r, g, b = format_info["color"]
+            color_hex = f"#{int(r*255):02x}{int(g*255):02x}{int(b*255):02x}"
+            font_family = "'Noto Sans CJK TC', sans-serif" if is_chinese else "sans-serif"
+            font_weight = "bold" if format_info.get("bold") else "normal"
+            text_align = format_info.get("align", "left")
 
-        page.insert_textbox(
-            rect, text, fontsize=4, fontname=font_name,
-            color=format_info["color"], align=fitz.TEXT_ALIGN_LEFT,
-        )
+            html = (
+                f'<div style="font-family: {font_family}; color: {color_hex}; '
+                f'font-weight: {font_weight}; text-align: {text_align}; line-height: 1.1;">'
+                f'{text.replace("<","&lt;").replace(">","&gt;").replace("\\n","<br/>")}</div>'
+            )
+            page.insert_htmlbox(rect, html, css="div { font-size: 100%; }", scale_low=0.1)
+        except Exception:
+            # Fatal fallback
+            page.insert_textbox(rect, text, fontsize=5, fontname=font_name, color=format_info["color"])
