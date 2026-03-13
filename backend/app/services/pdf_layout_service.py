@@ -140,10 +140,11 @@ class PDFLayoutPreservingService:
                     pdf_rect = self.layout_detector.pixel_to_pdf_rect(
                         b.bbox, page, b.page_width, b.page_height
                     )
+                    # Add a slightly larger buffer (8px instead of 5) to ensure edge text is caught
                     protected_rects_pdf.append(
                         fitz.Rect(
-                            pdf_rect.x0 - 5, pdf_rect.y0 - 5,
-                            pdf_rect.x1 + 5, pdf_rect.y1 + 5,
+                            pdf_rect.x0 - 8, pdf_rect.y0 - 8,
+                            pdf_rect.x1 + 8, pdf_rect.y1 + 8,
                         )
                     )
             print(
@@ -168,7 +169,8 @@ class PDFLayoutPreservingService:
                 is_protected = any(
                     block_area > 0
                     and block_rect.intersects(p)
-                    and block_rect.intersect(p).get_area() / block_area > 0.30
+                    # Lower threshold (0.10) means even slight overlap with a table/figure will cause a skip
+                    and block_rect.intersect(p).get_area() / block_area > 0.10
                     for p in protected_rects_pdf
                 )
                 if is_protected:
