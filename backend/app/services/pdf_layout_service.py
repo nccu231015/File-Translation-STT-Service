@@ -143,12 +143,12 @@ class PDFLayoutPreservingService:
                     pdf_rect = self.layout_detector.pixel_to_pdf_rect(
                         b.bbox, page, b.page_width, b.page_height
                     )
-                    # Vertical buffer (15px) to "catch" table rows that YOLO missed.
-                    # Horizontal buffer remains small (5px) to avoid side overlaps.
+                    # Vertical buffer (8px) is enough to catch leaked table headers
+                    # while avoiding nearby legitimate headings.
                     protected_rects_pdf.append(
                         fitz.Rect(
-                            pdf_rect.x0 - 5, pdf_rect.y0 - 15,
-                            pdf_rect.x1 + 5, pdf_rect.y1 + 15,
+                            pdf_rect.x0 - 5, pdf_rect.y0 - 8,
+                            pdf_rect.x1 + 5, pdf_rect.y1 + 8,
                         )
                     )
             print(
@@ -302,16 +302,18 @@ class PDFLayoutPreservingService:
                         if not block_text:
                             continue
 
-                        # Skip only if empty.
+                        # REMOVED strict is_numeric check to allow dates/titles to pass.
                         if not block_text or len(block_text) < 1:
                             continue
                             
-                        # NEW: Technical Content Detection
-                        # If it contains underscores (like DB fields) and is very near a table,
-                        # assume it's table content that YOLO missed and protect it.
-                        is_technical = "_" in block_text or (len(block_text) > 4 and block_text.isupper())
+                        # IMPROVED: Technical vs. Human Language Detection
+                        # If the block has Chinese, it's a heading or description -> ALWAYS TRANSLATE.
+                        has_chinese = any("\u4e00" <= c <= "\u9fff" for c in block_text)
+                        is_technical = ("_" in block_text or (len(block_text) > 4 and block_text.isupper())) and not has_chinese
+                        
                         if is_technical:
-                            is_near_table = any(raw_rect.distance_to(p) < 15 for p in protected_rects_pdf)
+                            # Only treat as missed table row if it's VERY near (8px)
+                            is_near_table = any(raw_rect.distance_to(p) < 8 for p in protected_rects_pdf)
                             if is_near_table:
                                 continue
 
@@ -373,17 +375,12 @@ class PDFLayoutPreservingService:
                             continue
 
                         # Intercept the <SKIP> token from LLM for meaningless fragments
-                        if "<SKIP>" in translated_text:
-                            translated_text = translated_text.replace("<SKIP>", "").strip()
-                            if not translated_text:
-                                print(f"[PDF Layout] Skipping fragment: '{item['text']}'", flush=True)
-                                continue
+                        translated_text = translated_text.replace("<SKIP>", "").strip()
+                        if not translated_text:
+                            continue
 
-                        if (
-                            len(item["text"]) > 10
-                            and len(translated_text.strip()) < 2
-                            and not translated_text.strip().isdigit()
-                        ):
+                        # REMOVED length filter (len > 10 etc.) to ensure short headers/dates remain visible.
+                        if translated_text.strip() == item["text"]:
                             continue
                         if translated_text.strip() == item["text"]:
                             continue
