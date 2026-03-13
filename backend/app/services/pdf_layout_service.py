@@ -143,11 +143,12 @@ class PDFLayoutPreservingService:
                     pdf_rect = self.layout_detector.pixel_to_pdf_rect(
                         b.bbox, page, b.page_width, b.page_height
                     )
-                    # Add a slightly larger buffer (8px instead of 5) to ensure edge text is caught
+                    # Vertical buffer (15px) to "catch" table rows that YOLO missed.
+                    # Horizontal buffer remains small (5px) to avoid side overlaps.
                     protected_rects_pdf.append(
                         fitz.Rect(
-                            pdf_rect.x0 - 8, pdf_rect.y0 - 8,
-                            pdf_rect.x1 + 8, pdf_rect.y1 + 8,
+                            pdf_rect.x0 - 5, pdf_rect.y0 - 15,
+                            pdf_rect.x1 + 5, pdf_rect.y1 + 15,
                         )
                     )
             print(
@@ -301,9 +302,18 @@ class PDFLayoutPreservingService:
                         if not block_text:
                             continue
 
-                        is_numeric = re.match(r'^[\d\s\.,\-\/%$€]+$', block_text)
-                        if is_numeric and block.type.lower() != "title":
+                        # Skip only if empty.
+                        if not block_text or len(block_text) < 1:
                             continue
+                            
+                        # NEW: Technical Content Detection
+                        # If it contains underscores (like DB fields) and is very near a table,
+                        # assume it's table content that YOLO missed and protect it.
+                        is_technical = "_" in block_text or (len(block_text) > 4 and block_text.isupper())
+                        if is_technical:
+                            is_near_table = any(raw_rect.distance_to(p) < 15 for p in protected_rects_pdf)
+                            if is_near_table:
+                                continue
 
                         format_info = self._extract_format_info(page, raw_rect, block_type=block.type)
                         processed_queue.append({
@@ -315,7 +325,8 @@ class PDFLayoutPreservingService:
                         })
 
                         wipe_rect = self._get_precise_wipe_rect(page, raw_rect, margin=1)
-                        page.add_redact_annot(wipe_rect, fill=(1, 1, 1))
+                        # fill=None for transparent redaction (removes strokes, keeps background)
+                        page.add_redact_annot(wipe_rect, fill=None)
 
                     except Exception as e:
                         print(f"[PDF Layout] Page {page_num+1} Prep Block {idx}: {e}")
