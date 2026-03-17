@@ -6,7 +6,7 @@ import json
 from fastapi import FastAPI, UploadFile, File, HTTPException, Body, Response, Form, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from app.services.stt_service import stt_service
-from app.services.llm_service import LLMService, llm_service
+from app.services.llm_service import llm_service
 from app.services.pdf_service import pdf_service
 from app.services.meeting_minutes_docx import MeetingMinutesDocxService
 from app.services.transcript_docx_service import TranscriptDocxService
@@ -23,9 +23,8 @@ from pydantic import BaseModel
 from typing import Optional
 
 app = FastAPI()
-# Create a separate LLM instance for Factory AI, completely isolated from the document translation/speech module.
-llm_service_factory = LLMService()
-factory_agent = FactoryAgentService(llm_service_factory)
+factory_agent = FactoryAgentService(llm_service)
+
 
 
 @app.on_event("startup")
