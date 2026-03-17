@@ -29,18 +29,38 @@ class FactorySqlTools:
 
     def test_connections(self) -> dict:
         results = {"mssql": "failed", "postgres": "failed"}
+        
+        # Test MSSQL
         try:
-            conn = pymssql.connect(
+            conn_ms = pymssql.connect(
                 server=MSSQL_CONFIG['server'],
                 user=MSSQL_CONFIG['user'],
                 password=MSSQL_CONFIG['password'],
                 database=MSSQL_CONFIG['database'],
                 timeout=5
             )
-            conn.close()
+            conn_ms.close()
             results["mssql"] = "ok"
-        except Exception:
+        except Exception as e:
+            print(f"[HealthCheck] MSSQL Test Failed: {e}")
             results["mssql"] = "failed"
+            
+        # Test PostgreSQL
+        try:
+            conn_pg = psycopg2.connect(
+                host=POSTGRES_CONFIG['host'],
+                port=POSTGRES_CONFIG['port'],
+                user=POSTGRES_CONFIG['user'],
+                password=POSTGRES_CONFIG['password'],
+                database=POSTGRES_CONFIG['database'],
+                connect_timeout=5
+            )
+            conn_pg.close()
+            results["postgres"] = "ok"
+        except Exception as e:
+            print(f"[HealthCheck] Postgres Test Failed: {e}")
+            results["postgres"] = "failed"
+            
         return results
 
     def _execute_mssql_query(self, query: str) -> List[Dict[str, Any]]:
