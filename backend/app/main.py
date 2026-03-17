@@ -221,13 +221,11 @@ async def factory_chat(payload: dict, background_tasks: BackgroundTasks):
 
         print(f"[Factory Chat] Success: {len(str(response))} chars", flush=True)
         
-        # 手動序列化以防止大型表格在最後傳輸時發生隱形 500 錯誤
-        combined_result = {
+        # FastAPI 本身具備優異的 JSON 序列化能力，直接回傳字典即可
+        return {
             "response": str(response),
             "session_id": str(session_id)
         }
-        json_str = json.dumps(combined_result, ensure_ascii=False)
-        return Response(content=json_str, media_type="application/json")
         
     except Exception as e:
         import traceback
