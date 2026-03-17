@@ -72,102 +72,143 @@ class FactorySqlTools:
 
     def get_production_overview(self, target_date: str = None) -> Dict[str, Any]:
         """
-        取得產線開工總覽。
+        1. 今日多少條產線有開工?
+        2. 正在生產的工單號碼
+        3. 正在生產的機種?
         """
         date_cond = f"PRO_TIME='{target_date}'" if target_date else "PRO_TIME=CONVERT(date, GETDATE())"
-        query = f"SELECT [jz], [WORK_ORDER_NO] FROM [dbo].[Daily_Status_Report] WHERE {date_cond}"
-        rows = self._execute_mssql_query(query)
         
-        # 活線總數 (Raw count)
-        working_count = len(rows)
+        q_count = f"SELECT count(NO) kgcx FROM [dbo].[Daily_Status_Report] WHERE {date_cond}"
+        q_orders = f"SELECT distinct [WORK_ORDER_NO] FROM [dbo].[Daily_Status_Report] WHERE {date_cond}"
+        q_models = f"SELECT distinct jz FROM [dbo].[Daily_Status_Report] WHERE {date_cond}"
         
-        # 去重後的清單與計數
-        unique_wos = list(set([r['WORK_ORDER_NO'] for r in rows if r.get('WORK_ORDER_NO')]))
-        unique_models = list(set([r['jz'] for r in rows if r.get('jz')]))
+        count_res = self._execute_mssql_query(q_count)
+        orders_res = self._execute_mssql_query(q_orders)
+        models_res = self._execute_mssql_query(q_models)
         
         return {
             "status": "success",
-            "date": target_date or "today",
-            "working_lines_count": working_count,
-            "active_work_orders_count": len(unique_wos),
-            "active_models_count": len(unique_models),
-            "active_work_orders": unique_wos,
-            "active_models": unique_models
+            "working_lines_count": count_res[0].get("kgcx", 0) if count_res and "error" not in count_res[0] else 0,
+            "active_work_orders": [r.get("WORK_ORDER_NO") for r in orders_res if r.get("WORK_ORDER_NO")],
+            "active_models": [r.get("jz") for r in models_res if r.get("jz")]
         }
 
-    def get_detailed_production_report(self, target_date: str = None) -> Dict[str, Any]:
+    def get_workorder_quantity(self, target_date: str = None) -> Dict[str, Any]:
         """
-        獲取詳細生產紀錄報表。
+        4. 工單的生產數量
+        5. 現在的生產數量?
         """
         date_cond = f"PRO_TIME='{target_date}'" if target_date else "PRO_TIME=CONVERT(date, GETDATE())"
-        query = f"""
-            SELECT jz AS Machine_Model, WORK_ORDER_NO AS Work_Order, WORK_ORDER_NUM AS Target_Qty, 
-                   ACTUAL_PRO AS Actual_Qty, BAD_PRO_RATE AS Defect_Rate 
-            FROM [dbo].[Daily_Status_Report] WHERE {date_cond} ORDER BY jz
+        
+        q_target = f"SELECT [WORK_ORDER_NO], sum(WORK_ORDER_NUM) WORK_ORDER_NUM FROM [dbo].[Daily_Status_Report] WHERE {date_cond} GROUP BY [WORK_ORDER_NO]"
+        q_actual = f"SELECT [WORK_ORDER_NO], sum(ACTUAL_PRO) ACTUAL_PRO FROM [dbo].[Daily_Status_Report] WHERE {date_cond} GROUP BY [WORK_ORDER_NO]"
+        
+        target_res = self._execute_mssql_query(q_target)
+        actual_res = self._execute_mssql_query(q_actual)
+        
+        return {
+            "status": "success",
+            "target_quantities": target_res,
+            "actual_quantities": actual_res
+        }
+
+    def get_kpi_ranking(self, kpi_type: str, target_date: str = None) -> Dict[str, Any]:
         """
-        report_res = self._execute_mssql_query(query)
-        return {"status": "success", "report_data": report_res}
+        6. 進度達標前10台
+        7. 進度落後前10台
+        8. 異常數量?
+        9. 停機時間?
+        10. 達成率?
+        """
+        date_cond = f"PRO_TIME='{target_date}'" if target_date else "PRO_TIME=CONVERT(date, GETDATE())"
+        
+        if kpi_type == 'top_achieving':
+            query = f"SELECT top 10 jz, ACHIEVING_RATE FROM [dbo].[Daily_Status_Report] WHERE {date_cond} GROUP BY jz, ACHIEVING_RATE ORDER BY ACHIEVING_RATE DESC"
+        elif kpi_type == 'lagging':
+            query = f"SELECT top 10 jz, ACHIEVING_RATE FROM [dbo].[Daily_Status_Report] WHERE {date_cond} AND ACHIEVING_RATE<1 GROUP BY jz, ACHIEVING_RATE ORDER BY ACHIEVING_RATE ASC"
+        elif kpi_type == 'abnormal':
+            query = f"SELECT top 10 jz, sum(BAD_PRO_RATE) blsl FROM [dbo].[Daily_Status_Report] WHERE {date_cond} AND BAD_PRO_RATE>0 GROUP BY jz, BAD_PRO_RATE ORDER BY BAD_PRO_RATE DESC"
+        elif kpi_type == 'downtime':
+            query = f"SELECT top 10 jz, LOST_TIME_PRO_RATE FROM [dbo].[Daily_Status_Report] WHERE {date_cond} AND LOST_TIME_PRO_RATE>0 GROUP BY jz, LOST_TIME_PRO_RATE ORDER BY LOST_TIME_PRO_RATE DESC"
+        elif kpi_type == 'unachieved':
+            query = f"SELECT jz, ACHIEVING_RATE FROM [dbo].[Daily_Status_Report] WHERE {date_cond} AND ACHIEVING_RATE<0.5 GROUP BY jz, ACHIEVING_RATE ORDER BY ACHIEVING_RATE ASC"
+        else:
+            return {"status": "error", "message": "Unknown kpi_type"}
+            
+        result = self._execute_mssql_query(query)
+        return {"status": "success", "kpi_type": kpi_type, "data": result}
+
+    def get_line_defect_records(self, target_date: str = None) -> Dict[str, Any]:
+        """
+        產線/樓層-生產的數量、不良數 (包含工單)
+        使用 blpjl_new_copy1
+        """
+        date_cond = f"a.PRO_TIME='{target_date}'" if target_date else "a.PRO_TIME=CONVERT(date, GETDATE())"
+        query = f"""
+            SELECT a.* FROM [dbo].[blpjl_new_copy1] a 
+            WHERE a.blsl > 0 AND a.gdhm <> 'undefined' AND {date_cond}
+            ORDER BY [NO], sjd ASC
+        """
+        result = self._execute_mssql_query(query)
+        return {"status": "success", "data": result}
+
+    def get_line_downtime_records(self, target_date: str = None) -> Dict[str, Any]:
+        """
+        產線/樓層-生產的數量、停機時間 (包含工單)
+        使用 tjsjjl_new_copy1
+        """
+        date_cond = f"a.PRO_TIME='{target_date}'" if target_date else "a.PRO_TIME=CONVERT(date, GETDATE())"
+        query = f"""
+            SELECT * FROM [dbo].[tjsjjl_new_copy1] a
+            WHERE tjsj > 0 AND (bz is not null or tjsj is not null) AND gdhm <> 'undefined'
+            AND {date_cond}
+            ORDER BY [NO], sjd ASC
+        """
+        result = self._execute_mssql_query(query)
+        return {"status": "success", "data": result}
 
     def get_defect_pareto_analysis(self, work_order: str, target_date: str = None) -> Dict[str, Any]:
         """
-        不良品統計趨勢與 Pareto 分析（含排除條件）。
+        不良品統計、趨勢分析 (Pareto)
+        使用 blpjl_new_copy1 與完整排除邏輯
         """
         date_cond = f"PRO_TIME='{target_date}'" if target_date else "PRO_TIME=CONVERT(date, GETDATE())"
         query = f"""
-            WITH src AS (
-                SELECT
-                    a.jcgx AS [檢查工序], a.ljfl AS [零件分類], a.bllt AS [不良型態], a.blwz AS [不良位置],
-                    SUM(a.blsl) AS [不良品數量]
-                FROM [dbo].[blpjl_new_copy1] a
-                WHERE a.blsl > 0
-                AND NOT( 
-                    (jcgx ='設備判定 (CCD/成測)' and ljfl ='成品') 
-                    or (a.jcgx='分析 (設備判定異常品)' AND a.ljfl ='重測/復判後OK數量') 
-                    or (jcgx ='設備判定 (CCD/成測)' and ljfl ='成品' and bllt is null)
-                    or (ljfl in('重測/復判後OK數量','其他復判後OK數量'))
-                )
-                AND gdhm = '{work_order}' AND {date_cond}
-                GROUP BY jcgx, ljfl, bllt, blwz
-            ),
-            calc AS (
-                SELECT DISTINCT *, 
-                       [零件分類] + ' / ' + [不良型態] AS [分類_型態],
-                       SUM([不良品數量]) OVER () AS [總計],
-                       ROUND(1.0 * [不良品數量] / NULLIF(SUM([不良品數量]) OVER (), 0), 2) AS [個別佔比],
-                       ROW_NUMBER() OVER (ORDER BY [不良品數量] DESC) AS [列序號],
-                       CAST([不良品數量] AS DECIMAL(18,6)) / NULLIF(SUM([不良品數量]) OVER (), 0) AS ratio
-                FROM src
+        WITH src AS (
+            SELECT
+                a.jcgx [檢查工序], a.ljfl [零件分類], a.bllt [不良型態], a.blwz [不良位置],
+                SUM(a.blsl) AS [不良品數量]
+            FROM [dbo].[blpjl_new_copy1] a
+            WHERE a.blsl > 0
+            AND NOT( 
+                (jcgx ='設備判定 (CCD/成測)' and ljfl ='成品') 
+                or (a.jcgx='分析 (設備判定異常品)' AND a.ljfl ='重測/復判後OK數量') 
+                or (jcgx ='設備判定 (CCD/成測)' and ljfl ='成品' and bllt is null)
+                or (ljfl in('重測/復判後OK數量','其他復判後OK數量'))
             )
-            SELECT [列序號], [檢查工序], [分類_型態],
-                   CAST([列序號] AS varchar(3)) + ' ' + [不良位置] AS [位置_備註],
-                   [不良品數量], [個別佔比], '不良品紀錄' jllb,
-                   ROUND(SUM(ratio) OVER (ORDER BY [不良品數量] DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW), 2) AS [累積百分比]
-            FROM calc ORDER BY [不良品數量] DESC
+            AND gdhm = '{work_order}' AND {date_cond}
+            GROUP BY jcgx, ljfl, bllt, blwz
+        ),
+        calc AS (
+            SELECT DISTINCT *, 
+                零件分類 + ' / ' + 不良型態 AS [分類_型態],
+                SUM(不良品數量) OVER () AS [總計],
+                ROUND(1.0 * 不良品數量 / NULLIF(SUM(不良品數量) OVER (), 0), 2) AS [個別佔比],
+                ROW_NUMBER() OVER (ORDER BY 不良品數量 DESC) AS [列序號],
+                CAST(不良品數量 AS DECIMAL(18,6)) / NULLIF(SUM(不良品數量) OVER (), 0) AS ratio
+            FROM src
+        )
+        SELECT 列序號, 檢查工序, 分類_型態,
+            CAST(列序號 AS varchar(3)) + ' ' + 不良位置 AS [位置_備註],
+            不良品數量, 個別佔比, '不良品紀錄' jllb,
+            ROUND(SUM(ratio) OVER (ORDER BY 不良品數量 DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW), 2) AS [累積百分比]
+        FROM calc ORDER BY 不良品數量 DESC
         """
-        res = self._execute_mssql_query(query)
-        return {"status": "success", "work_order": work_order, "pareto_data": res}
+        result = self._execute_mssql_query(query)
+        return {"status": "success", "work_order": work_order, "data": result}
 
     def get_downtime_cause_analysis(self, work_order: str, target_date: str = None) -> Dict[str, Any]:
         """
-        停機時間統計與原因分析（含排除條件）。
-        """
-        date_cond = f"PRO_TIME='{target_date}'" if target_date else "PRO_TIME=CONVERT(date, GETDATE())"
-        query = f"""
-            WITH base AS (
-                SELECT DISTINCT 
-                    a.tjlb AS [停機類別], a.zrdw AS [責任單位], a.tjxz AS [停機細項],
-                    SUM(a.tjsj) OVER() AS [總停機時間],
-                    SUM(a.tjsj) OVER (PARTITION BY a.tjlb, a.zrdw, a.tjxz) AS [停機時間],
-                    CAST(SUM(a.tjsj) OVER (PARTITION BY a.tjlb, a.zrdw, a.tjxz) AS float) / 
-                    NULLIF(CAST(SUM(a.tjsj) OVER() AS float), 0) AS [個別占比]
-                FROM [dbo].[tjsjjl_new_copy1] a
-                WHERE tjsj > 0 AND gdhm = '{work_order}' AND {date_cond}
-                AND NOT (
-                    (a.tjlb='不良品分析(分)' AND zrdw='製造' AND tjxz='「備註」載明：分析多少pcs')
-                    OR (a.tjlb='值日生' AND zrdw='製造' AND tjxz='「備註」載明：姓名&幾人')
-                )
-            ),
-            answer AS (
                 SELECT *, ROW_NUMBER() OVER(ORDER BY [停機時間] DESC) AS t_row FROM base 
             )
             SELECT *, SUM([個別占比]) OVER (ORDER BY t_row) AS [累積占比]
