@@ -236,7 +236,12 @@ async def factory_chat(payload: dict, background_tasks: BackgroundTasks):
 @app.get("/factory-sessions")
 async def list_factory_sessions():
     from app.services.factory.factory_redis import factory_store
-    return {"sessions": await factory_store.list_sessions()}
+    try:
+        sessions = await factory_store.list_sessions()
+        return {"sessions": sessions}
+    except Exception as e:
+        print(f"[API Error] list_sessions: {e}")
+        return {"sessions": []}
 
 @app.get("/factory-sessions/{session_id}")
 async def get_factory_session(session_id: str):

@@ -99,28 +99,38 @@ class FactoryRedisStore:
 
     async def list_sessions(self) -> List[dict]:
         """Return a summary list of all sessions, newest first."""
-        if self._use_redis and self._redis:
-            raw = await self._redis.get(SESSION_INDEX_KEY)
-            if not raw:
-                return []
-            index: list = json.loads(raw)
-        else:
-            index = self._index_memory
+        try:
+            if self._use_redis and self._redis:
+                raw = await self._redis.get(SESSION_INDEX_KEY)
+                if not raw:
+                    return []
+                index: list = json.loads(raw)
+            else:
+                index = self._index_memory
 
-        # Filter out expired in-memory sessions
-        result = []
-        for entry in reversed(index):  # newest first
-            sid = entry["session_id"]
-            session = await self.get_session(sid)
-            if session:
-                result.append({
-                    "session_id": sid,
-                    "title": entry["title"],
-                    "created_at": entry["created_at"],
-                    "updated_at": session.get("updated_at", entry["created_at"]),
-                    "message_count": len(session.get("messages", [])),
-                })
-        return result
+            # Filter out expired in-memory sessions
+            result = []
+            for entry in reversed(index):  # newest first
+                try:
+                    sid = entry.get("session_id")
+                    if not sid: continue
+                    
+                    session = await self.get_session(sid)
+                    if session:
+                        result.append({
+                            "session_id": sid,
+                            "title": entry.get("title", "無標題"),
+                            "created_at": entry.get("created_at", session.get("created_at")),
+                            "updated_at": session.get("updated_at", entry.get("created_at")),
+                            "message_count": len(session.get("messages", [])),
+                        })
+                except Exception as entry_e:
+                    print(f"[FactoryRedis] Skip corrupted entry {entry}: {entry_e}")
+                    continue
+            return result
+        except Exception as e:
+            print(f"[FactoryRedis] list_sessions failed: {e}")
+            return []
 
     async def delete_session(self, session_id: str) -> bool:
         """Delete a session by ID."""
