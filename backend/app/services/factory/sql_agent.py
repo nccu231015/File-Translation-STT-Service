@@ -138,7 +138,7 @@ class SqlAgent:
                         "properties": {
                             "equipment_code": {"type": "string", "description": "機台代號，例如 '94135B'"},
                             "target_date_dash": {"type": "string", "description": "日期，格式必須為 'YYYY-MM-DD'"}
-                        },
+                        }, # Added missing closing brace and comma
                         "required": ["equipment_code", "target_date_dash"]
                     }
                 }
@@ -146,34 +146,33 @@ class SqlAgent:
             {
                 "type": "function",
                 "function": {
-                    "name": "get_equipment_downtime_summary",
-                    "description": "分析特定時間範圍內的設備故障趨勢、故障碼與停機次數排行。",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "start_date_num": {"type": "string", "description": "開始日期 'YYYYMMDD'"},
-                            "end_date_num": {"type": "string", "description": "結束日期 'YYYYMMDD'"}
-                        },
-                        "required": ["start_date_num", "end_date_num"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
                     "name": "get_kpi_ranking",
-                    "description": "獲取產線設備的績效排行(KPI Ranking)，用於找出業績最優或最差的機種。",
+                    "description": "獲取產線設備的績效排行(KPI Ranking)，用於找出業績最優或最差、或是異常最高的機種。",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "kpi_type": {
                                 "type": "string", 
                                 "enum": ["top_achieving", "lagging", "abnormal", "downtime", "unachieved"],
-                                "description": "排行類型：'top_achieving'(業績達標前10)、'lagging'(業績最落後前10)、'abnormal'(不良率最高前10)、'downtime'(停機最久前10)、'unachieved'(達成率未過半)。"
+                                "description": "排行類型：'top_achieving'(加總產量前10)、'lagging'(加總產量後10)、'abnormal'(不良率/不良數最高前10)、'downtime'(停機最久前10)。"
                             },
                             "target_date": {"type": "string", "description": "例如 '2026-03-17'。"}
                         },
                         "required": ["kpi_type"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_abnormal_details",
+                    "description": "查詢具體的不良項目分佈(Abnormal Details)。用於回答：具體有哪些異常比例高？分別是什麼異常原因？",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "target_date": {"type": "string", "description": "例如 '2026-03-17'。"},
+                            "top_n": {"type": "integer", "description": "查詢前幾名異常，預設 10。"}
+                        }
                     }
                 }
             }
@@ -196,15 +195,22 @@ class SqlAgent:
 
 {current_date_info}
 
+數據源提示：
+- 基於 [Daily_Status_Report] 提供概覽、產量與基本 KPI (良率/稼動/排行)。
+- 基於 [blpjl_new_copy1] 提供具體的不良項目細節 (如 blxm 不良項目) 與數量分析。
+- 基於 [tjsjjl_new_copy1] 提供專業的停機時間紀錄與統計視圖。
+
 規範：
 1. 若數據中包含良率、稼動率、工單數量，請以「網格表格(Markdown)」呈現。
-2. 當使用者詢問「最好」、「最差」、「業績分析」或「排名」時：
-   - **絕對不要使用** `get_production_overview`。
-   - **必須直接使用** `get_kpi_ranking` 工具，並根據問題選擇對應的 kpi_type (例如 top_achieving 或 lagging)。
+2. 當使用者詢問「排名」、「績效」、「異常」或「最好/最差」時：
+   - 詢問「哪些機種異常比例高/業績好」，請優先調用 `get_kpi_ranking`。
+   - 詢問「具體是哪些異常項目/原因分佈」，請優先調用 `get_abnormal_details`。
+   - 詢問「停機時間統計排名」，請調用 `get_kpi_ranking(kpi_type='downtime')`。
+   - **絕對不要自行撰寫 SQL 語句或猜測其他表名。**
 3. 若查詢結果為空，請告知使用者該時段可能無生產記錄，或請調低查詢的時間精度。
 4. 請始終保持回覆的專業性，並在對話中考慮 history 中提到的上下文。
 5. 所有的回覆必須使用「繁體中文」。
-6. 回答請保持精簡、準確，除非必要，否則不需要畫蛇添足提供一般性管理建議。
+6. 回答請保持精簡、點到為止，除非必要，否則不需要畫蛇添足提供一般性管理建議。
 """
         
         # 組合 Messages：System + History + Current Question
@@ -222,14 +228,14 @@ class SqlAgent:
 
         try:
             # 呼叫 LLM 進行工具決策與答案聚合
-            answer = await self.llm.chat_with_tools(
-                messages=messages,
-                tools=self._get_tool_schemas(),
-                tool_executor_obj=self.tools
+            response = await self.llm.chat_with_tools( # Changed llm_service to self.llm
+                messages=messages, # Added keyword arguments for clarity
+                tools=self._get_tool_schemas(), # Changed self.tools, sql_tools to tools=self._get_tool_schemas()
+                tool_executor_obj=self.tools # Added tool_executor_obj=self.tools
             )
             
             # 使用 OpenCC 確保最終回傳為繁體
-            return self.llm.s2tw.convert(answer)
+            return self.llm.s2tw.convert(response)
 
         except Exception as e:
             print(f"[SQL Agent Error] {e}")

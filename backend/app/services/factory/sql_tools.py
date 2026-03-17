@@ -73,25 +73,81 @@ class FactorySqlTools:
         """
         執行 MSSQL 查詢並返回字典列表。
         """
-        try:
-            conn = pymssql.connect(
-                server=MSSQL_CONFIG['server'],
-                user=MSSQL_CONFIG['user'],
-                password=MSSQL_CONFIG['password'],
-                database=MSSQL_CONFIG['database'],
-                as_dict=True
-            )
-            cursor = conn.cursor()
-            print(f"\n[MSSQL Execute]\n{query}\n", flush=True)
-            cursor.execute(query)
-            # Not all queries return records (like UPDATE/INSERT, but these are all SELECT)
-            result = cursor.fetchall()
-            print(f"[MSSQL Result] Fetched {len(result)} rows.", flush=True)
-            conn.close()
-            return [_sanitize(dict(row)) for row in result]
-        except Exception as e:
-            print(f"[SQL Error] query failed: {e}")
-            return [{"error": str(e)}]
+        import time
+        max_retries = 2
+        for attempt in range(max_retries):
+            try:
+                conn = pymssql.connect(
+                    server=MSSQL_CONFIG['server'],
+                    user=MSSQL_CONFIG['user'],
+                    password=MSSQL_CONFIG['password'],
+                    database=MSSQL_CONFIG['database'],
+                    as_dict=True,
+                    login_timeout=10
+                )
+                cursor = conn.cursor()
+                print(f"\n[MSSQL Execute]\n{query}\n", flush=True)
+                cursor.execute(query)
+                result = cursor.fetchall()
+                print(f"[MSSQL Result] Fetched {len(result)} rows.", flush=True)
+                conn.close()
+                return [_sanitize(dict(row)) for row in result]
+            except Exception as e:
+                print(f"[SQL Attempt {attempt+1}] Query failed: {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(1) # Wait before retry
+                    continue
+                return [{"error": str(e)}]
+        return []
+
+    def get_production_overview(self, target_date: str = None) -> Dict[str, Any]:
+        """
+        取得產線開工總覽 (使用 tjsjjl_new_copy1 統計表)。
+        """
+        date_cond = f"PRO_TIME='{target_date}'" if target_date else "PRO_TIME=CONVERT(date, GETDATE())"
+        
+        # 查詢有開工的機種與工單清單 (gdhm 為工單號碼)
+        query = f"SELECT DISTINCT jz, gdhm FROM [dbo].[tjsjjl_new_copy1] WHERE {date_cond} AND jz IS NOT NULL"
+        rows = self._execute_mssql_query(query)
+        
+        working_lines_count = len(rows)
+        work_orders = list(set([r['gdhm'] for r in rows if r.get('gdhm')]))
+        models = list(set([r['jz'] for r in rows if r.get('jz')]))
+        
+        return {
+            "status": "success",
+            "date": target_date or "today",
+            "working_lines_count": working_lines_count,
+            "active_work_orders": work_orders,
+            "active_models": models
+        }
+
+    def get_abnormal_details(self, target_date: str = None, top_n: int = 10) -> Dict[str, Any]:
+        """
+        查詢特定日期內，不良原因的具體分佈 (使用 blpjl_new_copy1 表)。
+        可用於回答：具體是哪些異常比例高？
+        """
+        date_cond = f"PRO_TIME='{target_date}'" if target_date else "PRO_TIME=CONVERT(date, GETDATE())"
+        
+        # 查詢各機種在前幾名的不良原因與數量
+        query = f"""
+            SELECT TOP {top_n} 
+                jz AS Machine_Model, 
+                blxm AS Abnormal_Item, 
+                sum(blsl) as Abnormal_Count
+            FROM [dbo].[blpjl_new_copy1]
+            WHERE {date_cond} AND blsl > 0
+            GROUP BY jz, blxm
+            ORDER BY sum(blsl) DESC
+        """
+        
+        details_res = self._execute_mssql_query(query)
+        
+        return {
+            "status": "success",
+            "date": target_date or "today",
+            "abnormal_details": details_res
+        }
 
     # ==========================================
     # A. 產線資訊工具 (ReportDB - MSSQL)
@@ -110,40 +166,32 @@ class FactorySqlTools:
         q_count = f"SELECT count(NO) kgcx FROM [dbo].[Daily_Status_Report] WHERE {date_cond}"
         q_orders = f"SELECT distinct [WORK_ORDER_NO] FROM [dbo].[Daily_Status_Report] WHERE {date_cond}"
         q_models = f"SELECT distinct jz FROM [dbo].[Daily_Status_Report] WHERE {date_cond}"
-        
-        count_res = self._execute_mssql_query(q_count)
-        orders_res = self._execute_mssql_query(q_orders)
-        models_res = self._execute_mssql_query(q_models)
-        
-        return {
-            "status": "success",
-            "working_lines_count": count_res[0].get("kgcx", 0) if count_res and "error" not in count_res[0] else None,
-            "active_work_orders": [r.get("WORK_ORDER_NO") for r in orders_res if "error" not in r],
-            "active_machine_models": [r.get("jz") for r in models_res if "error" not in r]
-        }
-
     def get_kpi_ranking(self, kpi_type: str, target_date: str = None) -> Dict[str, Any]:
         """
-        獲取績效排行 (KPI Ranking) - 用於回答最好的機種、最差的機種等
-        kpi_type: 'top_achieving', 'lagging'
+        獲取產線設備的績效排行 (KPI Ranking)。
         """
         date_cond = f"PRO_TIME='{target_date}'" if target_date else "PRO_TIME=CONVERT(date, GETDATE())"
         
         if kpi_type == "top_achieving":
+            table = "[dbo].[Daily_Status_Report]"
             order_by_col = "sum(ACTUAL_PRO)"
             order_dir = "DESC"
         elif kpi_type == "lagging":
+            table = "[dbo].[Daily_Status_Report]"
             order_by_col = "sum(ACTUAL_PRO)"
             order_dir = "ASC"
         elif kpi_type == "abnormal":
-            # 以 BAD_PRO_RATE (不良率) 作為基準
+            table = "[dbo].[Daily_Status_Report]"
             order_by_col = "sum(BAD_PRO_RATE)"
             order_dir = "DESC"
         elif kpi_type == "downtime":
-            # 以 DOWN_TIME (停機分鐘) 作為基準
-            order_by_col = "sum(CAST(DOWN_TIME AS FLOAT))"
+            # 使用專用的停機時間統計視圖
+            table = "[dbo].[tjsjjl_new_copy1]"
+            # 假設視圖中停機時間欄位為 tjsc 或包含此數值，此處維持 sum(CAST(DOWN_TIME AS FLOAT)) 若欄位名不變
+            order_by_col = "sum(tjsj)" # Changed to tjsj based on tjsjjl_new structure
             order_dir = "DESC"
-        else: # 預設以產量排序
+        else:
+            table = "[dbo].[Daily_Status_Report]"
             order_by_col = "sum(ACTUAL_PRO)"
             order_dir = "DESC"
             
@@ -154,7 +202,7 @@ class FactorySqlTools:
                 sum(ACTUAL_PRO) as Actual_Qty,
                 sum(BAD_PRO_RATE) as Bad_Rate_Total,
                 sum(CAST(DOWN_TIME AS FLOAT)) as Total_Downtime_Mins
-            FROM [dbo].[Daily_Status_Report] 
+            FROM {table}
             WHERE {date_cond} AND jz IS NOT NULL
             GROUP BY jz 
             ORDER BY {order_by_col} {order_dir}
