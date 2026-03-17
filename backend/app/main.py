@@ -441,7 +441,6 @@ async def transcribe_audio(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-
 @app.post("/pdf-translation")
 async def translate_pdf(
     background_tasks: BackgroundTasks,
