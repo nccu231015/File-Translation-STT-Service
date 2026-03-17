@@ -9,6 +9,44 @@ class FactorySqlTools:
     負責與產線 (MSSQL) 和設備 (PostgreSQL) 互動的 SQL 工具庫。
     """
 
+    def test_connections(self) -> dict:
+        """
+        [Health Check] Verify connectivity to MSSQL and PostgreSQL.
+        Returns a dict with status of each DB.
+        """
+        results = {"mssql": "failed", "postgres": "failed"}
+        
+        # Test MSSQL
+        try:
+            conn = pymssql.connect(
+                server=MSSQL_CONFIG['server'],
+                user=MSSQL_CONFIG['user'],
+                password=MSSQL_CONFIG['password'],
+                database=MSSQL_CONFIG['database'],
+                timeout=5
+            )
+            conn.close()
+            results["mssql"] = "ok"
+        except Exception as e:
+            results["mssql"] = f"error: {e}"
+
+        # Test PostgreSQL
+        try:
+            conn = psycopg2.connect(
+                host=POSTGRES_CONFIG['host'],
+                port=POSTGRES_CONFIG['port'],
+                user=POSTGRES_CONFIG['user'],
+                password=POSTGRES_CONFIG['password'],
+                dbname=POSTGRES_CONFIG['database'],
+                connect_timeout=5
+            )
+            conn.close()
+            results["postgres"] = "ok"
+        except Exception as e:
+            results["postgres"] = f"error: {e}"
+
+        return results
+
     def _execute_mssql_query(self, query: str) -> List[Dict[str, Any]]:
         """
         執行 MSSQL 查詢並返回字典列表。

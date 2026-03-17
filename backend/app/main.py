@@ -43,7 +43,13 @@ async def add_ngrok_header(request, call_next):
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins for development
+    allow_origins=[
+        "http://localhost:3000",
+        "http://172.16.2.68:3000",
+        "http://172.16.2.68",
+        "http://172.16.2.68:8000",
+        "https://172.16.2.68",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
