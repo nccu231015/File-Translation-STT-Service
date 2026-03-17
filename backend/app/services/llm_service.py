@@ -204,21 +204,16 @@ class LLMService:
 
                 # Step 2: Final completion with data
                 print("[LLM Tool] Synthesizing final answer with tool data...")
-                # Add a nudge to make sure it summarizes with good formatting
+                # Concise synthesis prompt
                 messages.append({
                     "role": "user",
-                    "content": """請根據以上工具回傳的數據，為我進行詳細的分析總結。
+                    "content": """請根據工具回傳的數據，精簡、準確地回答使用者問題。
 
-為了讓排版清晰易讀，請務必遵守以下規範：
-1. **必須使用 Markdown 標準表格語法**。範例如下：
-   | 排名 | 機種 | 達成率 |
-   | :--- | :--- | :--- |
-   | 1 | 機種A | 100% |
-
-2. **區塊標題**：請使用 `###` 標題（例如：### 📊 業績排名表），並在其上方保留兩個換行。
-3. **段落空行**：段落與段落、表格與文字之間，必須插入一個**完整的空行**。
-4. **機種高亮**：若提到具體機種（如 94135B），請使用 **加粗**。
-5. **換行符號**：請在每個分析點之後明確使用換行，不要讓文字擠在一起。"""
+規範：
+1. **直指重點**：僅回答與問題直接相關的數據，不要加入通用的管理建議或要因推測。
+2. **數據表格化**：排名或對比數據必須使用 Markdown 表格。
+3. **拒絕廢話**：不要有冗長的前言或結尾（如「如您需要進一步分析...」），直接給出答案。
+4. **排版**：確保段落間有空行，機種加粗。"""
                 })
                 
                 final_response = await run_in_threadpool(
