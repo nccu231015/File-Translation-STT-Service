@@ -58,7 +58,8 @@ export function QAInterface() {
         setIsLoading(true);
 
         try {
-            const res = await fetch('/factory-chat', {
+            const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001';
+            const res = await fetch(`${baseUrl}/factory-chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ text: userText })
