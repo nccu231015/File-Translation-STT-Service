@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
@@ -39,20 +39,7 @@ export function QAInterface() {
     const scrollRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
 
-    // ── Factory Helpers ──────────────────────────────────────────────────────
-    const createWelcomeMsg = useCallback(() => ({
-        id: 'welcome',
-        role: 'assistant' as const,
-        content: '您好！我是 **工廠數據智慧助手**。您可以直接詢問關於 **產線開工、工單進度、不良品分析 (Pareto)** 或 **設備運行狀態** 等問題。',
-        timestamp: new Date(),
-    }), []);
 
-    const getQuickQuestions = useCallback((date: string) => [
-        `今日 (${date}) 產線開工與工單狀況？`,
-        '分析目前正在生產業績最好與最差的機種',
-        '哪些設備現在處於停機 (DOWN) 狀態？',
-        '分析上週設備故障的主要趨勢',
-    ], []);
 
     // ── Date Formatting (Hydration Safe) ───────────────────────────────────
     const [timeStrings, setTimeStrings] = useState<Record<string, string>>({});
@@ -75,11 +62,29 @@ export function QAInterface() {
     useEffect(() => {
         setMounted(true);
         const today = new Date().toISOString().split('T')[0];
-        setMessages([createWelcomeMsg()]);
-        setQuickQuestions(getQuickQuestions(today));
         
-        loadSessions();
-    }, [createWelcomeMsg, getQuickQuestions]);
+        // 1. 初始化歡迎訊息
+        setMessages([{
+            id: 'welcome',
+            role: 'assistant' as const,
+            content: '您好！我是 **工廠數據智慧助手**。您可以直接詢問關於 **產線開工、工單進度、不良品分析 (Pareto)** 或 **設備運行狀態** 等問題。',
+            timestamp: new Date(),
+        }]);
+
+        // 2. 初始化快速問題
+        setQuickQuestions([
+            `今日 (${today}) 產線開工與工單狀況？`,
+            '分析目前正在生產業績最好與最差的機種',
+            '哪些設備現在處於停機 (DOWN) 狀態？',
+            '分析上週設備故障的主要趨勢',
+        ]);
+        
+        // 3. 載入對話歷史 (只執行一次)
+        listFactorySessions()
+            .then(list => setSessions(list))
+            .catch(e => console.error("Failed to load sessions", e));
+
+    }, []); // 將依賴改為空陣列，防止重新渲染導致的無限迴圈
 
     useEffect(() => {
         if (scrollRef.current) {
@@ -99,7 +104,12 @@ export function QAInterface() {
 
     const startNewChat = () => {
         setCurrentSessionId(null);
-        setMessages([createWelcomeMsg()]);
+        setMessages([{
+            id: 'welcome',
+            role: 'assistant' as const,
+            content: '您好！我是 **工廠數據智慧助手**。您可以直接詢問關於 **產線開工、工單進度、不良品分析 (Pareto)** 或 **設備運行狀態** 等問題。',
+            timestamp: new Date(),
+        }]);
         setInput('');
         setTimeout(() => inputRef.current?.focus(), 10);
     };
@@ -123,7 +133,7 @@ export function QAInterface() {
     const removeSession = async (e: React.MouseEvent, session_id: string) => {
         e.stopPropagation();
         if (!window.confirm("確定要刪除這段對話嗎？資料刪除後無法復原。")) return;
-        
+
         try {
             await deleteFactorySession(session_id);
             if (currentSessionId === session_id) startNewChat();
@@ -154,7 +164,7 @@ export function QAInterface() {
             const filtered = prev.filter(m => m.id !== 'welcome');
             return [...filtered, userMsg];
         });
-        
+
         setIsLoading(true);
 
         try {
@@ -162,7 +172,7 @@ export function QAInterface() {
 
             if (!currentSessionId) {
                 setCurrentSessionId(data.session_id);
-                loadSessions(); 
+                loadSessions();
             }
 
             const aiMsg: Message = {
@@ -227,11 +237,10 @@ export function QAInterface() {
                                         initial={{ opacity: 0, x: -10 }}
                                         animate={{ opacity: 1, x: 0 }}
                                         onClick={() => loadSession(s.session_id)}
-                                        className={`group flex items-start gap-2 rounded-lg px-3 py-2 cursor-pointer transition-all ${
-                                            currentSessionId === s.session_id
+                                        className={`group flex items-start gap-2 rounded-lg px-3 py-2 cursor-pointer transition-all ${currentSessionId === s.session_id
                                                 ? 'bg-indigo-50 border border-indigo-200 shadow-sm'
                                                 : 'hover:bg-slate-100 active:bg-slate-200'
-                                        }`}
+                                            }`}
                                     >
                                         <MessageSquare className="size-3.5 mt-0.5 flex-shrink-0 text-slate-400" />
                                         <div className="flex-1 min-w-0">
@@ -315,19 +324,17 @@ export function QAInterface() {
                                 animate={{ opacity: 1, y: 0 }}
                                 className={`flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}
                             >
-                                <div className={`size-9 rounded-xl flex-shrink-0 flex items-center justify-center shadow-sm ${
-                                    msg.role === 'user'
+                                <div className={`size-9 rounded-xl flex-shrink-0 flex items-center justify-center shadow-sm ${msg.role === 'user'
                                         ? 'bg-indigo-600 text-white'
                                         : 'bg-white border border-slate-200 text-indigo-600'
-                                }`}>
+                                    }`}>
                                     {msg.role === 'user' ? <UserIcon className="size-5" /> : <Bot className="size-5" />}
                                 </div>
 
-                                <div className={`group relative max-w-[85%] sm:max-w-[75%] rounded-2xl px-4 py-3 text-sm shadow-sm transition-all ${
-                                    msg.role === 'user'
+                                <div className={`group relative max-w-[85%] sm:max-w-[75%] rounded-2xl px-4 py-3 text-sm shadow-sm transition-all ${msg.role === 'user'
                                         ? 'bg-indigo-600 text-white rounded-tr-none'
                                         : 'bg-white border border-slate-100 text-slate-800 rounded-tl-none'
-                                }`}>
+                                    }`}>
                                     {msg.role === 'assistant' ? (
                                         <div className="prose prose-sm max-w-none prose-indigo prose-headings:text-indigo-900 prose-code:bg-indigo-50 prose-code:px-1 prose-code:rounded prose-table:border prose-table:border-slate-200 prose-th:bg-slate-50 prose-th:px-2 prose-td:px-2">
                                             <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>
@@ -337,9 +344,8 @@ export function QAInterface() {
                                     ) : (
                                         <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
                                     )}
-                                    <div className={`flex items-center gap-2 mt-2 pt-1 border-t opacity-60 ${
-                                        msg.role === 'user' ? 'border-white/10 text-white' : 'border-slate-100 text-slate-400'
-                                    }`}>
+                                    <div className={`flex items-center gap-2 mt-2 pt-1 border-t opacity-60 ${msg.role === 'user' ? 'border-white/10 text-white' : 'border-slate-100 text-slate-400'
+                                        }`}>
                                         <p className="text-[10px]">
                                             {timeStrings[msg.id] || "--:--"}
                                         </p>
