@@ -28,8 +28,28 @@ factory_agent = FactoryAgentService(llm_service)
 
 @app.on_event("startup")
 async def startup_event():
-    """Ensure helper DB tables exist on startup."""
+    """Ensure helper DB tables exist and test factory DB connections on startup."""
+    # 1. Employee DB (MySQL)
     await ensure_records_table()
+    print("[EmployeeDB] ✓ employee_records table ready")
+
+    # 2. Factory Databases Health Check
+    try:
+        from app.services.factory.sql_tools import FactorySqlTools
+        factory_tools = FactorySqlTools()
+        db_status = factory_tools.test_connections()
+        
+        if db_status["mssql"] == "ok":
+            print("[MSSQL] ✓ Production DB Ready (172.16.2.68:1433)")
+        else:
+            print(f"[MSSQL] ✗ Connection Failed: {db_status['mssql']}")
+            
+        if db_status["postgres"] == "ok":
+            print("[PostgreSQL] ✓ Equipment DB Ready (172.16.2.68:5432)")
+        else:
+            print(f"[PostgreSQL] ✗ Connection Failed: {db_status['postgres']}")
+    except Exception as e:
+        print(f"[HealthCheck Error] Failed during startup: {e}")
 
 
 # Middleware to help Ngrok bypass browser warning
