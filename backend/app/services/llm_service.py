@@ -211,9 +211,9 @@ class LLMService:
                     if msg.get("role") == "tool":
                         tool_results_text += msg.get("content", "") + "\n"
                 
-                # 取出原始使用者問題（第一個 user 訊息）
+                # 取出最新一次的使用者問題（最後一個 user 訊息），避免被歷史 Session 覆蓋
                 original_question = next(
-                    (m["content"] for m in messages if m["role"] == "user"), ""
+                    (m["content"] for m in reversed(messages) if m["role"] == "user"), ""
                 )
                 
                 # 建立全新的精簡訊息陣列，完全不帶 tool 歷史
@@ -230,9 +230,10 @@ class LLMService:
 {tool_results_text}
 
 請根據以上數據回答使用者問題。規範：
-1. 排行數據請使用 Markdown 表格呈現。
-2. 對最突出的數值（最高/最低）給出 1~2 句精準洞察。
-3. 禁止客服式開場白與結尾。重點名稱或數字請**加粗**。"""
+1. **完整回答清單**：若使用者詢問工單號碼、機種等名單清單，請務必將數據中的陣列內容**完整列出**（可用逗號分隔或項目符號），絕對不可偷懶省略或僅回傳數量。
+2. **排行與數據表格化**：排行或數值對比請使用 Markdown 網格表格呈現。
+3. **精準洞察**：針對數值型數據的最突出項（最高/最低）給出 1~2 句精準洞察。
+4. **禁止廢話**：禁止客服式開場白與結尾。重點名稱或數字請**加粗**。"""
                     }
                 ]
                 
