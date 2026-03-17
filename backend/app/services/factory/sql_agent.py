@@ -146,6 +146,19 @@ class SqlAgent:
             {
                 "type": "function",
                 "function": {
+                    "name": "get_detailed_production_report",
+                    "description": "獲取詳細生產數據報表。用於回答：生產數量、不良數、工單清單與達成率明細。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "target_date": {"type": "string", "description": "例如 '2026-03-17'。"}
+                        }
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
                     "name": "get_kpi_ranking",
                     "description": "獲取產線設備的績效排行(KPI Ranking)，用於找出業績最優或最差、或是異常最高的機種。",
                     "parameters": {
@@ -196,21 +209,18 @@ class SqlAgent:
 {current_date_info}
 
 數據源提示：
-- 基於 [Daily_Status_Report] 提供概覽、產量與基本 KPI (良率/稼動/排行)。
-- 基於 [blpjl_new_copy1] 提供具體的不良項目細節 (如 blxm 不良項目) 與數量分析。
-- 基於 [tjsjjl_new_copy1] 提供專業的停機時間紀錄與統計視圖。
+- [Daily_Status_Report]：開工總覽、產量、績效排行與工單報表細節。
+- [blpjl_new_copy1]：詳細的不良項目與異常碼統計。
+- [tjsjjl_new_copy1]：專業停機紀錄統計表。
 
 規範：
-1. 若數據中包含良率、稼動率、工單數量，請以「網格表格(Markdown)」呈現。
-2. 當使用者詢問「排名」、「績效」、「異常」或「最好/最差」時：
-   - 詢問「哪些機種異常比例高/業績好」，請優先調用 `get_kpi_ranking`。
-   - 詢問「具體是哪些異常項目/原因分佈」，請優先調用 `get_abnormal_details`。
-   - 詢問「停機時間統計排名」，請調用 `get_kpi_ranking(kpi_type='downtime')`。
-   - **絕對不要自行撰寫 SQL 語句或猜測其他表名。**
-3. 若查詢結果為空，請告知使用者該時段可能無生產記錄，或請調低查詢的時間精度。
-4. 請始終保持回覆的專業性，並在對話中考慮 history 中提到的上下文。
-5. 所有的回覆必須使用「繁體中文」。
-6. 回答請保持精簡、點到為止，除非必要，否則不需要畫蛇添足提供一般性管理建議。
+1. **數值報表優先**：若使用者問到「生產數量」、「清單」或「工單明細」，請調用 `get_detailed_production_report`。
+2. **深度分析專區**：
+   - 詢問「不良品統計、趨勢、Pareto、位置分佈」，調用 `get_defect_pareto_analysis`。
+   - 詢問「停機時間統計、原因分析、責任單位」，調用 `get_downtime_cause_analysis`。
+3. **排行與概覽**：查詢今日開工數使用 `get_production_overview`；查詢表現最好/最差使用 `get_kpi_ranking`。
+4. **禁止虛構**：絕對不要自行撰寫 SQL 語句或猜測其他表名。
+5. 所有數值（占比、百分比）請以 Markdown 表格準確列出。
 """
         
         # 組合 Messages：System + History + Current Question
