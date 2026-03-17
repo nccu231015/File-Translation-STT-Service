@@ -26,7 +26,10 @@ class LLMService:
         self.ollama_host = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         print(f"LLM Service connected to Ollama at: {self.ollama_host}")
 
-        self.client = ollama.Client(host=self.ollama_host)
+        self.client = ollama.Client(
+            host=self.ollama_host,
+            timeout=120.0  # 大幅調高逾時時間，防止處理大型報表時連線中斷
+        )
 
         self._ensure_model_exists()
 
@@ -238,26 +241,19 @@ class LLMService:
                     }
                 ]
                 
-                final_response = await run_in_threadpool(
-                    self.client.chat,
-                    model=self.model,
-                    messages=synthesis_messages  # 使用全新精簡訊息
-                )
-                
-                content = final_response.get("message", {}).get("content", "")
-                print(f"[LLM Tool] Raw Final Output: {content[:100]}...")
-                
-                if not content.strip():
-                    print("[LLM Tool] Warning: Final content is EMPTY. Attempting one last forceful summary...")
-                    synthesis_messages.append({
-                        "role": "user",
-                        "content": "你必須回答。請將上述數據以表格或條列式整理出來。"
-                    })
-                    last_chance = await run_in_threadpool(
+                try:
+                    final_response = await run_in_threadpool(
                         self.client.chat,
                         model=self.model,
-                        messages=messages
+                        messages=synthesis_messages
                     )
+                    content = final_response.get("message", {}).get("content", "").strip()
+                    if not content:
+                        return tool_results_text
+                    return content
+                except Exception as synth_e:
+                    print(f"[LLM Synthesis Error] Fallback triggered: {synth_e}")
+                    return f"數據彙整繁忙，以下為原始查詢結果：\n\n{tool_results_text}"
                     content = last_chance.get("message", {}).get("content", "")
                     if not content.strip():
                         content = "抱歉，我拿到了數據但無法生成總結。請稍後再試，或嘗試限縮您的問題範圍。"
