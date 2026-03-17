@@ -4,6 +4,7 @@ import tempfile
 import httpx
 import json
 import base64
+import datetime
 from fastapi import FastAPI, UploadFile, File, HTTPException, Body, Response, Form, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from app.services.stt_service import stt_service
@@ -17,8 +18,6 @@ from app.services.employee_db import (
     ensure_records_table,
 )
 from app.services.rank_service import get_rank, has_view_permission
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
 from app.services.factory.factory_agent import FactoryAgentService
 from app.services.factory.factory_redis import factory_store
 from pydantic import BaseModel
@@ -29,42 +28,39 @@ factory_agent = FactoryAgentService(llm_service)
 
 @app.on_event("startup")
 async def startup_event():
-    """Ensure helper DB tables exist and test factory DB connections on startup."""
+    """初始化服務：確保資料庫連線與 Table 就緒"""
+    print("\n[Startup] Application is starting...", flush=True)
+    
     # 1. Employee DB (MySQL)
-    await ensure_records_table()
-    print("[EmployeeDB] ✓ employee_records table ready")
+    try:
+        await ensure_records_table()
+        print("[EmployeeDB] ✓ employee_records table ready")
+    except Exception as e:
+        print(f"[EmployeeDB Error] {e}")
 
     # 2. Factory Session Store (Redis/Memory)
-    from app.services.factory.factory_redis import factory_store
-    await factory_store.connect()
-    print("[FactoryStore] ✓ Redis/Memory store ready")
+    try:
+        await factory_store.connect()
+        print("[FactoryStore] ✓ Session store initialized")
+    except Exception as e:
+        print(f"[FactoryStore Error] {e}")
 
     # 3. Factory Databases Health Check
     try:
         from app.services.factory.sql_tools import FactorySqlTools
         factory_tools = FactorySqlTools()
         db_status = factory_tools.test_connections()
-        
-        if db_status["mssql"] == "ok":
-            print("[MSSQL] ✓ Production DB Ready (172.16.2.68:1433)")
-        else:
-            print(f"[MSSQL] ✗ Connection Failed: {db_status['mssql']}")
-            
-        if db_status["postgres"] == "ok":
-            print("[PostgreSQL] ✓ Equipment DB Ready (172.16.2.68:5432)")
-        else:
-            print(f"[PostgreSQL] ✗ Connection Failed: {db_status['postgres']}")
+        print(f"[HealthCheck] MSSQL: {db_status['mssql']}, Postgres: {db_status['postgres']}")
     except Exception as e:
-        print(f"[HealthCheck Error] Failed during startup: {e}")
+        print(f"[HealthCheck Error] {e}")
 
-# Middleware to help Ngrok bypass browser warning
+# Middleware
 @app.middleware("http")
 async def add_ngrok_header(request, call_next):
     response = await call_next(request)
     response.headers["ngrok-skip-browser-warning"] = "true"
     return response
 
-# Configure CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -82,10 +78,7 @@ async def login(body: LoginRequest):
     LDAP_URL = "http://api.jebsee.com.tw:8081/api/LDAPLogin"
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                LDAP_URL,
-                data={"username": body.username, "password": body.password},
-            )
+            resp = await client.post(LDAP_URL, data={"username": body.username, "password": body.password})
         data = resp.json()
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"LDAP service unavailable: {e}")
@@ -96,80 +89,67 @@ async def login(body: LoginRequest):
     sso_username = data.get("username", body.username)
     emp = await get_employee(sso_username)
     if emp:
-        title = emp.get("DUTYNAME", "")
-        dept  = emp.get("DEPTNAME", data.get("dpt", ""))
-        name  = emp.get("EMPNAME", data.get("name", ""))
+        title, dept, name = emp.get("DUTYNAME", ""), emp.get("DEPTNAME", data.get("dpt", "")), emp.get("EMPNAME", data.get("name", ""))
     else:
-        title = ""
-        dept  = data.get("dpt", "")
-        name  = data.get("name", "")
+        title, dept, name = "", data.get("dpt", ""), data.get("name", "")
 
     rank = get_rank(title)
     can_view = has_view_permission(rank)
-    return {
-        "username": sso_username,
-        "name": name,
-        "dpt": dept,
-        "title": title,
-        "rank": rank,
-        "canViewRecords": can_view,
-    }
+    return {"username": sso_username, "name": name, "dpt": dept, "title": title, "rank": rank, "canViewRecords": can_view}
 
 @app.get("/api/records/{empid}")
-async def get_records_for_manager(empid: str):
+async def get_records(empid: str):
+    """
+    獲取員工紀錄清單。
+    如果是經理權限，則獲取下屬清單；如果是普通員工，獲取個人歷史紀錄。
+    """
     requester = await get_employee(empid)
     if not requester:
-        raise HTTPException(status_code=404, detail="Employee not found")
+        # 嘗試直接獲取該員紀錄
+        records = await get_employee_records(empid)
+        return {"empid": empid, "employees": [], "records": records}
+    
     rank = get_rank(requester.get("DUTYNAME", ""))
-    if not has_view_permission(rank):
-        raise HTTPException(status_code=403, detail="No permission to view employee records")
-    dept = requester.get("DEPTNAME", "")
-    subordinates = await get_subordinates(empid, dept, rank)
-    return {"employees": subordinates}
-
-class SaveRecordRequest(BaseModel):
-    empid: str
-    type: str
-    file_name: str
-    summary: Optional[str] = ""
-    decisions: Optional[str] = ""
-    action_items: Optional[str] = ""
+    if has_view_permission(rank):
+        # 經理視角：獲取下屬列表
+        dept = requester.get("DEPTNAME", "")
+        subordinates = await get_subordinates(empid, dept, rank)
+        return {"requester_rank": rank, "employees": subordinates}
+    else:
+        # 個人視角：獲取個人紀錄
+        records = await get_employee_records(empid)
+        return {"empid": empid, "records": records}
 
 @app.post("/api/employee-records")
-async def create_employee_record(body: SaveRecordRequest):
+async def create_employee_record(body: dict):
+    # 兼容舊版與新版 Request Body
     record_id = await save_employee_record(
-        empid=body.empid,
-        record_type=body.type,
-        file_name=body.file_name,
-        summary=body.summary or "",
-        decisions=body.decisions or "",
-        action_items=body.action_items or "",
+        empid=body.get("empid"),
+        record_type=body.get("type", "voice"),
+        file_name=body.get("file_name", "unknown"),
+        summary=body.get("summary", ""),
+        decisions=body.get("decisions", ""),
+        action_items=body.get("action_items", ""),
     )
-    if record_id is None:
-        raise HTTPException(status_code=500, detail="Failed to save record")
+    if record_id is None: raise HTTPException(status_code=500, detail="Failed to save record")
     return {"id": record_id, "success": True}
-
-@app.get("/api/employee-records/{empid}")
-async def fetch_employee_records(empid: str):
-    records = await get_employee_records(empid)
-    return {"empid": empid, "records": records}
 
 @app.get("/")
 async def read_root():
-    return {"message": "STT & Translation API Service is Running"}
+    return {"message": "Factory AI & STT Service is Running"}
 
 @app.post("/stt")
-async def transcribe_audio(
-    file: UploadFile = File(...), 
-    mode: str = Form("chat")
-):
+async def transcribe_audio(file: UploadFile = File(...), mode: str = Form("chat")):
+    temp_file_path = ""
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[1]) as temp_file:
+        suffix = os.path.splitext(file.filename)[1]
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
             shutil.copyfileobj(file.file, temp_file)
             temp_file_path = temp_file.name
         from fastapi.concurrency import run_in_threadpool
         stt_result = await run_in_threadpool(stt_service.transcribe, temp_file_path)
-        os.remove(temp_file_path)
+        if os.path.exists(temp_file_path): os.remove(temp_file_path)
+        
         user_text = stt_result["text"]
         if mode == "chat":
             llm_response = await llm_service.chat(user_text)
@@ -177,22 +157,15 @@ async def transcribe_audio(
         elif mode == "meeting":
             analysis = await run_in_threadpool(llm_service.analyze_meeting_transcript, user_text)
             return {"transcription": stt_result, "analysis": analysis}
-        raise HTTPException(status_code=400, detail="Invalid mode")
+        return {"transcription": stt_result}
     except Exception as e:
-        if 'temp_file_path' in locals() and os.path.exists(temp_file_path): os.remove(temp_file_path)
+        if temp_file_path and os.path.exists(temp_file_path): os.remove(temp_file_path)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/pdf-translation")
-async def translate_pdf(
-    background_tasks: BackgroundTasks,
-    file: UploadFile = File(...),
-    target_lang: str = Form(None),
-    debug: str = Form("false")
-):
+async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = File(...), target_lang: str = Form(None), debug: str = Form("false")):
     debug_mode = str(debug).lower() in ("true", "1", "t", "yes", "on")
-    if not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="File must be a PDF")
-    temp_input_path = None
+    temp_input_path = ""
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_input:
             shutil.copyfileobj(file.file, temp_input)
@@ -210,45 +183,46 @@ async def translate_pdf(
 
 @app.post("/chat")
 async def chat_text(payload: dict):
-    text = payload.get("question", "")
+    text = payload.get("question", payload.get("text", ""))
     response = await llm_service.chat(text)
     return {"response": response}
 
 @app.post("/factory-chat")
 async def factory_chat(payload: dict, background_tasks: BackgroundTasks):
-    """Factory Data Q&A Interface with session history."""
+    """工廠數據聊天接口：整合 Session 歷史與 SQL 查詢"""
     try:
         user_text = payload.get("text")
         session_id = payload.get("session_id")
-        if not user_text:
-            raise HTTPException(status_code=400, detail="Text field is required")
+        if not user_text: raise HTTPException(status_code=400, detail="Text field is required")
         
         history = []
         if session_id:
             session = await factory_store.get_session(session_id)
-            if session:
-                history = session.get("messages", [])
+            if session: history = session.get("messages", [])
         
-        # 兜底機制：若抓不到 session 或 ID 為空，則新建一個
+        # 確保有 Session ID
         if not session_id or (session_id and not history and not await factory_store.get_session(session_id)):
             session = await factory_store.create_session(user_text)
             session_id = session["session_id"]
             
-        print(f"\n[Factory Chat] Request (session={session_id})", flush=True)
+        print(f"\n[Factory Chat] Processing request (session={session_id})", flush=True)
         response = await factory_agent.chat(user_text, history=history)
         
-        # 異步存檔，不阻塞主線程
-        background_tasks.add_task(factory_store.append_messages, session_id, user_text, response)
-        
-        print(f"[Factory Chat] Success: {len(response)} chars", flush=True)
-        return {"response": response, "session_id": session_id}
+        # 安全地添加背景存檔任務
+        try:
+            background_tasks.add_task(factory_store.append_messages, session_id, user_text, str(response))
+        except Exception as bg_e:
+            print(f"[BG Task Error] Failed to queue session save: {bg_e}")
+
+        print(f"[Factory Chat] Success: {len(str(response))} chars", flush=True)
+        # 強制轉型為 string 確保 JSON 序列化成功
+        return {"response": str(response), "session_id": str(session_id)}
     except Exception as e:
         print(f"[Factory API Error] {e}", flush=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/factory-sessions")
 async def list_factory_sessions():
-    from app.services.factory.factory_redis import factory_store
     try:
         sessions = await factory_store.list_sessions()
         return {"sessions": sessions}
@@ -258,20 +232,12 @@ async def list_factory_sessions():
 
 @app.get("/factory-sessions/{session_id}")
 async def get_factory_session(session_id: str):
-    from app.services.factory.factory_redis import factory_store
     session = await factory_store.get_session(session_id)
     if not session: raise HTTPException(status_code=404, detail="Session not found")
     return session
 
 @app.delete("/factory-sessions/{session_id}")
 async def delete_factory_session(session_id: str):
-    """Deletes a specific factory chat session."""
-    from app.services.factory.factory_redis import factory_store
     deleted = await factory_store.delete_session(session_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail="Session not found")
+    if not deleted: raise HTTPException(status_code=404, detail="Session not found")
     return {"message": "Session deleted"}
-
-@app.get("/api/records/{empid}")
-async def get_records(empid: str):
-    return {"records": await get_employee_records(empid)}
