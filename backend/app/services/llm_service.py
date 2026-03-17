@@ -202,24 +202,44 @@ class LLMService:
                             "content": f"Error executing tool: {te}",
                         })
 
-                # Step 2: Final completion with data
+                # Step 2: Final completion with data — 用全新精簡對話完成彙整，避免 LLM 重新進入 tool-calling 模式
                 print("[LLM Tool] Synthesizing final answer with tool data...")
-                # Concise synthesis prompt
-                messages.append({
-                    "role": "user",
-                    "content": """請根據工具回傳的數據，專業、精準地回答使用者問題。
+                
+                # 收集所有 tool 回傳結果
+                tool_results_text = ""
+                for msg in messages:
+                    if msg.get("role") == "tool":
+                        tool_results_text += msg.get("content", "") + "\n"
+                
+                # 取出原始使用者問題（第一個 user 訊息）
+                original_question = next(
+                    (m["content"] for m in messages if m["role"] == "user"), ""
+                )
+                
+                # 建立全新的精簡訊息陣列，完全不帶 tool 歷史
+                synthesis_messages = [
+                    {
+                        "role": "system",
+                        "content": "你是一位簡潔、專業的製造業數據分析師。請直接根據提供的數據作答，不要廢話。"
+                    },
+                    {
+                        "role": "user",
+                        "content": f"""使用者問題：{original_question}
 
-規範：
-1. **數據表格化**：排行或對比數據請優先使用 Markdown 網格表格呈現。
-2. **精準解析**：請針對表格數據中最突出（最高、最低等）的項目給出 1~2 句簡要的洞察說明（Insight），幫助使用者快速掌握重點。
-3. **拒絕廢話**：絕對不要有客服式的開場白或結尾（例如「如果您還有其他問題...」、「總結來說...」）。不說廢話，也不要做缺乏數據支撐的主觀猜測。
-4. **排版**：段落間保持空行，重點名稱或數字請**加粗**。"""
-                })
+查詢到的數據如下：
+{tool_results_text}
+
+請根據以上數據回答使用者問題。規範：
+1. 排行數據請使用 Markdown 表格呈現。
+2. 對最突出的數值（最高/最低）給出 1~2 句精準洞察。
+3. 禁止客服式開場白與結尾。重點名稱或數字請**加粗**。"""
+                    }
+                ]
                 
                 final_response = await run_in_threadpool(
                     self.client.chat,
                     model=self.model,
-                    messages=messages
+                    messages=synthesis_messages  # 使用全新精簡訊息
                 )
                 
                 content = final_response.get("message", {}).get("content", "")
@@ -227,8 +247,10 @@ class LLMService:
                 
                 if not content.strip():
                     print("[LLM Tool] Warning: Final content is EMPTY. Attempting one last forceful summary...")
-                    # Force a very strict prompt if it fails to summarize
-                    messages.append({"role": "system", "content": "你必須回答。請將剛才得到的數據以表格或條列式整理給使用者。"})
+                    synthesis_messages.append({
+                        "role": "user",
+                        "content": "你必須回答。請將上述數據以表格或條列式整理出來。"
+                    })
                     last_chance = await run_in_threadpool(
                         self.client.chat,
                         model=self.model,
