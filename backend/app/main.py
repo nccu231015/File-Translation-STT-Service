@@ -215,8 +215,15 @@ async def factory_chat(payload: dict, background_tasks: BackgroundTasks):
             print(f"[BG Task Error] Failed to queue session save: {bg_e}")
 
         print(f"[Factory Chat] Success: {len(str(response))} chars", flush=True)
-        # 強制轉型為 string 確保 JSON 序列化成功
-        return {"response": str(response), "session_id": str(session_id)}
+        
+        # 手動序列化以防止大型表格在最後傳輸時發生隱形 500 錯誤
+        combined_result = {
+            "response": str(response),
+            "session_id": str(session_id)
+        }
+        json_str = json.dumps(combined_result, ensure_ascii=False)
+        return Response(content=json_str, media_type="application/json")
+        
     except Exception as e:
         print(f"[Factory API Error] {e}", flush=True)
         raise HTTPException(status_code=500, detail=str(e))
