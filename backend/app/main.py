@@ -250,6 +250,15 @@ async def get_factory_session(session_id: str):
     if not session: raise HTTPException(status_code=404, detail="Session not found")
     return session
 
+@app.delete("/factory-sessions/{session_id}")
+async def delete_factory_session(session_id: str):
+    """Deletes a specific factory chat session."""
+    from app.services.factory.factory_redis import factory_store
+    deleted = await factory_store.delete_session(session_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"message": "Session deleted"}
+
 @app.get("/api/records/{empid}")
 async def get_records(empid: str):
     return {"records": await get_employee_records(empid)}
