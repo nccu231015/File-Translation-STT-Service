@@ -3,6 +3,28 @@ import psycopg2
 import psycopg2.extras
 from typing import Dict, Any, List
 from .db_config import MSSQL_CONFIG, POSTGRES_CONFIG
+from decimal import Decimal
+import datetime
+
+
+def _sanitize(row: dict) -> dict:
+    """
+    Convert non-JSON-serializable types to safe Python equivalents.
+    - decimal.Decimal -> float
+    - datetime.date / datetime.datetime -> ISO string
+    - bytes -> decoded string
+    """
+    clean = {}
+    for k, v in row.items():
+        if isinstance(v, Decimal):
+            clean[k] = float(v)
+        elif isinstance(v, (datetime.date, datetime.datetime)):
+            clean[k] = v.isoformat()
+        elif isinstance(v, bytes):
+            clean[k] = v.decode('utf-8', errors='replace')
+        else:
+            clean[k] = v
+    return clean
 
 class FactorySqlTools:
     """
@@ -66,7 +88,7 @@ class FactorySqlTools:
             result = cursor.fetchall()
             print(f"[MSSQL Result] Fetched {len(result)} rows.", flush=True)
             conn.close()
-            return result
+            return [_sanitize(dict(row)) for row in result]
         except Exception as e:
             print(f"[SQL Error] query failed: {e}")
             return [{"error": str(e)}]
@@ -278,8 +300,8 @@ class FactorySqlTools:
             result = cursor.fetchall()
             print(f"[Postgres Result] Fetched {len(result)} rows.", flush=True)
             conn.close()
-            # Convert RealDictRow to standard dict for JSON serialization
-            return [dict(row) for row in result]
+            # Convert RealDictRow to standard dict and sanitize types for JSON
+            return [_sanitize(dict(row)) for row in result]
         except Exception as e:
             print(f"[Postgres Error] query failed: {e}")
             return [{"error": str(e)}]

@@ -121,9 +121,16 @@ export function QAInterface() {
 
     const removeSession = async (e: React.MouseEvent, session_id: string) => {
         e.stopPropagation();
-        await deleteFactorySession(session_id);
-        if (currentSessionId === session_id) startNewChat();
-        await loadSessions();
+        if (!window.confirm("確定要刪除這段對話嗎？資料刪除後無法復原。")) return;
+        
+        try {
+            await deleteFactorySession(session_id);
+            if (currentSessionId === session_id) startNewChat();
+            await loadSessions();
+        } catch (err) {
+            console.error("Delete failed", err);
+            alert("刪除失敗，請稍後再試。");
+        }
     };
 
     // ── Send Message ─────────────────────────────────────────────────────────
@@ -235,7 +242,7 @@ export function QAInterface() {
                                         <Button
                                             variant="ghost" size="icon"
                                             onClick={(e) => removeSession(e, s.session_id)}
-                                            className="size-6 opacity-0 group-hover:opacity-100 text-slate-400 hover:text-red-500 flex-shrink-0"
+                                            className="size-6 opacity-30 group-hover:opacity-100 text-slate-400 hover:text-red-500 flex-shrink-0 transition-opacity"
                                         >
                                             <Trash2 className="size-3" />
                                         </Button>
