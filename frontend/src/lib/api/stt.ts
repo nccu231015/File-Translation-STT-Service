@@ -30,9 +30,10 @@ export const analyzeMeetingAudio = async (file: File): Promise<STTResponse> => {
     formData.append('file', file);
     formData.append('mode', 'meeting');
 
-    // Uses relative path — Next.js rewrites in next.config.ts proxy to backend
+    // DIRECT CALL to backend to bypass Next.js proxy/body-size issues
+    const BACKEND_URL = "http://172.16.2.68:8000";
     try {
-        const response = await fetch(`/api/proxy/stt`, {
+        const response = await fetch(`${BACKEND_URL}/stt`, {
             method: 'POST',
             body: formData,
         });

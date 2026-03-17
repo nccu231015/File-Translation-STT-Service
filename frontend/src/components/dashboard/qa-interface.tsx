@@ -21,11 +21,12 @@ interface Message {
     id: string;
     role: 'user' | 'assistant';
     content: string;
-    timestamp: Date;
+    timestamp: Date | null; // 改為可為空，避免 Hydration 衝突
 }
 
 export function QAInterface() {
     const [mounted, setMounted] = useState(false);
+    // ... (其餘狀態保持不變)
     const [messages, setMessages] = useState<Message[]>([]);
     const [quickQuestions, setQuickQuestions] = useState<string[]>([]);
     const [input, setInput] = useState('');
@@ -38,16 +39,15 @@ export function QAInterface() {
 
     const scrollRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
-
-
-
     // ── Date Formatting (Hydration Safe) ───────────────────────────────────
     const [timeStrings, setTimeStrings] = useState<Record<string, string>>({});
 
     useEffect(() => {
         const newTimes: Record<string, string> = {};
         messages.forEach(m => {
-            newTimes[m.id] = m.timestamp.toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' });
+            if (m.timestamp) {
+                newTimes[m.id] = m.timestamp.toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' });
+            }
         });
         setTimeStrings(newTimes);
     }, [messages]);

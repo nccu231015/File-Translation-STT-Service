@@ -32,7 +32,9 @@ export const translatePDF = async (
     formData.append('target_lang', targetLang);
     formData.append('debug', debug.toString());
 
-    const response = await fetch(`/pdf-translation`, {
+    // DIRECT CALL to backend to bypass Next.js proxy/body-size issues
+    const BACKEND_URL = "http://172.16.2.68:8000";
+    const response = await fetch(`${BACKEND_URL}/pdf-translation`, {
         method: 'POST',
         body: formData,
     });
