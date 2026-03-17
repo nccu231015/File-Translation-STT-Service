@@ -60,6 +60,19 @@ class SqlAgent:
             {
                 "type": "function",
                 "function": {
+                    "name": "get_line_downtime_records",
+                    "description": "獲取特定日期的產線停機詳細紀錄明細（包含備註與類別）。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "target_date": {"type": "string", "description": "例如 '2026-03-17'。"}
+                        }
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
                     "name": "get_defect_pareto_analysis",
                     "description": "針對特定工單進行不良品 Pareto 分析（含佔比與累積百分比）。",
                     "parameters": {
@@ -90,8 +103,35 @@ class SqlAgent:
             {
                 "type": "function",
                 "function": {
+                    "name": "get_equipment_by_floor",
+                    "description": "按樓層查詢生產設備分佈與資訊。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "floor": {"type": "string", "description": "樓層名稱，例如 '1F'、'2F-1'。"}
+                        },
+                        "required": ["floor"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_active_equipment",
+                    "description": "獲取當前或特定日期有在生產（稼動）的機台代號清單。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "target_date": {"type": "string", "description": "格式為 'YYYYMMDD'，如 '20260317'。不傳則預設今日。"}
+                        }
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
                     "name": "get_equipment_daily_status",
-                    "description": "取得設備(Postgres)的狀態(RUN/DOWN/IDEL)統計明細與良率。",
+                    "description": "取得特定設備(機台)在指定日期的運作狀態(RUN/DOWN/IDEL)統計明細與良率。",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -99,6 +139,40 @@ class SqlAgent:
                             "target_date_dash": {"type": "string", "description": "日期，格式必須為 'YYYY-MM-DD'"}
                         },
                         "required": ["equipment_code", "target_date_dash"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_equipment_downtime_summary",
+                    "description": "分析特定時間範圍內的設備故障趨勢、故障碼與停機次數排行。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "start_date_num": {"type": "string", "description": "開始日期 'YYYYMMDD'"},
+                            "end_date_num": {"type": "string", "description": "結束日期 'YYYYMMDD'"}
+                        },
+                        "required": ["start_date_num", "end_date_num"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_kpi_ranking",
+                    "description": "獲取產線設備的績效排行(KPI Ranking)，用於找出業績最優或最差的機種。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "kpi_type": {
+                                "type": "string", 
+                                "enum": ["top_achieving", "lagging", "abnormal", "downtime", "unachieved"],
+                                "description": "排行類型：'top_achieving'(業績達標前10)、'lagging'(業績最落後前10)、'abnormal'(不良率最高前10)、'downtime'(停機最久前10)、'unachieved'(達成率未過半)。"
+                            },
+                            "target_date": {"type": "string", "description": "例如 '2026-03-17'。"}
+                        },
+                        "required": ["kpi_type"]
                     }
                 }
             }

@@ -182,7 +182,8 @@ class LLMService:
                 for tool_call in tool_calls:
                     func_name = tool_call["function"]["name"]
                     func_args = tool_call["function"]["arguments"]
-                    print(f"[LLM Tool] Executing {func_name} with {func_args}")
+                    print(f"\n[AI Thought] -> Requesting Tool: {func_name}")
+                    print(f"[Tool Params] -> {json.dumps(func_args, indent=2, ensure_ascii=False)}")
                     
                     # Execute tool (Run-in-threadpool as DB queries are blocking)
                     try:

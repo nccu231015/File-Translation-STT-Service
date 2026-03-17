@@ -40,6 +40,10 @@ const nextConfig: NextConfig = {
         source: "/api/records/:path*",
         destination: `${BACKEND_URL}/api/records/:path*`,
       },
+      {
+        source: "/factory-sessions/:path*",
+        destination: `${BACKEND_URL}/factory-sessions/:path*`,
+      },
     ];
   },
 };

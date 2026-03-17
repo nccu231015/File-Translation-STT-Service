@@ -6,7 +6,10 @@ services:
     container_name: stt-translation-app
     ports:
       - "8000:8000"
+    depends_on:
+      - redis
     environment:
+      - REDIS_URL=redis://redis:6379
       # Ollama is now on the same host (AI host)
       # host.docker.internal allows container to access host's Ollama service
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
@@ -40,6 +43,14 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+
+  redis:
+    image: redis:7-alpine
+    container_name: stt-redis
+    ports:
+      - "6379:6379"
+    restart: always
+    command: redis-server --save 60 1 --loglevel warning
 
 #   nginx:
 #     image: nginx:latest

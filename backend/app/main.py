@@ -535,22 +535,58 @@ async def chat_text(payload: dict):
 async def factory_chat(payload: dict):
     """
     Factory Data Q&A Interface (Integrated SQL + RAG)
+    Supports session-based conversation history via Redis.
     """
+    from app.services.factory.factory_redis import factory_store
     try:
         user_text = payload.get("text")
-        print(f"\n[Factory Chat] Request received: {user_text}", flush=True)
-        
+        session_id = payload.get("session_id")  # Optional: continue existing session
+        print(f"\n[Factory Chat] Request: '{user_text}' (session={session_id})", flush=True)
+
         if not user_text:
             raise HTTPException(status_code=400, detail="Text field is required")
 
+        # Create new session if none provided
+        if not session_id:
+            session = await factory_store.create_session(user_text)
+            session_id = session["session_id"]
+
         # Delegate to Factory Agent for routing and execution
         response = await factory_agent.chat(user_text)
-        
+
+        # Save the Q&A pair to session
+        await factory_store.append_messages(session_id, user_text, response)
+
         print(f"[Factory Chat] Success: Response length {len(response)}", flush=True)
-        return {"response": response}
+        return {"response": response, "session_id": session_id}
     except Exception as e:
         print(f"[Factory API Error] {e}", flush=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/factory-sessions")
+async def list_factory_sessions():
+    """Returns a list of all factory chat sessions (newest first)."""
+    from app.services.factory.factory_redis import factory_store
+    sessions = await factory_store.list_sessions()
+    return {"sessions": sessions}
 
+
+@app.get("/factory-sessions/{session_id}")
+async def get_factory_session(session_id: str):
+    """Returns the full message history of a specific session."""
+    from app.services.factory.factory_redis import factory_store
+    session = await factory_store.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found or expired")
+    return session
+
+
+@app.delete("/factory-sessions/{session_id}")
+async def delete_factory_session(session_id: str):
+    """Deletes a specific factory chat session."""
+    from app.services.factory.factory_redis import factory_store
+    deleted = await factory_store.delete_session(session_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"message": "Session deleted"}

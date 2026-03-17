@@ -60,9 +60,11 @@ class FactorySqlTools:
                 as_dict=True
             )
             cursor = conn.cursor()
+            print(f"\n[MSSQL Execute]\n{query}\n", flush=True)
             cursor.execute(query)
             # Not all queries return records (like UPDATE/INSERT, but these are all SELECT)
             result = cursor.fetchall()
+            print(f"[MSSQL Result] Fetched {len(result)} rows.", flush=True)
             conn.close()
             return result
         except Exception as e:
@@ -267,11 +269,14 @@ class FactorySqlTools:
             )
             cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             if params:
+                print(f"\n[Postgres Execute]\n{query}\nParams: {params}\n", flush=True)
                 cursor.execute(query, params)
             else:
+                print(f"\n[Postgres Execute]\n{query}\n", flush=True)
                 cursor.execute(query)
             
             result = cursor.fetchall()
+            print(f"[Postgres Result] Fetched {len(result)} rows.", flush=True)
             conn.close()
             # Convert RealDictRow to standard dict for JSON serialization
             return [dict(row) for row in result]
