@@ -4,11 +4,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
-import { Send, Loader2, Database, AlertCircle, Bot, User as UserIconAlt } from 'lucide-react';
+import { Send, Loader2, Database, Bot, User as UserIconAlt } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { motion, AnimatePresence } from 'framer-motion';
+import { askFactory } from '@/lib/api/factory';
 
 interface Message {
     id: string;
@@ -18,17 +19,33 @@ interface Message {
 }
 
 export function QAInterface() {
-    const [messages, setMessages] = useState<Message[]>([
-        {
-            id: 'welcome',
-            role: 'assistant',
-            content: '您好！我是 **工廠數據智慧助手**。您可以直接詢問關於 **產線開工、工單進度、不良品分析 (Pareto)** 或 **設備運行狀態** 等問題。',
-            timestamp: new Date()
-        }
-    ]);
+    const [mounted, setMounted] = useState(false);
+    const [messages, setMessages] = useState<Message[]>([]);
+    const [quickQuestions, setQuickQuestions] = useState<string[]>([]);
     const [input, setInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const scrollRef = useRef<HTMLDivElement>(null);
+
+    // Initial setup (Client side only to avoid Hydration Error)
+    useEffect(() => {
+        setMounted(true);
+        const today = new Date();
+        const todayStr = today.toISOString().split('T')[0];
+        setMessages([
+            {
+                id: 'welcome',
+                role: 'assistant',
+                content: '您好！我是 **工廠數據智慧助手**。您可以直接詢問關於 **產線開工、工單進度、不良品分析 (Pareto)** 或 **設備運行狀態** 等問題。',
+                timestamp: new Date()
+            }
+        ]);
+        setQuickQuestions([
+            `今日 (${todayStr}) 產線開工與工單狀況？`,
+            '分析目前正在生產業績最好與最差的機種',
+            `查詢特定工單在 ${todayStr} 的良率與生產進度`,
+            '哪些設備現在處於停機 (DOWN) 狀態？'
+        ]);
+    }, []);
 
     // 自動捲動置底
     useEffect(() => {
@@ -37,15 +54,7 @@ export function QAInterface() {
         }
     }, [messages, isLoading]);
 
-    const today = new Date();
-    const todayStr = today.toISOString().split('T')[0];
-
-    const quickQuestions = [
-        `今日 (${todayStr}) 產線開工與工單狀況？`,
-        '分析目前正在生產業績最好與最差的機種',
-        `查詢特定工單在 ${todayStr} 的良率與生產進度`,
-        '哪些設備現在處於停機 (DOWN) 狀態？'
-    ];
+    if (!mounted) return null;
 
     const handleSend = async (text: string = input) => {
         if (!text.trim() || isLoading) return;
@@ -58,15 +67,7 @@ export function QAInterface() {
         setIsLoading(true);
 
         try {
-            const baseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001';
-            const res = await fetch(`${baseUrl}/factory-chat`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text: userText })
-            });
-
-            if (!res.ok) throw new Error('Factory Chat API failed');
-            const data = await res.json();
+            const data = await askFactory(userText);
 
             const aiMsg: Message = {
                 id: (Date.now() + 1).toString(),
