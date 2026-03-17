@@ -77,10 +77,23 @@ class FactorySqlTools:
         date_cond = f"PRO_TIME='{target_date}'" if target_date else "PRO_TIME=CONVERT(date, GETDATE())"
         query = f"SELECT [jz], [WORK_ORDER_NO] FROM [dbo].[Daily_Status_Report] WHERE {date_cond}"
         rows = self._execute_mssql_query(query)
+        
+        # 活線總數 (Raw count)
         working_count = len(rows)
-        work_orders = list(set([r['WORK_ORDER_NO'] for r in rows if r.get('WORK_ORDER_NO')]))
-        models = list(set([r['jz'] for r in rows if r.get('jz')]))
-        return {"status": "success", "working_lines_count": working_count, "active_work_orders": work_orders, "active_models": models}
+        
+        # 去重後的清單與計數
+        unique_wos = list(set([r['WORK_ORDER_NO'] for r in rows if r.get('WORK_ORDER_NO')]))
+        unique_models = list(set([r['jz'] for r in rows if r.get('jz')]))
+        
+        return {
+            "status": "success",
+            "date": target_date or "today",
+            "working_lines_count": working_count,
+            "active_work_orders_count": len(unique_wos),
+            "active_models_count": len(unique_models),
+            "active_work_orders": unique_wos,
+            "active_models": unique_models
+        }
 
     def get_detailed_production_report(self, target_date: str = None) -> Dict[str, Any]:
         """
