@@ -130,20 +130,34 @@ class FactorySqlTools:
         date_cond = f"PRO_TIME='{target_date}'" if target_date else "PRO_TIME=CONVERT(date, GETDATE())"
         
         if kpi_type == "top_achieving":
-            order_by = "DESC"
-        else: # lagging, etc.
-            order_by = "ASC"
+            order_by_col = "sum(ACTUAL_PRO)"
+            order_dir = "DESC"
+        elif kpi_type == "lagging":
+            order_by_col = "sum(ACTUAL_PRO)"
+            order_dir = "ASC"
+        elif kpi_type == "abnormal":
+            # 以 BAD_PRO_RATE (不良率) 作為基準
+            order_by_col = "sum(BAD_PRO_RATE)"
+            order_dir = "DESC"
+        elif kpi_type == "downtime":
+            # 以 DOWN_TIME (停機分鐘) 作為基準
+            order_by_col = "sum(CAST(DOWN_TIME AS FLOAT))"
+            order_dir = "DESC"
+        else: # 預設以產量排序
+            order_by_col = "sum(ACTUAL_PRO)"
+            order_dir = "DESC"
             
-        # 以 ACTUAL_PRO (實際產出) 作為業績/數量排名基準
         query = f"""
             SELECT TOP 10 
                 jz AS Machine_Model, 
                 sum(WORK_ORDER_NUM) as Target_Qty, 
-                sum(ACTUAL_PRO) as Actual_Qty 
+                sum(ACTUAL_PRO) as Actual_Qty,
+                sum(BAD_PRO_RATE) as Bad_Rate_Total,
+                sum(CAST(DOWN_TIME AS FLOAT)) as Total_Downtime_Mins
             FROM [dbo].[Daily_Status_Report] 
             WHERE {date_cond} AND jz IS NOT NULL
             GROUP BY jz 
-            ORDER BY sum(ACTUAL_PRO) {order_by}
+            ORDER BY {order_by_col} {order_dir}
         """
         
         ranking_res = self._execute_mssql_query(query)
