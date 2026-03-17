@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkBreaks from 'remark-breaks';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     askFactory, listFactorySessions, getFactorySession, deleteFactorySession,
@@ -329,7 +330,7 @@ export function QAInterface() {
                                 }`}>
                                     {msg.role === 'assistant' ? (
                                         <div className="prose prose-sm max-w-none prose-indigo prose-headings:text-indigo-900 prose-code:bg-indigo-50 prose-code:px-1 prose-code:rounded prose-table:border prose-table:border-slate-200 prose-th:bg-slate-50 prose-th:px-2 prose-td:px-2">
-                                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                            <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>
                                                 {msg.content}
                                             </ReactMarkdown>
                                         </div>

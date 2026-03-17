@@ -204,10 +204,10 @@ class LLMService:
 
                 # Step 2: Final completion with data
                 print("[LLM Tool] Synthesizing final answer with tool data...")
-                # Add a nudge to make sure it summarizes
+                # Add a nudge to make sure it summarizes with good formatting
                 messages.append({
                     "role": "user",
-                    "content": "請根據以上工具回傳的數據，為我進行詳細的分析總結。"
+                    "content": "請根據以上工具回傳的數據，為我進行詳細的分析總結。請務必遵守以下排版規範：\n1. 使用 Markdown 標準表格呈現排名。\n2. 不同章節使用 ### 標題與分隔線隔開。\n3. 段落之間保持至少兩個換行，確保畫面寬鬆、易於閱讀。\n4. 若有具體機種，請加粗顯示。"
                 })
                 
                 final_response = await run_in_threadpool(
