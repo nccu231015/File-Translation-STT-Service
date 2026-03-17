@@ -8,8 +8,7 @@
  * Mirrors the pattern used by lib/api/stt.ts for voice processing.
  */
 
-const getApiUrl = () =>
-    process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+// Uses relative path — Next.js rewrites in next.config.ts proxy to backend.
 
 export interface TranslationResponse {
     pdfBlob: Blob;
@@ -33,7 +32,7 @@ export const translatePDF = async (
     formData.append('target_lang', targetLang);
     formData.append('debug', debug.toString());
 
-    const response = await fetch(`${getApiUrl()}/pdf-translation`, {
+    const response = await fetch(`/pdf-translation`, {
         method: 'POST',
         body: formData,
     });

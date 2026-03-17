@@ -32,7 +32,7 @@ interface EmployeeRecord {
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+// Uses relative paths — Next.js rewrites in next.config.ts proxy to backend.
 
 const HEADERS = { 'ngrok-skip-browser-warning': 'true' };
 
@@ -178,7 +178,7 @@ export function RecordsBrowser() {
         setEmpLoading(true);
         setEmpError(null);
         try {
-            const res = await fetch(`${API_URL}/api/records/${user.username}`, { headers: HEADERS });
+            const res = await fetch(`/api/records/${user.username}`, { headers: HEADERS });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = await res.json();
             setEmployees(data.employees ?? []);
@@ -198,7 +198,7 @@ export function RecordsBrowser() {
         setRecError(null);
         setRecLoading(true);
         try {
-            const res = await fetch(`${API_URL}/api/employee-records/${emp.EMPID}`, { headers: HEADERS });
+            const res = await fetch(`/api/employee-records/${emp.EMPID}`, { headers: HEADERS });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = await res.json();
             setRecords(data.records ?? []);

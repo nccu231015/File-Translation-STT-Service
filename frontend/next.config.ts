@@ -36,6 +36,10 @@ const nextConfig: NextConfig = {
         source: "/api/employee-records",
         destination: `${BACKEND_URL}/api/employee-records`,
       },
+      {
+        source: "/api/records/:path*",
+        destination: `${BACKEND_URL}/api/records/:path*`,
+      },
     ];
   },
 };

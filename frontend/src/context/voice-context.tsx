@@ -208,7 +208,7 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
                     ).join('\n')
                     : String(analysis.action_items ?? '');
 
-                fetch(`${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'}/api/employee-records`, {
+                fetch(`/api/employee-records`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
                     body: JSON.stringify({

@@ -30,12 +30,9 @@ export const analyzeMeetingAudio = async (file: File): Promise<STTResponse> => {
     formData.append('file', file);
     formData.append('mode', 'meeting');
 
-    // Bypass Next.js API route to avoid Node.js fetch timeout
-    // Using direct backend URL
-    const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-
+    // Uses relative path — Next.js rewrites in next.config.ts proxy to backend
     try {
-        const response = await fetch(`${API_URL}/stt`, {
+        const response = await fetch(`/stt`, {
             method: 'POST',
             body: formData,
         });
