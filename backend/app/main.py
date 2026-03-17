@@ -18,10 +18,12 @@ from app.services.employee_db import (
 from app.services.rank_service import get_rank, has_view_permission
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from app.services.factory.factory_agent import FactoryAgentService
 from pydantic import BaseModel
 from typing import Optional
 
 app = FastAPI()
+factory_agent = FactoryAgentService(llm_service)
 
 
 @app.on_event("startup")
@@ -505,6 +507,23 @@ async def chat_text(payload: dict):
         llm_response = llm_service.chat(user_text)
         return {"llm_response": llm_response}
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/factory/chat")
+async def factory_chat(payload: dict):
+    """
+    Factory Data Q&A Interface (Integrated SQL + RAG)
+    """
+    try:
+        user_text = payload.get("text")
+        if not user_text:
+            raise HTTPException(status_code=400, detail="Text field is required")
+
+        # Delegate to Factory Agent for routing and execution
+        response = await factory_agent.chat(user_text)
+        return {"response": response}
+    except Exception as e:
+        print(f"[Factory API Error] {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
