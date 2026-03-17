@@ -145,13 +145,13 @@ class FactorySqlTools:
         if kpi_type == 'top_achieving':
             query = f"SELECT top 10 jz, ACHIEVING_RATE FROM [dbo].[Daily_Status_Report] WHERE {date_cond} GROUP BY jz, ACHIEVING_RATE ORDER BY ACHIEVING_RATE DESC"
         elif kpi_type == 'lagging':
-            query = f"SELECT top 10 jz, ACHIEVING_RATE FROM [dbo].[Daily_Status_Report] WHERE {date_cond} AND ACHIEVING_RATE<1 GROUP BY jz, ACHIEVING_RATE ORDER BY ACHIEVING_RATE ASC"
+            query = f"SELECT top 10 jz, ACHIEVING_RATE FROM [dbo].[Daily_Status_Report] WHERE {date_cond} AND ACHIEVING_RATE < 1 GROUP BY jz, ACHIEVING_RATE ORDER BY ACHIEVING_RATE ASC"
         elif kpi_type == 'abnormal':
-            query = f"SELECT top 10 jz, sum(BAD_PRO_RATE) blsl FROM [dbo].[Daily_Status_Report] WHERE {date_cond} AND BAD_PRO_RATE>0 GROUP BY jz, BAD_PRO_RATE ORDER BY BAD_PRO_RATE DESC"
+            query = f"SELECT top 10 jz, sum(BAD_PRO_RATE) as BLSL FROM [dbo].[Daily_Status_Report] WHERE {date_cond} AND BAD_PRO_RATE > 0 GROUP BY jz ORDER BY BLSL DESC"
         elif kpi_type == 'downtime':
-            query = f"SELECT top 10 jz, LOST_TIME_PRO_RATE FROM [dbo].[Daily_Status_Report] WHERE {date_cond} AND LOST_TIME_PRO_RATE>0 GROUP BY jz, LOST_TIME_PRO_RATE ORDER BY LOST_TIME_PRO_RATE DESC"
+            query = f"SELECT top 10 jz, sum(LOST_TIME_PRO_RATE) as LOST_RATE FROM [dbo].[Daily_Status_Report] WHERE {date_cond} AND LOST_TIME_PRO_RATE > 0 GROUP BY jz ORDER BY LOST_RATE DESC"
         elif kpi_type == 'unachieved':
-            query = f"SELECT jz, ACHIEVING_RATE FROM [dbo].[Daily_Status_Report] WHERE {date_cond} AND ACHIEVING_RATE<0.5 GROUP BY jz, ACHIEVING_RATE ORDER BY ACHIEVING_RATE ASC"
+            query = f"SELECT jz, ACHIEVING_RATE FROM [dbo].[Daily_Status_Report] WHERE {date_cond} AND ACHIEVING_RATE < 0.5 GROUP BY jz, ACHIEVING_RATE ORDER BY ACHIEVING_RATE ASC"
         else:
             return {"status": "error", "message": "Unknown kpi_type"}
             
