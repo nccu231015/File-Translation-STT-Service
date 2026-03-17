@@ -1,3 +1,4 @@
+from typing import List, Dict
 from .router_agent import FactoryRouterAgent
 from .sql_agent import SqlAgent
 from .rag_agent import RagAgent
@@ -16,7 +17,7 @@ class FactoryAgentService:
         self.sql_agent = SqlAgent(llm_service)
         self.rag_agent = RagAgent(llm_service)
         
-    async def chat(self, user_question: str) -> str:
+    async def chat(self, user_question: str, history: List[Dict] = None) -> str:
         """
         處理使用者的每一句話
         1. Router 分析問題語意
@@ -32,8 +33,8 @@ class FactoryAgentService:
         print(f"[Factory Agent] Router decision -> {route_type}")
         
         if route_type == "SQL":
-            # 委託給 SQL Agent 執行 A/B 類報表查詢工具
-            response = await self.sql_agent.execute_task(user_question)
+            # 委託給 SQL Agent 執行 A/B 類報表查詢工具，傳入對話歷史
+            response = await self.sql_agent.chat(user_question, history=history)
             return response
             
         elif route_type == "RAG":
@@ -43,3 +44,4 @@ class FactoryAgentService:
             
         else:
             return "無法解析您的問題。如果需要查詢稼動率，或是機台異常處理方法，請再說明得更詳細一點。"
+
