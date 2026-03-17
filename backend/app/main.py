@@ -20,6 +20,7 @@ from app.services.rank_service import get_rank, has_view_permission
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from app.services.factory.factory_agent import FactoryAgentService
+from app.services.factory.factory_redis import factory_store
 from pydantic import BaseModel
 from typing import Optional
 
@@ -215,22 +216,34 @@ async def chat_text(payload: dict):
 
 @app.post("/factory-chat")
 async def factory_chat(payload: dict, background_tasks: BackgroundTasks):
-    from app.services.factory.factory_redis import factory_store
+    """Factory Data Q&A Interface with session history."""
     try:
         user_text = payload.get("text")
         session_id = payload.get("session_id")
-        if not user_text: raise HTTPException(status_code=400, detail="Text field is required")
+        if not user_text:
+            raise HTTPException(status_code=400, detail="Text field is required")
+        
         history = []
         if session_id:
             session = await factory_store.get_session(session_id)
-            if session: history = session.get("messages", [])
-        else:
+            if session:
+                history = session.get("messages", [])
+        
+        # 兜底機制：若抓不到 session 或 ID 為空，則新建一個
+        if not session_id or (session_id and not history and not await factory_store.get_session(session_id)):
             session = await factory_store.create_session(user_text)
             session_id = session["session_id"]
+            
+        print(f"\n[Factory Chat] Request (session={session_id})", flush=True)
         response = await factory_agent.chat(user_text, history=history)
+        
+        # 異步存檔，不阻塞主線程
         background_tasks.add_task(factory_store.append_messages, session_id, user_text, response)
+        
+        print(f"[Factory Chat] Success: {len(response)} chars", flush=True)
         return {"response": response, "session_id": session_id}
     except Exception as e:
+        print(f"[Factory API Error] {e}", flush=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/factory-sessions")
