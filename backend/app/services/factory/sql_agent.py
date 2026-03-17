@@ -1,5 +1,6 @@
 from typing import Dict, Any, List
 from .sql_tools import FactorySqlTools
+import datetime
 
 class SqlAgent:
     """
@@ -179,15 +180,14 @@ class SqlAgent:
         ]
 
     async def execute_task(self, question: str) -> str:
+        """Alias for compatibility with router agent."""
+        return await self.chat(question)
+
+    async def chat(self, question: str, history: List[Dict[str, str]] = None) -> str:
         """
-        處理 SQL 類問題：
-        1. 呼叫 LLM (附帶 Tools Schema) 判斷要使用哪個工具。
-        2. 若 LLM 選擇呼叫工具，則執行本地의 self.tools.x_func()。
-        3. 將取得的資料回傳給 LLM 組合最終答案。
+        支援上下文記憶的聊天接口。
+        history: [{'role': 'user', 'content': '...'}, {'role': 'assistant', 'content': '...'}]
         """
-        import datetime
-        print(f"[SQL Agent] Planning SQL extraction for: {question}")
-        
         # 今天的日期語境
         current_date_info = f"目前的系統日期是 {datetime.date.today().isoformat()}。"
         
@@ -197,16 +197,25 @@ class SqlAgent:
 {current_date_info}
 
 規範：
-1. 若數據中包含良率、稼動率、工單數量，請以「條列式」或「表格(Markdown)」呈現。
-2. 如果查詢結果為空，請誠實告知，並檢查是否日期正確。
-3. 如果使用者問的是關於「不良原因」或「停機原因」，請務必使用 Pareto (柏拉圖圖表概念) 的文字描述佔比。
+1. 若數據中包含良率、稼動率、工單數量，請以「網格表格(Markdown)」呈現。
+2. 之前的對話內容會作為上下文提供給你，請參考上下文回答問題（例如：使用者問『那剛剛那個呢？』）。
+3. 如果查詢結果為空，請誠實告知，並檢查是否日期正確。
 4. 所有的回覆必須使用「繁體中文」。
+5. 回答請保持精簡、準確，除非必要，否則不需要畫蛇添足提供一般性管理建議。
 """
         
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": question}
-        ]
+        # 組合 Messages：System + History + Current Question
+        messages = [{"role": "system", "content": system_prompt}]
+        
+        if history:
+            # 只取最近 10 則對話避免長度超出限制
+            for h in history[-10:]:
+                messages.append({
+                    "role": h["role"],
+                    "content": h["content"]
+                })
+        
+        messages.append({"role": "user", "content": question})
 
         try:
             # 呼叫 LLM 進行工具決策與答案聚合
