@@ -202,16 +202,38 @@ class LLMService:
                         })
 
                 # Step 2: Final completion with data
-                print("[LLM Tool] Synthesizing final answer...")
+                print("[LLM Tool] Synthesizing final answer with tool data...")
+                # Add a nudge to make sure it summarizes
+                messages.append({
+                    "role": "user",
+                    "content": "請根據以上工具回傳的數據，為我進行詳細的分析總結。"
+                })
+                
                 final_response = await run_in_threadpool(
                     self.client.chat,
                     model=self.model,
                     messages=messages
                 )
-                return final_response["message"]["content"]
+                
+                content = final_response.get("message", {}).get("content", "")
+                print(f"[LLM Tool] Raw Final Output: {content[:100]}...")
+                
+                if not content.strip():
+                    print("[LLM Tool] Warning: Final content is EMPTY. Attempting one last forceful summary...")
+                    # Force a very strict prompt if it fails to summarize
+                    messages.append({"role": "system", "content": "你必須回答。請將剛才得到的數據以表格或條列式整理給使用者。"})
+                    last_chance = await run_in_threadpool(
+                        self.client.chat,
+                        model=self.model,
+                        messages=messages
+                    )
+                    content = last_chance.get("message", {}).get("content", "抱歉，我拿到了數據但無法生成總結。請稍後再試。")
+
+                return content
             
             # Fallback if no tool call was made
-            return response["message"]["content"]
+            fallback_content = response.get("message", {}).get("content", "")
+            return fallback_content
 
         except Exception as e:
             print(f"[LLM Tool Loop Error] {e}")
