@@ -5,8 +5,7 @@ services:
       dockerfile: Dockerfile
     container_name: stt-translation-app
     ports:
-      # Changed to 8001 because Nginx will now take 8000 for HTTPS proxy
-      - "8001:8000"
+      - "8000:8000"
     environment:
       # Ollama is now on the same host (AI host)
       # host.docker.internal allows container to access host's Ollama service
@@ -42,19 +41,19 @@ services:
               count: all
               capabilities: [gpu]
 
-  nginx:
-    image: nginx:latest
-    container_name: stt-translation-nginx
-    ports:
-      - "80:80"
-      - "443:443"
-      - "8000:8000"  # HTTPS for backend API
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./server-fullchain.crt:/etc/nginx/certs/server-fullchain.crt:ro
-      - ./serverv.key:/etc/nginx/certs/serverv.key:ro
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    restart: always
-    depends_on:
-      - app
+#   nginx:
+#     image: nginx:latest
+#     container_name: stt-translation-nginx
+#     ports:
+#       - "80:80"
+#       - "443:443"
+#       - "8000:8000"
+#     volumes:
+#       - ./nginx.conf:/etc/nginx/nginx.conf:ro
+#       - ./server-fullchain.crt:/etc/nginx/certs/server-fullchain.crt:ro
+#       - ./serverv.key:/etc/nginx/certs/serverv.key:ro
+#     extra_hosts:
+#       - "host.docker.internal:host-gateway"
+#     restart: always
+#     depends_on:
+#       - app
