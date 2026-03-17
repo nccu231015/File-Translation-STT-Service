@@ -536,7 +536,7 @@ async def chat_text(payload: dict):
 
 
 @app.post("/factory-chat")
-async def factory_chat(payload: dict):
+async def factory_chat(payload: dict, background_tasks: BackgroundTasks):
     """Factory Data Q&A Interface with session history."""
     from app.services.factory.factory_redis import factory_store
     try:
