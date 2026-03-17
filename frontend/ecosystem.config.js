@@ -12,8 +12,10 @@ module.exports = {
             env: {
                 NODE_ENV: "production",
                 PORT: 3000,
-                // API URL pointing to backend via Nginx HTTPS proxy
-                NEXT_PUBLIC_API_URL: "https://172.16.2.68:8000"
+                // 供 next.config.ts 的 rewrite 使用（server-side proxy 到後端）
+                BACKEND_URL: "http://127.0.0.1:8000",
+                // 供前端元件使用（瀏覽器可見）
+                NEXT_PUBLIC_API_URL: "http://172.16.2.68:3000"
             }
         }
     ]
