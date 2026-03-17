@@ -209,13 +209,34 @@ class FactorySqlTools:
 
     def get_downtime_cause_analysis(self, work_order: str, target_date: str = None) -> Dict[str, Any]:
         """
-                SELECT *, ROW_NUMBER() OVER(ORDER BY [停機時間] DESC) AS t_row FROM base 
+        停機時間統計與原因分析 (對齊專家範例)
+        使用 tjsjjl_new_copy1
+        """
+        date_cond = f"PRO_TIME='{target_date}'" if target_date else "PRO_TIME=CONVERT(date, GETDATE())"
+        query = f"""
+        WITH base AS (
+            SELECT DISTINCT 
+                a.tjlb as [停機類別], a.zrdw as [責任單位], a.tjxz as [停機細項],
+                count(*) OVER (PARTITION by a.tjlb, a.zrdw, a.tjxz) as [分組項次],
+                SUM(a.tjsj) OVER() as [總停機時間],
+                SUM(a.tjsj) OVER (PARTITION by a.tjlb, a.zrdw, a.tjxz) as [停機時間],
+                CAST(SUM(a.tjsj) OVER (PARTITION by a.tjlb, a.zrdw, a.tjxz) AS float) / 
+                NULLIF(CAST(SUM(a.tjsj) OVER() AS float), 0) as [個別占比]
+            FROM [dbo].[tjsjjl_new_copy1] a
+            WHERE 1=1 AND gdhm='{work_order}' AND {date_cond} AND tjsj > 0
+            AND NOT (
+                (a.tjlb='不良品分析(分)' AND zrdw='製造' AND tjxz='「備註」載明：分析多少pcs')
+                OR (a.tjlb='值日生' AND zrdw='製造' AND tjxz='「備註」載明：姓名&幾人')
             )
-            SELECT *, SUM([個別占比]) OVER (ORDER BY t_row) AS [累積占比]
-            FROM answer ORDER BY [停機時間] DESC
+        ),
+        answer AS (
+            SELECT *, ROW_NUMBER() OVER(ORDER BY [停機時間] DESC) as t_row FROM base 
+        )
+        SELECT *, SUM(個別占比) OVER (ORDER BY t_row) as [累積占比]
+        FROM answer ORDER BY 停機時間 DESC
         """
         res = self._execute_mssql_query(query)
-        return {"status": "success", "work_order": work_order, "downtime_cause": res}
+        return {"status": "success", "work_order": work_order, "data": res}
 
     def get_active_equipment(self, target_date: str = None) -> Dict[str, Any]:
         """ PostgreSQL 查詢: 當前稼動設備。 """

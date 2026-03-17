@@ -67,14 +67,56 @@ class SqlAgent:
             {
                 "type": "function",
                 "function": {
-                    "name": "get_abnormal_details",
-                    "description": "查詢具體的不良項目分佈(Abnormal Details)。用於回答：具體有哪些異常比例高？分別是什麼異常原因？",
+                    "name": "get_line_defect_records",
+                    "description": "查詢【產線/樓層-不良數明細】。用於回答：2026-03-06 的不良數是多少？有哪些紀錄？",
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "target_date": {"type": "string", "description": "例如 '2026-03-17'。"},
-                            "top_n": {"type": "integer", "description": "查詢前幾名異常，預設 10。"}
+                            "target_date": {"type": "string", "description": "例如 '2026-03-06'。"}
                         }
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_line_downtime_records",
+                    "description": "查詢【產線/樓層-停機時間明細】。用於回答：2026-03-06 的停機時間、工單與備註紀錄。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "target_date": {"type": "string", "description": "例如 '2026-03-06'。"}
+                        }
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_defect_pareto_analysis",
+                    "description": "對特定工單進行【不良品 Pareto 趨勢分析】。包含檢查工序、不良型態、位置備註與累積百分比。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "work_order": {"type": "string", "description": "工單號碼，如 'N511-2512150027'"},
+                            "target_date": {"type": "string", "description": "查詢日期，例如 '2026-03-06'。"}
+                        },
+                        "required": ["work_order"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_downtime_cause_analysis",
+                    "description": "對特定工單進行【停機時間統計、原因分析】。包含停機類別、責任單位、占比與累積占比。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "work_order": {"type": "string", "description": "工單號碼，如 'N511-2512150027'"},
+                            "target_date": {"type": "string", "description": "查詢日期，例如 '2026-03-06'。"}
+                        },
+                        "required": ["work_order"]
                     }
                 }
             }
