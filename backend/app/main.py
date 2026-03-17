@@ -217,16 +217,17 @@ async def transcribe_audio(
     """
     # Create a temporary file to save the uploaded audio
     try:
-        print(f"Received file: {file.filename}, Mode: {mode}, Content-Type: {file.content_type}")
+        print(f"[STT] Received file: {file.filename}, Mode: {mode}, Content-Type: {file.content_type}", flush=True)
         with tempfile.NamedTemporaryFile(
             delete=False, suffix=os.path.splitext(file.filename)[1]
         ) as temp_file:
             shutil.copyfileobj(file.file, temp_file)
             temp_file_path = temp_file.name
+        print(f"[STT] Saved to temp: {temp_file_path}", flush=True)
 
         # Transcribe (Run in threadpool to allow PDF/Chat to run simultaneously)
         from fastapi.concurrency import run_in_threadpool
-        print(f"Mode: {mode} - Transcribing audio...", flush=True)
+        print(f"[STT] Mode: {mode} - Transcribing audio...", flush=True)
         stt_result = await run_in_threadpool(stt_service.transcribe, temp_file_path)
 
         # Clean up audio file
@@ -431,10 +432,14 @@ async def transcribe_audio(
              raise HTTPException(status_code=400, detail=f"Invalid mode: {mode}")
 
     except Exception as e:
+        import traceback
+        print(f"[STT ERROR] {type(e).__name__}: {e}", flush=True)
+        traceback.print_exc()
         # Ensure cleanup
         if "temp_file_path" in locals() and os.path.exists(temp_file_path):
             os.remove(temp_file_path)
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 @app.post("/pdf-translation")
