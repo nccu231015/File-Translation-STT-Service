@@ -212,7 +212,12 @@ class LLMService:
                 tool_results_text = ""
                 for msg in messages:
                     if msg.get("role") == "tool":
-                        tool_results_text += msg.get("content", "") + "\n"
+                        tool_results_text += str(msg.get("content", "")) + "\n"
+                
+                # --- 數據斷路器 (Circuit Breaker) ---
+                if len(tool_results_text) > 4000:
+                    print(f"[LLM Safety] Data too large ({len(tool_results_text)}). Returning raw table to avoid 500.")
+                    return f"由於數據量較大，已自動顯示原始查詢報表：\n\n{tool_results_text}"
                 
                 # 取出最新一次的使用者問題（最後一個 user 訊息），避免被歷史 Session 覆蓋
                 original_question = next(
