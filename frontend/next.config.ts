@@ -17,20 +17,8 @@ const nextConfig: NextConfig = {
         destination: `${BACKEND_URL}/api/:path*`,
       },
       {
-        source: "/stt",
-        destination: `${BACKEND_URL}/stt`,
-      },
-      {
-        source: "/pdf-translation",
-        destination: `${BACKEND_URL}/pdf-translation`,
-      },
-      {
         source: "/factory-chat",
         destination: `${BACKEND_URL}/factory-chat`,
-      },
-      {
-        source: "/employee-records",
-        destination: `${BACKEND_URL}/employee-records`,
       },
       {
         source: "/api/employee-records",

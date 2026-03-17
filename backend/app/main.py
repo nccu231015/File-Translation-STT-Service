@@ -56,17 +56,6 @@ async def startup_event():
 # Middleware to help Ngrok bypass browser warning
 @app.middleware("http")
 async def add_ngrok_header(request, call_next):
-    # 用標籤區分不同的路徑
-    path = request.url.path
-    if path == "/stt":
-        print(f"[STT NETWORK] {request.method} {path}", flush=True)
-    elif path == "/pdf-translation":
-        print(f"[PDF NETWORK] {request.method} {path}", flush=True)
-    elif "factory" in path:
-        print(f"[FACTORY NETWORK] {request.method} {path}", flush=True)
-    else:
-        print(f"[API NETWORK] {request.method} {path}", flush=True)
-
     response = await call_next(request)
     response.headers["ngrok-skip-browser-warning"] = "true"
     return response
@@ -442,9 +431,6 @@ async def transcribe_audio(
              raise HTTPException(status_code=400, detail=f"Invalid mode: {mode}")
 
     except Exception as e:
-        import traceback
-        print(f"[STT ERROR] {type(e).__name__}: {e}", flush=True)
-        traceback.print_exc()
         # Ensure cleanup
         if "temp_file_path" in locals() and os.path.exists(temp_file_path):
             os.remove(temp_file_path)
@@ -456,7 +442,7 @@ async def translate_pdf(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     target_lang: str = Form(None), # Optional, default None to let service auto-detect
-    debug: str = Form("false") # Receive as string to handle "true", "True", "on" manually
+    debug: str = Form("false") # Receive as string to handle "true", "1", "t", "yes", "on" manually
 ):
     """
     Receives a PDF file, extracts text, translates it, and returns the translated PDF file.
@@ -559,6 +545,7 @@ async def factory_chat(payload: dict):
         print(f"\n[Factory Chat] Request (session={session_id})", flush=True)
         if not user_text:
             raise HTTPException(status_code=400, detail="Text field is required")
+        
         history = []
         if session_id:
             session = await factory_store.get_session(session_id)
@@ -567,6 +554,7 @@ async def factory_chat(payload: dict):
         else:
             session = await factory_store.create_session(user_text)
             session_id = session["session_id"]
+            
         response = await factory_agent.chat(user_text, history=history)
         await factory_store.append_messages(session_id, user_text, response)
         print(f"[Factory Chat] Success: {len(response)} chars", flush=True)
