@@ -77,25 +77,27 @@ class LLMService:
         except Exception as e:
             print(f"Error adding document context: {e}")
 
-    def chat(self, prompt: str, session_id: str = "default_session"):
+    async def chat(self, prompt: str, session_id: str = "default_session", system_prompt: str = None):
         """
         Sends a prompt to the Ollama model with in-memory chat history.
         """
-        system_prompt = """你是一個專業的文件 AI 助手。
-
-重要規則：
-1. 你必須使用「繁體中文」（Traditional Chinese，正體中文）回答。
-2. 絕對不可以使用「简体中文」（Simplified Chinese）。
-3. 使用台灣用語和詞彙，例如：「軟體」而非「软件」，「網路」而非「网络」。
-4. 字形必須是繁體：「體」而非「体」，「國」而非「国」。
-
-請用繁體中文回答使用者的問題。"""
+        base_system_prompt = """你是一個專業的文件 AI 助手。
+ 
+ 重要規則：
+ 1. 你必須使用「繁體中文」（Traditional Chinese，正體中文）回答。
+ 2. 絕對不可以使用「简体中文」（Simplified Chinese）。
+ 3. 使用台灣用語和詞彙，例如：「軟體」而非「软件」，「網路」而非「网络」。
+ 4. 字形必須是繁體：「體」而非「体」，「國」而非「国」。
+ 
+ 請用繁體中文回答使用者的問題。"""
         
+        actual_system_prompt = system_prompt if system_prompt else base_system_prompt
+
         # 1. Retrieve history from memory
         if session_id not in self.chat_history:
             self.chat_history[session_id] = []
         
-        messages = [{"role": "system", "content": system_prompt}]
+        messages = [{"role": "system", "content": actual_system_prompt}]
         messages.extend(self.chat_history[session_id])
 
         # 2. Add current user message
@@ -103,9 +105,15 @@ class LLMService:
         messages.append(user_message)
 
         try:
-            # 3. Call Ollama via Client
-            print(f"Context length: {len(messages)} messages")
-            response = self.client.chat(model=self.model, messages=messages)
+            # 3. Call Ollama via Client (Run-in-threadpool to keep it async-friendly)
+            from fastapi.concurrency import run_in_threadpool
+            print(f"[LLM] Chat request (model: {self.model})...")
+            
+            response = await run_in_threadpool(
+                self.client.chat, 
+                model=self.model, 
+                messages=messages
+            )
             assistant_content = response["message"]["content"]
 
             # Convert simplified Chinese to traditional Chinese (Taiwan)
@@ -118,9 +126,95 @@ class LLMService:
 
             return assistant_content
         except Exception as e:
-            print(f"Error communicating with Ollama: {e}")
+            print(f"[LLM Error] {e}")
             return "抱歉，我現在無法連接到語言模型。"
 
+    async def chat_json(self, messages: list, system_prompt: str = None) -> dict:
+        """
+        Special chat method that enforces JSON output format.
+        Useful for Agents (Router, Tool Caller).
+        """
+        if system_prompt:
+            messages = [{"role": "system", "content": system_prompt}] + messages
+            
+        try:
+            from fastapi.concurrency import run_in_threadpool
+            response = await run_in_threadpool(
+                self.client.chat,
+                model=self.model,
+                messages=messages,
+                format="json",
+                options={"temperature": 0} # Deterministic for routing
+            )
+            content = response["message"]["content"]
+            return json.loads(content)
+        except Exception as e:
+            print(f"[LLM JSON Error] {e}")
+            return {}
+
+    async def chat_with_tools(self, messages: list, tools: list, tool_executor_obj: Any) -> str:
+        """
+        Full tool calling loop: 
+        1. AI decides which tool to use
+        2. Execution of the tool via tool_executor_obj
+        3. AI synthesizes final answer with tool result
+        """
+        from fastapi.concurrency import run_in_threadpool
+        
+        try:
+            # Step 1: LLM decides tool
+            print(f"[LLM Tool] Deciding tool for {len(messages)} messages...")
+            response = await run_in_threadpool(
+                self.client.chat,
+                model=self.model,
+                messages=messages,
+                tools=tools
+            )
+
+            # Check if LLM wants to call a tool
+            if response.get("message", {}).get("tool_calls"):
+                tool_calls = response["message"]["tool_calls"]
+                
+                # Append assistant tool call request to messages
+                messages.append(response["message"])
+
+                for tool_call in tool_calls:
+                    func_name = tool_call["function"]["name"]
+                    func_args = tool_call["function"]["arguments"]
+                    print(f"[LLM Tool] Executing {func_name} with {func_args}")
+                    
+                    # Execute tool (Run-in-threadpool as DB queries are blocking)
+                    try:
+                        tool_func = getattr(tool_executor_obj, func_name)
+                        result = await run_in_threadpool(tool_func, **func_args)
+                        
+                        # Append tool output to messages
+                        messages.append({
+                            "role": "tool",
+                            "content": json.dumps(result, ensure_ascii=False),
+                        })
+                    except Exception as te:
+                        print(f"[LLM Tool Execute Error] {te}")
+                        messages.append({
+                            "role": "tool",
+                            "content": f"Error executing tool: {te}",
+                        })
+
+                # Step 2: Final completion with data
+                print("[LLM Tool] Synthesizing final answer...")
+                final_response = await run_in_threadpool(
+                    self.client.chat,
+                    model=self.model,
+                    messages=messages
+                )
+                return final_response["message"]["content"]
+            
+            # Fallback if no tool call was made
+            return response["message"]["content"]
+
+        except Exception as e:
+            print(f"[LLM Tool Loop Error] {e}")
+            return "處理您的請求時發生工具調用錯誤。"
 
 
     def _clean_llm_response(self, text: str) -> str:

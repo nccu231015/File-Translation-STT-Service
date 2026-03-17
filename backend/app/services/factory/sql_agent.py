@@ -108,17 +108,43 @@ class SqlAgent:
         """
         處理 SQL 類問題：
         1. 呼叫 LLM (附帶 Tools Schema) 判斷要使用哪個工具。
-        2. 若 LLM 選擇呼叫工具，則執行本地的 self.tools.x_func()。
+        2. 若 LLM 選擇呼叫工具，則執行本地의 self.tools.x_func()。
         3. 將取得的資料回傳給 LLM 組合最終答案。
         """
+        import datetime
         print(f"[SQL Agent] Planning SQL extraction for: {question}")
         
-        # TODO: 結合 Ollama/OpenAI 的 Function Calling
-        # 這裡會：
-        #   resp = await self.llm.chat_with_tools([message], tools=self._get_tool_schemas())
-        #   if resp.has_tool_call:
-        #       tool_args = resp.tool_call.arguments
-        #       data = getattr(self.tools, resp.tool_call.name)(**tool_args)
-        #       ...
+        # 今天的日期語境
+        current_date_info = f"目前的系統日期是 {datetime.date.today().isoformat()}。"
         
-        return "這是一個模擬的回傳：3F 產線今日的稼動率為 85%。"
+        system_prompt = f"""你是一個專業的製造業數據分析專家，服務於「全一電子」。
+你的任務是根據使用者的問題，調用適當的 SQL 工具來獲取即時生產數據，並給出詳細、專業且易懂的分析回覆。
+
+{current_date_info}
+
+規範：
+1. 若數據中包含良率、稼動率、工單數量，請以「條列式」或「表格(Markdown)」呈現。
+2. 如果查詢結果為空，請誠實告知，並檢查是否日期正確。
+3. 如果使用者問的是關於「不良原因」或「停機原因」，請務必使用 Pareto (柏拉圖圖表概念) 的文字描述佔比。
+4. 所有的回覆必須使用「繁體中文」。
+"""
+        
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": question}
+        ]
+
+        try:
+            # 呼叫 LLM 進行工具決策與答案聚合
+            answer = await self.llm.chat_with_tools(
+                messages=messages,
+                tools=self._get_tool_schemas(),
+                tool_executor_obj=self.tools
+            )
+            
+            # 使用 OpenCC 確保最終回傳為繁體
+            return self.llm.s2tw.convert(answer)
+
+        except Exception as e:
+            print(f"[SQL Agent Error] {e}")
+            return f"抱歉，在查詢資料庫時發生錯誤：{str(e)}"

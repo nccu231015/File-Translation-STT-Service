@@ -217,7 +217,7 @@ async def transcribe_audio(
         # --- CHAT MODE ---
         if mode == "chat":
             print("Mode: Chat - Sending to LLM...")
-            llm_response = llm_service.chat(user_text)
+            llm_response = await llm_service.chat(user_text)
             return {"transcription": stt_result, "llm_response": llm_response}
 
         # --- MEETING MODE ---
@@ -504,12 +504,12 @@ async def chat_text(payload: dict):
         if not user_text:
             raise HTTPException(status_code=400, detail="Text field is required")
 
-        llm_response = llm_service.chat(user_text)
+        llm_response = await llm_service.chat(user_text)
         return {"llm_response": llm_response}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/factory/chat")
+@app.post("/factory-chat")
 async def factory_chat(payload: dict):
     """
     Factory Data Q&A Interface (Integrated SQL + RAG)

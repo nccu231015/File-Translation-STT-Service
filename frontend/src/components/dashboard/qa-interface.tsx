@@ -37,11 +37,14 @@ export function QAInterface() {
         }
     }, [messages, isLoading]);
 
+    const today = new Date();
+    const todayStr = today.toISOString().split('T')[0];
+
     const quickQuestions = [
-        '今日產線開工與工單狀況？',
-        '分析 N511-2512150027 工單的不良原因（Pareto）',
-        '查詢機台 94135B 在 2026-03-11 的運行與停機統計',
-        '哪幾台設備的良率或達成率未達標？'
+        `今日 (${todayStr}) 產線開工與工單狀況？`,
+        '分析目前正在生產業績最好與最差的機種',
+        `查詢特定工單在 ${todayStr} 的良率與生產進度`,
+        '哪些設備現在處於停機 (DOWN) 狀態？'
     ];
 
     const handleSend = async (text: string = input) => {
@@ -55,7 +58,7 @@ export function QAInterface() {
         setIsLoading(true);
 
         try {
-            const res = await fetch('/api/factory/chat', {
+            const res = await fetch('/factory-chat', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ text: userText })
