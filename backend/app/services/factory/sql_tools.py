@@ -126,10 +126,22 @@ class FactorySqlTools:
         target_res = self._execute_mssql_query(q_target)
         actual_res = self._execute_mssql_query(q_actual)
         
+        # 在工具層合併兩組數據，避免傳給 LLM 的字元數過大
+        actual_map = {r["WORK_ORDER_NO"]: r.get("ACTUAL_PRO", 0) for r in actual_res if "WORK_ORDER_NO" in r}
+        
+        rows = []
+        for r in target_res:
+            wo = r.get("WORK_ORDER_NO", "")
+            target = r.get("WORK_ORDER_NUM", 0)
+            actual = actual_map.get(wo, 0)
+            rows.append(f"| {wo} | {target} | {actual} |")
+        
+        table = "| 工單號碼 | 目標數量 | 實際產量 |\n|---|---|---|\n" + "\n".join(rows)
+        
         return {
             "status": "success",
-            "target_quantities": target_res,
-            "actual_quantities": actual_res
+            "summary": f"共 {len(rows)} 筆工單",
+            "table": table
         }
 
     def get_kpi_ranking(self, kpi_type: str, target_date: str = None) -> Dict[str, Any]:
