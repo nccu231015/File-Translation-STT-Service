@@ -129,9 +129,7 @@ class SqlAgent:
     async def chat(self, question: str, history: List[Dict[str, str]] = None) -> str:
         """
         支援上下文記憶的聊天接口。
-        history: [{'role': 'user', 'content': '...'}, {'role': 'assistant', 'content': '...'}]
         """
-        # 今天的日期語境
         current_date_info = f"目前的系統日期是 {datetime.date.today().isoformat()}。"
         
         system_prompt = f"""你是一個專業的製造業數據分析專家，服務於「全一電子」。
@@ -146,40 +144,30 @@ class SqlAgent:
 
 規範：
 1. **數值與紀錄查詢**：
-   - 詢問「產線/樓層-生產數量、不良數、紀錄」，請調用 `get_line_defect_records`。
-   - 詢問「產線/樓層-停機時間、停機紀錄」，請調用 `get_line_downtime_records`。
+   - 詢問「產線/樓層-不良數、明細、紀錄」，請調用 `get_line_defect_records`。
+   - 詢問「產線/樓層-停機時間、紀錄、明細」，請調用 `get_line_downtime_records`。
 2. **深度分析專區**：
    - 詢問「不良品統計、趨勢分析、Pareto、位置分佈」，請調用 `get_defect_pareto_analysis`。
    - 詢問「停機時間統計、原因分析、責任單位」，請調用 `get_downtime_cause_analysis`。
-3. **基礎概覽與排行**：查詢今日開工數或機種清單使用 `get_production_overview`；查排名使用 `get_kpi_ranking`。
-4. **禁止虛構**：資料源已鎖定為 `_copy1` 系列表與 `Daily_Status_Report`，絕對不要自行撰寫其他 SQL 語句。
-5. 所有結果請以 Markdown 表格呈現，並提供 50~100 字的專業分析點評。
+3. **基礎概覽與排行**：查詢今日開工數使用 `get_production_overview`；查排名使用 `get_kpi_ranking`。
+4. **禁止虛構**：資料源已鎖定，絕對不要自行撰寫 SQL 語句。
+5. 所有結果請以 Markdown 表格呈現，並提供 50~100 字專業分析。
 """
-        
-        # 組合 Messages：System + History + Current Question
         messages = [{"role": "system", "content": system_prompt}]
-        
         if history:
-            # 只取最近 10 則對話避免長度超出限制
             for h in history[-10:]:
-                messages.append({
-                    "role": h["role"],
-                    "content": h["content"]
-                })
+                messages.append({"role": h["role"], "content": h["content"]})
         
         messages.append({"role": "user", "content": question})
 
         try:
-            # 呼叫 LLM 進行工具決策與答案聚合
-            response = await self.llm.chat_with_tools( # Changed llm_service to self.llm
-                messages=messages, # Added keyword arguments for clarity
-                tools=self._get_tool_schemas(), # Changed self.tools, sql_tools to tools=self._get_tool_schemas()
-                tool_executor_obj=self.tools # Added tool_executor_obj=self.tools
+            # 參數名稱 tool_executor_obj 必須與 llm_service.py 定義一致
+            response = await self.llm.chat_with_tools(
+                messages=messages,
+                tools=self._get_tool_schemas(),
+                tool_executor_obj=self.tools
             )
-            
-            # 使用 OpenCC 確保最終回傳為繁體
             return self.llm.s2tw.convert(response)
-
         except Exception as e:
             print(f"[SQL Agent Error] {e}")
             return f"抱歉，在查詢資料庫時發生錯誤：{str(e)}"
