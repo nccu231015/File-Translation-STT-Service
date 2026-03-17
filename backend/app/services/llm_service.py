@@ -4,6 +4,7 @@ import json
 from dotenv import load_dotenv
 from opencc import OpenCC
 import re
+from typing import Any
 
 load_dotenv()
 
