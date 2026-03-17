@@ -516,14 +516,18 @@ async def factory_chat(payload: dict):
     """
     try:
         user_text = payload.get("text")
+        print(f"\n[Factory Chat] Request received: {user_text}", flush=True)
+        
         if not user_text:
             raise HTTPException(status_code=400, detail="Text field is required")
 
         # Delegate to Factory Agent for routing and execution
         response = await factory_agent.chat(user_text)
+        
+        print(f"[Factory Chat] Success: Response length {len(response)}", flush=True)
         return {"response": response}
     except Exception as e:
-        print(f"[Factory API Error] {e}")
+        print(f"[Factory API Error] {e}", flush=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
