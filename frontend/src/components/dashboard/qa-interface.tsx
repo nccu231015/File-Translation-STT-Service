@@ -79,7 +79,7 @@ export function QAInterface() {
             '分析上週設備故障的主要趨勢',
         ]);
         
-        // 3. 載入對話歷史 (只執行一次)
+        // 3. 載入對話歷史 (只在 mount 時載入一次)
         listFactorySessions()
             .then(list => setSessions(list))
             .catch(e => console.error("Failed to load sessions", e));
