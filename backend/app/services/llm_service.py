@@ -253,12 +253,8 @@ class LLMService:
                     return content
                 except Exception as synth_e:
                     print(f"[LLM Synthesis Error] Fallback triggered: {synth_e}")
-                    return f"數據彙整繁忙，以下為原始查詢結果：\n\n{tool_results_text}"
-                    content = last_chance.get("message", {}).get("content", "")
-                    if not content.strip():
-                        content = "抱歉，我拿到了數據但無法生成總結。請稍後再試，或嘗試限縮您的問題範圍。"
+                    return tool_results_text
 
-                return content
             
             # Fallback if no tool call was made
             fallback_content = response.get("message", {}).get("content", "")
