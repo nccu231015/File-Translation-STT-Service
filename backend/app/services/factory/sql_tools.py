@@ -143,14 +143,19 @@ class FactorySqlTools:
         date_cond = f"PRO_TIME='{target_date}'" if target_date else "PRO_TIME=CONVERT(date, GETDATE())"
         
         if kpi_type == 'top_achieving':
+            # 進度達標前10台
             query = f"SELECT top 10 jz, ACHIEVING_RATE FROM [dbo].[Daily_Status_Report] WHERE {date_cond} GROUP BY jz, ACHIEVING_RATE ORDER BY ACHIEVING_RATE DESC"
         elif kpi_type == 'lagging':
-            query = f"SELECT top 10 jz, ACHIEVING_RATE FROM [dbo].[Daily_Status_Report] WHERE {date_cond} AND ACHIEVING_RATE < 1 GROUP BY jz, ACHIEVING_RATE ORDER BY ACHIEVING_RATE ASC"
+            # 進度落後前10台
+            query = f"SELECT top 10 jz, ACHIEVING_RATE FROM [dbo].[Daily_Status_Report] WHERE {date_cond} GROUP BY jz, ACHIEVING_RATE ORDER BY ACHIEVING_RATE ASC"
         elif kpi_type == 'abnormal':
+            # 異常數量比例排行
             query = f"SELECT top 10 jz, sum(BAD_PRO_RATE) as BLSL FROM [dbo].[Daily_Status_Report] WHERE {date_cond} AND BAD_PRO_RATE > 0 GROUP BY jz ORDER BY BLSL DESC"
         elif kpi_type == 'downtime':
+            # 停機時間比例排行
             query = f"SELECT top 10 jz, sum(LOST_TIME_PRO_RATE) as LOST_RATE FROM [dbo].[Daily_Status_Report] WHERE {date_cond} AND LOST_TIME_PRO_RATE > 0 GROUP BY jz ORDER BY LOST_RATE DESC"
         elif kpi_type == 'unachieved':
+            # 達成率不足 0.5 的台數 (作為補充)
             query = f"SELECT jz, ACHIEVING_RATE FROM [dbo].[Daily_Status_Report] WHERE {date_cond} AND ACHIEVING_RATE < 0.5 GROUP BY jz, ACHIEVING_RATE ORDER BY ACHIEVING_RATE ASC"
         else:
             return {"status": "error", "message": "Unknown kpi_type"}
