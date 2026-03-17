@@ -517,10 +517,45 @@ async def translate_pdf(
 
 @app.post("/chat")
 async def chat_text(payload: dict):
-    """
-    Direct text chat endpoint.
-    Expects JSON: {"text": "user message"}
-    """
+    """Direct text chat endpoint."""
+    try:
+        user_text = payload.get("text")
+        if not user_text:
+            raise HTTPException(status_code=400, detail="Text field is required")
+        llm_response = await llm_service.chat(user_text)
+        return {"llm_response": llm_response}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/factory-chat")
+async def factory_chat(payload: dict):
+    """Factory Data Q&A Interface with session history."""
+    from app.services.factory.factory_redis import factory_store
+    try:
+        user_text = payload.get("text")
+        session_id = payload.get("session_id")
+        print(f"\n[Factory Chat] Request (session={session_id})", flush=True)
+        if not user_text:
+            raise HTTPException(status_code=400, detail="Text field is required")
+        history = []
+        if session_id:
+            session = await factory_store.get_session(session_id)
+            if session:
+                history = session.get("messages", [])
+        else:
+            session = await factory_store.create_session(user_text)
+            session_id = session["session_id"]
+        response = await factory_agent.chat(user_text, history=history)
+        await factory_store.append_messages(session_id, user_text, response)
+        print(f"[Factory Chat] Success: {len(response)} chars", flush=True)
+        return {"response": response, "session_id": session_id}
+    except Exception as e:
+        print(f"[Factory API Error] {e}", flush=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/factory-sessions")
 async def list_factory_sessions():
     """Returns a list of all factory chat sessions (newest first)."""
     from app.services.factory.factory_redis import factory_store
