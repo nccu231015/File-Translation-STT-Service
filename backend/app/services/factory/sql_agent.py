@@ -143,11 +143,13 @@ class SqlAgent:
 - [tjsjjl_new_copy1]：專業停機紀錄統計表。
 
 規範：
-2. **深度分析與記錄查詢**：
-   - 詢問「不良品明細、具體缺陷位置、Pareto 分析、原因分佈」，請調用 `get_line_defect_records` 或 `get_defect_pareto_analysis`。
-   - 詢問「停機明細、具體原因記錄」，請調用 `get_line_downtime_records`。
-3. **KPI 計標與排行 (重要)**：
-   - 詢問「哪些產品異常比例高、不良率排行、達成率排行、開工線數」，必須調用 `get_kpi_ranking` (類型: abnormal, top_achieving等) 或 `get_production_overview`。
+2. **明細紀錄與原因查詢**：
+   - 詢問「不良紀錄明細、缺陷位置、Pareto」，請調用 `get_line_defect_records` 或 `get_defect_pareto_analysis`。
+   - 詢問「停機紀錄明細、具體停機原因、責任單位分析」，請調用 `get_line_downtime_records` 或 `get_downtime_cause_analysis`。
+3. **KPI 指標與異常排行 (關鍵)**：
+   - 詢問「停機時間異常、誰停機最久、停機時間排行」，必須調用 `get_kpi_ranking(kpi_type='downtime')`。
+   - 詢問「異常比例排行、誰不良最嚴重」，必須調用 `get_kpi_ranking(kpi_type='abnormal')`。
+   - 詢問「達成率排行、開工總結」，必須調用 `get_kpi_ranking` 相關類型。
 4. **禁止虛構**：資料源已鎖定，絕對不要自行撰寫 SQL 語句。
 5. **回答風格**：所有結果請以 Markdown 表格呈現，**數據必須完整顯示原始清單**。在表格下方，請根據數據提供**具建設性的專業文字解說**（不須使用亮點、風險或建議等固定標題）。
 """
