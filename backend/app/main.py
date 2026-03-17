@@ -200,10 +200,15 @@ async def factory_chat(payload: dict, background_tasks: BackgroundTasks):
             session = await factory_store.get_session(session_id)
             if session: history = session.get("messages", [])
         
-        # 確保有 Session ID
-        if not session_id or (session_id and not history and not await factory_store.get_session(session_id)):
-            session = await factory_store.create_session(user_text)
-            session_id = session["session_id"]
+        # 確保有 Session ID（簡化邏輯，避免 Redis 二次查詢引發異常）
+        if not session_id:
+            try:
+                session = await factory_store.create_session(user_text)
+                session_id = session["session_id"]
+            except Exception as se:
+                import uuid
+                session_id = str(uuid.uuid4())
+                print(f"[Session Warning] Fallback session id generated: {se}")
             
         print(f"\n[Factory Chat] Processing request (session={session_id})", flush=True)
         response = await factory_agent.chat(user_text, history=history)
@@ -225,7 +230,9 @@ async def factory_chat(payload: dict, background_tasks: BackgroundTasks):
         return Response(content=json_str, media_type="application/json")
         
     except Exception as e:
+        import traceback
         print(f"[Factory API Error] {e}", flush=True)
+        print(traceback.format_exc(), flush=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/factory-sessions")
