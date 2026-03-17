@@ -56,6 +56,7 @@ async def startup_event():
 # Middleware to help Ngrok bypass browser warning
 @app.middleware("http")
 async def add_ngrok_header(request, call_next):
+    print(f"[Request] {request.method} {request.url.path}")
     response = await call_next(request)
     response.headers["ngrok-skip-browser-warning"] = "true"
     return response
