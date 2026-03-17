@@ -556,7 +556,10 @@ async def factory_chat(payload: dict):
             session_id = session["session_id"]
             
         response = await factory_agent.chat(user_text, history=history)
-        await factory_store.append_messages(session_id, user_text, response)
+        
+        # 優先回傳結果給使用者，將歷史紀錄存檔交由背景任務處理（避免大型表格寫入延遲導致 500）
+        background_tasks.add_task(factory_store.append_messages, session_id, user_text, response)
+        
         print(f"[Factory Chat] Success: {len(response)} chars", flush=True)
         return {"response": response, "session_id": session_id}
     except Exception as e:
