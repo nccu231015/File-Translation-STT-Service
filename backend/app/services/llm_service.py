@@ -28,7 +28,7 @@ class LLMService:
 
         self.client = ollama.Client(
             host=self.ollama_host,
-            timeout=120.0  # 大幅調高逾時時間，防止處理大型報表時連線中斷
+            timeout=300.0  # 配合使用者要求，給予大模型極長的思考時間 (5分鐘) 去整理超長表格
         )
 
         self._ensure_model_exists()
