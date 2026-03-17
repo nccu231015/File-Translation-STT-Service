@@ -61,16 +61,12 @@ async def add_ngrok_header(request, call_next):
 
 
 # Configure CORS
+# Note: allow_credentials must be False when using allow_origins=["*"].
+# This app uses JWT Bearer tokens (not cookies), so credentials mode is not needed.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://172.16.2.68:3000",
-        "http://172.16.2.68",
-        "http://172.16.2.68:8000",
-        "https://172.16.2.68",
-    ],
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
