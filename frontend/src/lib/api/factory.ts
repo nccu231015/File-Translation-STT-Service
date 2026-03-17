@@ -2,17 +2,16 @@
  * factory.ts
  *
  * Client-side API utility for Factory Smart Q&A.
- * Follows the pattern used by translation.ts and stt.ts.
+ * Uses relative paths — Next.js rewrites in next.config.ts proxy the request
+ * to the backend, so no CORS issues and no hardcoded IPs needed.
  */
-
-const getApiUrl = () => process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 export interface FactoryResponse {
     response: string;
 }
 
 export const askFactory = async (text: string): Promise<FactoryResponse> => {
-    const response = await fetch(`${getApiUrl()}/factory-chat`, {
+    const response = await fetch(`/factory-chat`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
