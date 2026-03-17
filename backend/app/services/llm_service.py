@@ -234,7 +234,9 @@ class LLMService:
                         model=self.model,
                         messages=messages
                     )
-                    content = last_chance.get("message", {}).get("content", "抱歉，我拿到了數據但無法生成總結。請稍後再試。")
+                    content = last_chance.get("message", {}).get("content", "")
+                    if not content.strip():
+                        content = "抱歉，我拿到了數據但無法生成總結。請稍後再試，或嘗試限縮您的問題範圍。"
 
                 return content
             

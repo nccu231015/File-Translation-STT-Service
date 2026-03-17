@@ -122,6 +122,38 @@ class FactorySqlTools:
             "active_machine_models": [r.get("jz") for r in models_res if "error" not in r]
         }
 
+    def get_kpi_ranking(self, kpi_type: str, target_date: str = None) -> Dict[str, Any]:
+        """
+        獲取績效排行 (KPI Ranking) - 用於回答最好的機種、最差的機種等
+        kpi_type: 'top_achieving', 'lagging'
+        """
+        date_cond = f"PRO_TIME='{target_date}'" if target_date else "PRO_TIME=CONVERT(date, GETDATE())"
+        
+        if kpi_type == "top_achieving":
+            order_by = "DESC"
+        else: # lagging, etc.
+            order_by = "ASC"
+            
+        # 以 ACTUAL_PRO (實際產出) 作為業績/數量排名基準
+        query = f"""
+            SELECT TOP 10 
+                jz AS Machine_Model, 
+                sum(WORK_ORDER_NUM) as Target_Qty, 
+                sum(ACTUAL_PRO) as Actual_Qty 
+            FROM [dbo].[Daily_Status_Report] 
+            WHERE {date_cond} AND jz IS NOT NULL
+            GROUP BY jz 
+            ORDER BY sum(ACTUAL_PRO) {order_by}
+        """
+        
+        ranking_res = self._execute_mssql_query(query)
+        
+        return {
+            "status": "success",
+            "kpi_type": kpi_type,
+            "ranking_data": ranking_res
+        }
+
     def get_workorder_quantity(self, target_date: str = None) -> Dict[str, Any]:
         """
         獲取指定日期的工單生產數量與實際生產數量：
