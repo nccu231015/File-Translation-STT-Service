@@ -155,8 +155,85 @@ async def transcribe_audio(file: UploadFile = File(...), mode: str = Form("chat"
             llm_response = await llm_service.chat(user_text)
             return {"transcription": stt_result, "llm_response": llm_response}
         elif mode == "meeting":
+            from fastapi.concurrency import run_in_threadpool as tp
+            # Step 1: Analyze meeting transcript
             analysis = await run_in_threadpool(llm_service.analyze_meeting_transcript, user_text)
-            return {"transcription": stt_result, "analysis": analysis}
+            
+            # Step 2: Translate analysis to English (for bilingual minutes)
+            try:
+                en_analysis = await run_in_threadpool(llm_service.translate_analysis, analysis)
+            except Exception as te:
+                print(f"[STT] translate_analysis failed: {te}")
+                en_analysis = {}
+            
+            # Step 3: Generate meeting minutes DOCX
+            try:
+                minutes_svc = MeetingMinutesDocxService()
+                minutes_bytes = await run_in_threadpool(
+                    minutes_svc.generate_minutes,
+                    file.filename,
+                    analysis.get("meeting_objective", ""),
+                    analysis.get("discussion_summary", ""),
+                    analysis.get("decisions", []),
+                    analysis.get("action_items", []),
+                    analysis.get("attendees", []),
+                    analysis.get("schedule_notes", ""),
+                    None,
+                    en_analysis.get("meeting_objective", ""),
+                    en_analysis.get("discussion_summary", ""),
+                    en_analysis.get("decisions", []),
+                    en_analysis.get("action_items", []),
+                    en_analysis.get("schedule_notes", ""),
+                )
+                file_download = {
+                    "filename": f"meeting_minutes_{file.filename}.docx",
+                    "content_base64": base64.b64encode(minutes_bytes).decode("utf-8"),
+                    "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                }
+            except Exception as de:
+                print(f"[STT] MeetingMinutesDocx generation failed: {de}")
+                file_download = None
+            
+            # Step 4: Translate segments for bilingual transcript
+            transcript_download = None
+            try:
+                segments = stt_result.get("segments", [])
+                detected_lang = stt_result.get("language", "zh")
+                if segments:
+                    translated_segments = await run_in_threadpool(
+                        llm_service.translate_segments, segments, detected_lang
+                    )
+                    transcript_svc = TranscriptDocxService()
+                    is_chinese = detected_lang.lower().startswith("zh")
+                    transcript_bytes = await run_in_threadpool(
+                        transcript_svc.generate,
+                        file.filename,
+                        translated_segments,
+                        "中文" if is_chinese else "English",
+                        "English" if is_chinese else "中文（繁體）",
+                    )
+                    transcript_download = {
+                        "filename": f"transcript_{file.filename}.docx",
+                        "content_base64": base64.b64encode(transcript_bytes).decode("utf-8"),
+                        "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    }
+            except Exception as te2:
+                print(f"[STT] TranscriptDocx generation failed: {te2}")
+            
+            result = {
+                "transcription": stt_result,
+                "analysis": {
+                    "summary": analysis.get("discussion_summary", analysis.get("summary", "")),
+                    "decisions": analysis.get("decisions", []),
+                    "action_items": analysis.get("action_items", []),
+                }
+            }
+            if file_download:
+                result["file_download"] = file_download
+            if transcript_download:
+                result["transcript_download"] = transcript_download
+            return result
+
         return {"transcription": stt_result}
     except Exception as e:
         if temp_file_path and os.path.exists(temp_file_path): os.remove(temp_file_path)
