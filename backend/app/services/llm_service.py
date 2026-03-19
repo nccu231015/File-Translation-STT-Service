@@ -37,31 +37,30 @@ class LLMService:
 
     def _ensure_model_exists(self):
         """
-        Checks if the model exists on the (remote) server. If not, pulls it.
+        Checks if the required models exist on the (remote) server. If not, pulls them.
         """
         try:
-            print(f"Checking available Ollama models at {self.ollama_host}...")
-            # Use self.client to check models
+            print(f"Checking available Ollama models at {self.ollama_host}...", flush=True)
             response = self.client.list()
+            available_models = [m.get("name", "") for m in response.get("models", [])]
 
-            available_models = []
-            if "models" in response:
-                for m in response["models"]:
-                    available_models.append(m.get("name") or m.get("model"))
+            models_to_check = {
+                "Main (GPT/Agent)": self.model,
+                "STT Analysis": self.analysis_model,
+                "STT Translation": self.translation_model
+            }
 
-            model_exists = any(self.model in m for m in available_models)
-
-            if not model_exists:
-                print(
-                    f"Model '{self.model}' not found on remote server. Pulling now... This may take a while."
-                )
-                self.client.pull(self.model)
-                print(f"Model '{self.model}' pulled successfully.")
-            else:
-                print(f"Model '{self.model}' is ready on remote server.")
+            for role, m_name in models_to_check.items():
+                model_exists = any(m_name in am for am in available_models)
+                if not model_exists:
+                    print(f"Model '{m_name}' ({role}) not found. Pulling now...", flush=True)
+                    self.client.pull(m_name)
+                    print(f"Model '{m_name}' pulled successfully.", flush=True)
+                else:
+                    print(f"Model '{m_name}' ({role}) is ready on remote server.", flush=True)
 
         except Exception as e:
-            print(f"Warning: Failed to check or pull model automatically: {e}")
+            print(f"Warning: Failed to check or pull models automatically: {e}", flush=True)
 
     def add_document_context(
         self, filename: str, summary: str, session_id: str = "default_session"
