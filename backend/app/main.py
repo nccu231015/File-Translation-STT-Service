@@ -182,14 +182,44 @@ async def transcribe_audio(file: UploadFile = File(...), mode: str = Form("chat"
                 translated_segments = []
             print("[STT] Parallel analysis and translation complete.", flush=True)
 
-            # Step 2: Translate analysis to English (depends on analysis)
-            try:
-                en_analysis = await run_in_threadpool(llm_service.translate_analysis, analysis)
-            except Exception as te:
-                print(f"[STT] translate_analysis failed: {te}")
-                en_analysis = {}
-            
-            # Step 3: Generate meeting minutes DOCX
+            # Phase 2 (parallel): translate_analysis + generate transcript DOCX
+            # Both can start immediately after Phase 1. They don't depend on each other.
+            is_chinese = detected_lang.lower().startswith("zh")
+
+            async def _translate_en():
+                try:
+                    return await run_in_threadpool(llm_service.translate_analysis, analysis)
+                except Exception as te:
+                    print(f"[STT] translate_analysis failed: {te}")
+                    return {}
+
+            async def _gen_transcript_docx():
+                if not translated_segments:
+                    return None
+                try:
+                    svc = TranscriptDocxService()
+                    tb = await run_in_threadpool(
+                        svc.generate,
+                        file.filename,
+                        translated_segments,
+                        "中文" if is_chinese else "English",
+                        "English" if is_chinese else "中文（繁體）",
+                    )
+                    return {
+                        "filename": f"transcript_{file.filename}.docx",
+                        "content_base64": base64.b64encode(tb).decode("utf-8"),
+                        "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    }
+                except Exception as te2:
+                    print(f"[STT] TranscriptDocx generation failed: {te2}")
+                    return None
+
+            en_analysis, transcript_download = await asyncio.gather(
+                _translate_en(), _gen_transcript_docx()
+            )
+            print("[STT] Phase 2 (en-translation + transcript docx) complete.", flush=True)
+
+            # Phase 3: Generate meeting minutes DOCX (needs both analysis + en_analysis)
             file_download = None
             try:
                 minutes_svc = MeetingMinutesDocxService()
@@ -216,27 +246,6 @@ async def transcribe_audio(file: UploadFile = File(...), mode: str = Form("chat"
                 }
             except Exception as de:
                 print(f"[STT] MeetingMinutesDocx generation failed: {de}")
-            
-            # Step 4b: Generate transcript DOCX (already have translated_segments)
-            transcript_download = None
-            try:
-                if translated_segments:
-                    transcript_svc = TranscriptDocxService()
-                    is_chinese = detected_lang.lower().startswith("zh")
-                    transcript_bytes = await run_in_threadpool(
-                        transcript_svc.generate,
-                        file.filename,
-                        translated_segments,
-                        "中文" if is_chinese else "English",
-                        "English" if is_chinese else "中文（繁體）",
-                    )
-                    transcript_download = {
-                        "filename": f"transcript_{file.filename}.docx",
-                        "content_base64": base64.b64encode(transcript_bytes).decode("utf-8"),
-                        "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                    }
-            except Exception as te2:
-                print(f"[STT] TranscriptDocx generation failed: {te2}")
 
             
             # Step 5: Construct bilingual display fields for frontend
