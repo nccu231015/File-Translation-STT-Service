@@ -44,27 +44,35 @@ class LLMService:
         Checks if the required models exist on the (remote) server. If not, pulls them.
         """
         try:
-            print(f"Checking available Ollama models at {self.ollama_host}...", flush=True)
+            print(f"Ollama Server: {self.ollama_host}", flush=True)
+            print(f"Role Routing: Main={self.model}, Analysis={self.analysis_model}, Translation={self.translation_model}", flush=True)
+            
             response = self.client.list()
             available_models = [m.get("name", "") for m in response.get("models", [])]
 
-            models_to_check = {
-                "Main (GPT/Agent)": self.model,
-                "STT Analysis": self.analysis_model,
-                "STT Translation": self.translation_model
-            }
+            # Use unique models set to avoid redundant tasks
+            unique_models = set([self.model, self.analysis_model, self.translation_model])
 
-            for role, m_name in models_to_check.items():
+            for m_name in unique_models:
+                # Find which roles use this model
+                roles = []
+                if m_name == self.model: roles.append("Main")
+                if m_name == self.analysis_model: roles.append("Analysis")
+                if m_name == self.translation_model: roles.append("Translation")
+                
+                role_label = "/".join(roles)
                 model_exists = any(m_name in am for am in available_models)
+                
                 if not model_exists:
-                    print(f"Model '{m_name}' ({role}) not found. Pulling now...", flush=True)
+                    print(f"Model '{m_name}' ({role_label}) not found. Pulling...", flush=True)
                     self.client.pull(m_name)
-                    print(f"Model '{m_name}' pulled successfully.", flush=True)
+                    print(f"Model '{m_name}' ({role_label}) pulled successfully.", flush=True)
+                    available_models.append(m_name)
                 else:
-                    print(f"Model '{m_name}' ({role}) is ready on remote server.", flush=True)
+                    print(f"Model '{m_name}' ({role_label}) is ready.", flush=True)
 
         except Exception as e:
-            print(f"Warning: Failed to check or pull models automatically: {e}", flush=True)
+            print(f"Warning: Failed to check model states: {e}", flush=True)
 
     def add_document_context(
         self, filename: str, summary: str, session_id: str = "default_session"
