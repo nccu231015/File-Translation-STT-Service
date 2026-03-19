@@ -23,6 +23,13 @@ export interface STTResponse {
         content_base64?: string;
         mime_type?: string;
     };
+    /** Bilingual segments for the viewer */
+    translated_segments?: Array<{
+        start: number;
+        end: number;
+        original: string;
+        translated: string;
+    }>;
 }
 
 export const analyzeMeetingAudio = async (file: File): Promise<STTResponse> => {
