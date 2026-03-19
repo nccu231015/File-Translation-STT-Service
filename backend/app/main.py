@@ -159,15 +159,28 @@ async def transcribe_audio(file: UploadFile = File(...), mode: str = Form("chat"
             llm_response = await llm_service.chat(user_text)
             return {"transcription": stt_result, "llm_response": llm_response}
         elif mode == "meeting":
-            print("[STT] Analyzing meeting transcript...", flush=True)
+            import asyncio
+            print( "[STT] Starting parallel bilingual analysis and segment translation (utilizing OLLAMA_NUM_PARALLEL)...", flush=True)
+
             segments = stt_result.get("segments", [])
             detected_lang = stt_result.get("language", "zh")
             is_chinese = detected_lang.lower().startswith("zh")
 
-            # Step 1: Analyze → LLM now returns BOTH zh and en fields in one call
-            analysis = await run_in_threadpool(llm_service.analyze_meeting_transcript, user_text)
+            # Parallel Step 1 (Bilingual Analysis) & Step 2 (Transcript Translation)
+            analysis_fut = asyncio.ensure_future(
+                run_in_threadpool(llm_service.analyze_meeting_transcript, user_text)
+            )
 
-            # en_analysis comes from the same dict - no extra LLM call needed!
+            if segments:
+                trans_fut = asyncio.ensure_future(
+                    run_in_threadpool(llm_service.translate_segments, segments, detected_lang)
+                )
+                analysis, translated_segments = await asyncio.gather(analysis_fut, trans_fut)
+            else:
+                analysis = await analysis_fut
+                translated_segments = []
+
+            # en_analysis comes from the same dict - no extra call needed!
             en_analysis = {
                 "meeting_objective":  analysis.get("en_meeting_objective", ""),
                 "discussion_summary": analysis.get("en_discussion_summary", ""),
@@ -175,13 +188,8 @@ async def transcribe_audio(file: UploadFile = File(...), mode: str = Form("chat"
                 "decisions":          analysis.get("en_decisions", []),
                 "action_items":       analysis.get("en_action_items", []),
             }
+            print("[STT] Parallel processing complete.", flush=True)
 
-            # Step 2: Translate segments for bilingual transcript viewer
-            translated_segments = []
-            if segments:
-                translated_segments = await run_in_threadpool(
-                    llm_service.translate_segments, segments, detected_lang
-                )
 
             # Step 3: Generate meeting minutes DOCX
             file_download = None
