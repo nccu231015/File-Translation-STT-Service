@@ -93,5 +93,5 @@ class STTService:
 
 
 # Global instance
-# Changed to "small" model as requested
-stt_service = STTService(model_size="small")
+# Changed to "tiny" model for maximum speed
+stt_service = STTService(model_size="tiny")
