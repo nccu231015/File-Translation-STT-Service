@@ -509,7 +509,7 @@ class LLMService:
             src_label = "English"
             tgt_label = "Traditional Chinese (Taiwan)"
 
-        BATCH = 50  # Increased from 30 to reduce number of LLM API calls
+        BATCH = 30
         results: list[dict] = []
 
         for batch_start in range(0, len(segments), BATCH):

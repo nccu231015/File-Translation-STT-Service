@@ -159,62 +159,15 @@ async def transcribe_audio(file: UploadFile = File(...), mode: str = Form("chat"
             llm_response = await llm_service.chat(user_text)
             return {"transcription": stt_result, "llm_response": llm_response}
         elif mode == "meeting":
-            print("[STT] Starting meeting analysis pipeline...", flush=True)
-            segments = stt_result.get("segments", [])
-            detected_lang = stt_result.get("language", "zh")
-            is_chinese = detected_lang.lower().startswith("zh")
+            # Step 1: Analyze meeting transcript (Traditional Chinese output)
+            analysis = await run_in_threadpool(llm_service.analyze_meeting_transcript, user_text)
 
-            # ── Phase 1 (並行 2 slots) ───────────────────────────────────────
-            # 摘要分析(中文) ‖ 逐字稿翻譯（根據輸入語言自動決定方向）
-            analysis_fut = asyncio.ensure_future(
-                run_in_threadpool(llm_service.analyze_meeting_transcript, user_text)
-            )
-            if segments:
-                trans_fut = asyncio.ensure_future(
-                    run_in_threadpool(llm_service.translate_segments, segments, detected_lang)
-                )
-                analysis, translated_segments = await asyncio.gather(analysis_fut, trans_fut)
-            else:
-                analysis = await analysis_fut
-                translated_segments = []
-            print("[STT] Phase 1 complete: analysis + segment translation done.", flush=True)
-
-            # ── Phase 2 (並行 2 slots) ───────────────────────────────────────
-            # 摘要英文翻譯 ‖ 生成逐字稿 DOCX（兩者互不依賴）
-            async def _translate_analysis_en():
-                try:
-                    return await run_in_threadpool(llm_service.translate_analysis, analysis)
-                except Exception as e:
-                    print(f"[STT] translate_analysis failed: {e}")
-                    return {}
-
-            async def _gen_transcript_docx():
-                if not translated_segments:
-                    return None
-                try:
-                    svc = TranscriptDocxService()
-                    tb = await run_in_threadpool(
-                        svc.generate,
-                        file.filename,
-                        translated_segments,
-                        "中文" if is_chinese else "English",
-                        "English" if is_chinese else "中文（繁體）",
-                    )
-                    return {
-                        "filename": f"transcript_{file.filename}.docx",
-                        "content_base64": base64.b64encode(tb).decode("utf-8"),
-                        "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                    }
-                except Exception as e:
-                    print(f"[STT] TranscriptDocx failed: {e}")
-                    return None
-
-            en_analysis, transcript_download = await asyncio.gather(
-                _translate_analysis_en(), _gen_transcript_docx()
-            )
-            print("[STT] Phase 2 complete: en-translation + transcript docx done.", flush=True)
-
-
+            # Step 2: Translate analysis to English (for bilingual minutes)
+            try:
+                en_analysis = await run_in_threadpool(llm_service.translate_analysis, analysis)
+            except Exception as te:
+                print(f"[STT] translate_analysis failed: {te}")
+                en_analysis = {}
 
             # Step 3: Generate meeting minutes DOCX
             file_download = None
@@ -244,10 +197,17 @@ async def transcribe_audio(file: UploadFile = File(...), mode: str = Form("chat"
             except Exception as de:
                 print(f"[STT] MeetingMinutesDocx generation failed: {de}")
 
-            # Step 4: Generate bilingual transcript DOCX
+            # Step 4: Translate segments and generate bilingual transcript DOCX
+            translated_segments = []
             transcript_download = None
+            segments = stt_result.get("segments", [])
+            detected_lang = stt_result.get("language", "zh")
+            is_chinese = detected_lang.lower().startswith("zh")
             try:
-                if translated_segments:
+                if segments:
+                    translated_segments = await run_in_threadpool(
+                        llm_service.translate_segments, segments, detected_lang
+                    )
                     transcript_svc = TranscriptDocxService()
                     transcript_bytes = await run_in_threadpool(
                         transcript_svc.generate,
