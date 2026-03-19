@@ -32,6 +32,10 @@ class LLMService:
             host=self.ollama_host,
             timeout=300.0  # 配合使用者要求，給予大模型極長的思考時間 (5分鐘) 去整理超長表格
         )
+        self.async_client = ollama.AsyncClient(
+            host=self.ollama_host,
+            timeout=300.0
+        )
 
         self._ensure_model_exists()
 
@@ -573,5 +577,84 @@ class LLMService:
         return results
 
 
+    async def translate_segments_async(
+        self,
+        segments: list[dict],
+        detected_language: str,
+    ) -> list[dict]:
+        is_chinese = detected_language.lower().startswith("zh")
+        if is_chinese:
+            src_label = "Traditional Chinese"
+            tgt_label = "English"
+        else:
+            src_label = "English"
+            tgt_label = "Traditional Chinese (Taiwan)"
+
+        BATCH = 30
+        
+        async def process_batch(batch: list[dict]) -> list[dict]:
+            numbered_lines = "\n".join(
+                f"{i + 1}. {seg['text'].strip()}" for i, seg in enumerate(batch)
+            )
+
+            system_prompt = (
+                f"You are a professional translator. "
+                f"Translate each numbered line from {src_label} to {tgt_label}.\n"
+                "Rules:\n"
+                "- Keep the same numbering (1., 2., 3., …).\n"
+                "- Translate ONLY the text; do NOT add commentary or explanations.\n"
+                "- Output ONLY the numbered translated lines, nothing else.\n"
+                "- Preserve proper nouns, dates, and numbers as-is.\n"
+                f"- Target language: {tgt_label}."
+            )
+
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": numbered_lines},
+            ]
+
+            translated_lines: list[str] = [""] * len(batch)
+            try:
+                response = await self.async_client.chat(model=self.translation_model, messages=messages)
+                raw = response["message"]["content"].strip()
+
+                for line in raw.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    m = re.match(r"^(\d+)[.、．]\s*(.*)", line)
+                    if m:
+                        idx = int(m.group(1)) - 1
+                        if 0 <= idx < len(batch):
+                            translated_lines[idx] = self.s2tw.convert(m.group(2).strip()) if not is_chinese else m.group(2).strip()
+            except Exception as e:
+                print(f"[LLM] translate_segments_async batch error: {e}", flush=True)
+
+            batch_results = []
+            for i, seg in enumerate(batch):
+                batch_results.append({
+                    "start": seg["start"],
+                    "end": seg["end"],
+                    "original": seg["text"].strip(),
+                    "translated": translated_lines[i],
+                })
+            return batch_results
+
+        import asyncio
+        tasks = []
+        for batch_start in range(0, len(segments), BATCH):
+            tasks.append(process_batch(segments[batch_start: batch_start + BATCH]))
+
+        print(f"[LLM] Starting parallel translation for {len(tasks)} batches using {self.translation_model}...", flush=True)
+        results_lists = await asyncio.gather(*tasks)
+
+        # Flatten
+        final_results = []
+        for rl in results_lists:
+            final_results.extend(rl)
+
+        print(f"[LLM] translate_segments_async complete: {len(final_results)} segments", flush=True)
+        return final_results
+        
 # Global instance
 llm_service = LLMService()

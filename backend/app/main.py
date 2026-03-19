@@ -205,8 +205,8 @@ async def transcribe_audio(file: UploadFile = File(...), mode: str = Form("chat"
             is_chinese = detected_lang.lower().startswith("zh")
             try:
                 if segments:
-                    translated_segments = await run_in_threadpool(
-                        llm_service.translate_segments, segments, detected_lang
+                    translated_segments = await llm_service.translate_segments_async(
+                        segments, detected_lang
                     )
                     transcript_svc = TranscriptDocxService()
                     transcript_bytes = await run_in_threadpool(
