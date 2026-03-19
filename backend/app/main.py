@@ -22,6 +22,11 @@ from app.services.factory.factory_agent import FactoryAgentService
 from app.services.factory.factory_redis import factory_store
 from pydantic import BaseModel
 from typing import Optional
+import uuid
+import traceback
+from fastapi.concurrency import run_in_threadpool
+from pdf2docx import Converter
+from app.services.factory.sql_tools import FactorySqlTools
 
 app = FastAPI()
 factory_agent = FactoryAgentService(llm_service)
@@ -47,7 +52,6 @@ async def startup_event():
 
     # 3. Factory Databases Health Check
     try:
-        from app.services.factory.sql_tools import FactorySqlTools
         factory_tools = FactorySqlTools()
         db_status = factory_tools.test_connections()
         print(f"[HealthCheck] MSSQL: {db_status['mssql']}, Postgres: {db_status['postgres']}")
@@ -146,7 +150,6 @@ async def transcribe_audio(file: UploadFile = File(...), mode: str = Form("chat"
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
             shutil.copyfileobj(file.file, temp_file)
             temp_file_path = temp_file.name
-        from fastapi.concurrency import run_in_threadpool
         stt_result = await run_in_threadpool(stt_service.transcribe, temp_file_path)
         if os.path.exists(temp_file_path): os.remove(temp_file_path)
         
@@ -155,7 +158,6 @@ async def transcribe_audio(file: UploadFile = File(...), mode: str = Form("chat"
             llm_response = await llm_service.chat(user_text)
             return {"transcription": stt_result, "llm_response": llm_response}
         elif mode == "meeting":
-            from fastapi.concurrency import run_in_threadpool as tp
             # Step 1: Analyze meeting transcript
             analysis = await run_in_threadpool(llm_service.analyze_meeting_transcript, user_text)
             
@@ -245,19 +247,44 @@ async def transcribe_audio(file: UploadFile = File(...), mode: str = Form("chat"
 async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = File(...), target_lang: str = Form(None), debug: str = Form("false")):
     debug_mode = str(debug).lower() in ("true", "1", "t", "yes", "on")
     temp_input_path = ""
+    docx_path = ""
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_input:
             shutil.copyfileobj(file.file, temp_input)
             temp_input_path = temp_input.name
+            
         result_list = await pdf_service.process_pdf(temp_input_path, force_target_lang=target_lang, debug_mode=debug_mode)
         output_pdf_path = result_list[0]["file_path"]
+        
         with open(output_pdf_path, 'rb') as f:
             pdf_b64 = base64.b64encode(f.read()).decode('utf-8')
+            
+        # Docx generation
+        docx_b64 = None
+        if not debug_mode:
+            try:
+                docx_path = output_pdf_path.replace(".pdf", ".docx")
+                
+                def _convert():
+                    cv = Converter(output_pdf_path)
+                    cv.convert(docx_path)
+                    cv.close()
+                    
+                await run_in_threadpool(_convert)
+                with open(docx_path, 'rb') as f:
+                    docx_b64 = base64.b64encode(f.read()).decode('utf-8')
+                background_tasks.add_task(os.remove, docx_path)
+            except Exception as docx_err:
+                print(f"[PDF] Docx conversion failed: {docx_err}")
+                if os.path.exists(docx_path): os.remove(docx_path)
+                
         background_tasks.add_task(os.remove, temp_input_path)
         background_tasks.add_task(os.remove, output_pdf_path)
-        return {"pdf_base64": pdf_b64}
+        
+        return {"pdf_base64": pdf_b64, "docx_base64": docx_b64}
     except Exception as e:
         if temp_input_path and os.path.exists(temp_input_path): os.remove(temp_input_path)
+        if docx_path and os.path.exists(docx_path): os.remove(docx_path)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/chat")
@@ -285,7 +312,6 @@ async def factory_chat(payload: dict, background_tasks: BackgroundTasks):
                 session = await factory_store.create_session(user_text)
                 session_id = session["session_id"]
             except Exception as se:
-                import uuid
                 session_id = str(uuid.uuid4())
                 print(f"[Session Warning] Fallback session id generated: {se}")
             
@@ -307,7 +333,6 @@ async def factory_chat(payload: dict, background_tasks: BackgroundTasks):
         }
         
     except Exception as e:
-        import traceback
         print(f"[Factory API Error] {e}", flush=True)
         print(traceback.format_exc(), flush=True)
         raise HTTPException(status_code=500, detail=str(e))
