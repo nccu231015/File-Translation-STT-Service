@@ -23,6 +23,7 @@ export interface ProcessedRecord {
     actionItems: (string | ActionItem)[];
     downloadUrl?: string;     // Meeting minutes docx (blob URL)
     transcriptUrl?: string;   // Bilingual transcript docx (blob URL)
+    translatedSegments?: { start: number, end: number, original: string, translated: string }[];
 }
 
 interface VoiceContextType {
@@ -190,6 +191,7 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
                 actionItems: analysis.action_items,
                 downloadUrl,
                 transcriptUrl,
+                translatedSegments: data.translated_segments || [],
             };
 
             setRecords(prev => [newRecord, ...prev]);

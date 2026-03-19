@@ -276,6 +276,38 @@ export function VoiceInterface() {
                                 )}
                             </div>
                         </div>
+
+                        {/* Translation / Original Transcript Viewer */}
+                        <div className="mt-6 border-t border-slate-100 pt-4">
+                            <details className="text-sm group">
+                                <summary className="font-bold cursor-pointer text-slate-700 hover:text-blue-600 transition-colors list-none flex items-center gap-2">
+                                    <FileText className="size-4" />
+                                    <span>展開全文逐字稿與翻譯</span>
+                                    <span className="text-xs font-normal text-slate-400 ml-2">(點擊展開)</span>
+                                </summary>
+                                <div className="mt-4 bg-slate-50 border border-slate-200 rounded-lg p-4 max-h-80 overflow-y-auto space-y-4">
+                                    {record.translatedSegments && record.translatedSegments.length > 0 ? (
+                                        record.translatedSegments.map((seg: any, idx: number) => (
+                                            <div key={idx} className="pb-3 border-b border-slate-200 last:border-0 last:pb-0">
+                                                <div className="text-xs text-slate-400 font-mono mb-1">
+                                                    {new Date(seg.start * 1000).toISOString().substr(11, 8)} → {new Date(seg.end * 1000).toISOString().substr(11, 8)}
+                                                </div>
+                                                <p className="text-slate-800 font-medium mb-1 relative pl-3 before:content-[''] before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-1 before:bg-blue-400 before:rounded">
+                                                    {seg.original}
+                                                </p>
+                                                <p className="text-slate-600 pl-3">
+                                                    {seg.translated}
+                                                </p>
+                                            </div>
+                                        ))
+                                    ) : (
+                                        <div className="text-slate-600 leading-relaxed whitespace-pre-wrap">
+                                            {record.transcript}
+                                        </div>
+                                    )}
+                                </div>
+                            </details>
+                        </div>
                     </CardContent>
                 </Card>
             ))}

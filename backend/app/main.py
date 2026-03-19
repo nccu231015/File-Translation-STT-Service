@@ -228,6 +228,8 @@ async def transcribe_audio(file: UploadFile = File(...), mode: str = Form("chat"
                     "action_items": analysis.get("action_items", []),
                 }
             }
+            if 'translated_segments' in locals() and translated_segments:
+                result["translated_segments"] = translated_segments
             if file_download:
                 result["file_download"] = file_download
             if transcript_download:
