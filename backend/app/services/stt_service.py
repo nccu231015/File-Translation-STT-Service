@@ -5,7 +5,7 @@ import os
 
 
 class STTService:
-    def __init__(self, model_size="small"):
+    def __init__(self, model_size="tiny"):
         self.model_size = model_size
         self.model = None
         self.lock = threading.Lock()  # Protect model inference
