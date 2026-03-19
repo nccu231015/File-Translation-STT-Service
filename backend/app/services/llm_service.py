@@ -10,9 +10,11 @@ load_dotenv()
 
 
 class LLMService:
-    def __init__(self, model="gpt-oss:20b"):
+    def __init__(self, model="gpt-oss:20b", analysis_model="deepseek-r1:7b", translation_model="qwen3:latest"):
         self.model = model
-        print(f"LLM Service initialized with model: {self.model}", flush=True)
+        self.analysis_model = analysis_model
+        self.translation_model = translation_model
+        print(f"LLM Service initialized with main model: {self.model}", flush=True)
 
         # Initialize OpenCC for simplified to traditional Chinese conversion
         self.s2tw = OpenCC("s2tw")  # Simplified to Traditional (Taiwan standard)
@@ -390,7 +392,8 @@ class LLMService:
         ]
 
         try:
-            response = self.client.chat(model=self.model, messages=messages, format="json")
+            # Use reasoning model for analysis
+            response = self.client.chat(model=self.analysis_model, messages=messages, format="json")
             content = response["message"]["content"]
             
             # Clean and Parse JSON
@@ -468,7 +471,8 @@ class LLMService:
         ]
 
         try:
-            response = self.client.chat(model=self.model, messages=messages, format="json")
+            # Use translation model for speed
+            response = self.client.chat(model=self.translation_model, messages=messages, format="json")
             content = self._clean_llm_response(response["message"]["content"])
             translated = json.loads(content)
             print("[LLM] Analysis translation complete.", flush=True)
@@ -539,7 +543,8 @@ class LLMService:
 
             translated_lines: list[str] = [""] * len(batch)
             try:
-                response = self.client.chat(model=self.model, messages=messages)
+                # Use translation model for speed
+                response = self.client.chat(model=self.translation_model, messages=messages)
                 raw = response["message"]["content"].strip()
 
                 # Parse "N. translated text" lines
