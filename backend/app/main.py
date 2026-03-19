@@ -222,12 +222,53 @@ async def transcribe_audio(file: UploadFile = File(...), mode: str = Form("chat"
             except Exception as te2:
                 print(f"[STT] TranscriptDocx generation failed: {te2}")
             
+            # Step 5: Construct bilingual display fields for frontend
+            composite_summary = ""
+            zh_obj = analysis.get("meeting_objective", "").strip()
+            en_obj = en_analysis.get("meeting_objective", "").strip()
+            if zh_obj or en_obj:
+               composite_summary += f"【會議目的 | Meeting Objective】\n{zh_obj}\n{en_obj}\n\n"
+               
+            zh_sum = analysis.get("discussion_summary", analysis.get("summary", "")).strip()
+            en_sum = en_analysis.get("discussion_summary", en_analysis.get("summary", "")).strip()
+            if zh_sum or en_sum:
+               composite_summary += f"【討論摘要 | Discussion Summary】\n{zh_sum}\n{en_sum}"
+
+            zh_decisions = analysis.get("decisions", [])
+            en_decisions = en_analysis.get("decisions", [])
+            composite_decisions = []
+            max_len = max(len(zh_decisions), len(en_decisions))
+            for i in range(max_len):
+                zh_d = zh_decisions[i] if i < len(zh_decisions) else ""
+                en_d = en_decisions[i] if i < len(en_decisions) else ""
+                composite_decisions.append(f"{zh_d}\n{en_d}".strip())
+
+            zh_actions = analysis.get("action_items", [])
+            en_actions = en_analysis.get("action_items", [])
+            composite_actions = []
+            max_len_actions = max(len(zh_actions), len(en_actions))
+            for i in range(max_len_actions):
+                zh_a = zh_actions[i] if i < len(zh_actions) else {}
+                en_a = en_actions[i] if i < len(en_actions) else {}
+                
+                if isinstance(zh_a, str):
+                    zh_task = zh_a
+                    en_task = en_a if isinstance(en_a, str) else en_a.get("task", "")
+                    composite_actions.append(f"{zh_task}\n{en_task}".strip())
+                else:
+                    task = f"{zh_a.get('task', '')}\n{en_a.get('task', '')}".strip()
+                    composite_actions.append({
+                        "task": task, 
+                        "owner": zh_a.get('owner', ''), 
+                        "deadline": zh_a.get('deadline', '')
+                    })
+
             result = {
                 "transcription": stt_result,
                 "analysis": {
-                    "summary": analysis.get("discussion_summary", analysis.get("summary", "")),
-                    "decisions": analysis.get("decisions", []),
-                    "action_items": analysis.get("action_items", []),
+                    "summary": composite_summary.strip() or zh_sum,
+                    "decisions": composite_decisions,
+                    "action_items": composite_actions,
                 }
             }
             if 'translated_segments' in locals() and translated_segments:
