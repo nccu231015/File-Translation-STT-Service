@@ -159,67 +159,31 @@ async def transcribe_audio(file: UploadFile = File(...), mode: str = Form("chat"
             llm_response = await llm_service.chat(user_text)
             return {"transcription": stt_result, "llm_response": llm_response}
         elif mode == "meeting":
-            # Step 1 & 4 (Parallel): Analyze transcript AND translate segments concurrently
-            # Both tasks only READ from stt_result and call independent HTTP requests to Ollama.
-            # There is NO shared mutable state, so running them in parallel is completely safe.
-            print("[STT] Starting parallel analysis and segment translation...", flush=True)
-            
+            print("[STT] Analyzing meeting transcript...", flush=True)
             segments = stt_result.get("segments", [])
             detected_lang = stt_result.get("language", "zh")
-            
-            # asyncio.ensure_future schedules both coroutines onto the event loop immediately,
-            # so they are dispatched concurrently before we await either result.
-            analysis_fut = asyncio.ensure_future(
-                run_in_threadpool(llm_service.analyze_meeting_transcript, user_text)
-            )
-            if segments:
-                trans_fut = asyncio.ensure_future(
-                    run_in_threadpool(llm_service.translate_segments, segments, detected_lang)
-                )
-                analysis, translated_segments = await asyncio.gather(analysis_fut, trans_fut)
-            else:
-                analysis = await analysis_fut
-                translated_segments = []
-            print("[STT] Parallel analysis and translation complete.", flush=True)
-
-            # Phase 2 (parallel): translate_analysis + generate transcript DOCX
-            # Both can start immediately after Phase 1. They don't depend on each other.
             is_chinese = detected_lang.lower().startswith("zh")
 
-            async def _translate_en():
-                try:
-                    return await run_in_threadpool(llm_service.translate_analysis, analysis)
-                except Exception as te:
-                    print(f"[STT] translate_analysis failed: {te}")
-                    return {}
+            # Step 1: Analyze → LLM now returns BOTH zh and en fields in one call
+            analysis = await run_in_threadpool(llm_service.analyze_meeting_transcript, user_text)
 
-            async def _gen_transcript_docx():
-                if not translated_segments:
-                    return None
-                try:
-                    svc = TranscriptDocxService()
-                    tb = await run_in_threadpool(
-                        svc.generate,
-                        file.filename,
-                        translated_segments,
-                        "中文" if is_chinese else "English",
-                        "English" if is_chinese else "中文（繁體）",
-                    )
-                    return {
-                        "filename": f"transcript_{file.filename}.docx",
-                        "content_base64": base64.b64encode(tb).decode("utf-8"),
-                        "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                    }
-                except Exception as te2:
-                    print(f"[STT] TranscriptDocx generation failed: {te2}")
-                    return None
+            # en_analysis comes from the same dict - no extra LLM call needed!
+            en_analysis = {
+                "meeting_objective":  analysis.get("en_meeting_objective", ""),
+                "discussion_summary": analysis.get("en_discussion_summary", ""),
+                "schedule_notes":     analysis.get("en_schedule_notes", ""),
+                "decisions":          analysis.get("en_decisions", []),
+                "action_items":       analysis.get("en_action_items", []),
+            }
 
-            en_analysis, transcript_download = await asyncio.gather(
-                _translate_en(), _gen_transcript_docx()
-            )
-            print("[STT] Phase 2 (en-translation + transcript docx) complete.", flush=True)
+            # Step 2: Translate segments for bilingual transcript viewer
+            translated_segments = []
+            if segments:
+                translated_segments = await run_in_threadpool(
+                    llm_service.translate_segments, segments, detected_lang
+                )
 
-            # Phase 3: Generate meeting minutes DOCX (needs both analysis + en_analysis)
+            # Step 3: Generate meeting minutes DOCX
             file_download = None
             try:
                 minutes_svc = MeetingMinutesDocxService()
@@ -246,6 +210,27 @@ async def transcribe_audio(file: UploadFile = File(...), mode: str = Form("chat"
                 }
             except Exception as de:
                 print(f"[STT] MeetingMinutesDocx generation failed: {de}")
+
+            # Step 4: Generate bilingual transcript DOCX
+            transcript_download = None
+            try:
+                if translated_segments:
+                    transcript_svc = TranscriptDocxService()
+                    transcript_bytes = await run_in_threadpool(
+                        transcript_svc.generate,
+                        file.filename,
+                        translated_segments,
+                        "中文" if is_chinese else "English",
+                        "English" if is_chinese else "中文（繁體）",
+                    )
+                    transcript_download = {
+                        "filename": f"transcript_{file.filename}.docx",
+                        "content_base64": base64.b64encode(transcript_bytes).decode("utf-8"),
+                        "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    }
+            except Exception as te2:
+                print(f"[STT] TranscriptDocx generation failed: {te2}")
+
 
             
             # Step 5: Construct bilingual display fields for frontend
