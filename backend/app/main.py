@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from typing import Optional
 import uuid
 import traceback
+import asyncio
 from fastapi.concurrency import run_in_threadpool
 from pdf2docx import Converter
 from app.services.factory.sql_tools import FactorySqlTools
@@ -158,10 +159,30 @@ async def transcribe_audio(file: UploadFile = File(...), mode: str = Form("chat"
             llm_response = await llm_service.chat(user_text)
             return {"transcription": stt_result, "llm_response": llm_response}
         elif mode == "meeting":
-            # Step 1: Analyze meeting transcript
-            analysis = await run_in_threadpool(llm_service.analyze_meeting_transcript, user_text)
+            # Step 1 & 4 (Parallel): Analyze transcript AND translate segments concurrently
+            # Both tasks only READ from stt_result and call independent HTTP requests to Ollama.
+            # There is NO shared mutable state, so running them in parallel is completely safe.
+            print("[STT] Starting parallel analysis and segment translation...", flush=True)
             
-            # Step 2: Translate analysis to English (for bilingual minutes)
+            segments = stt_result.get("segments", [])
+            detected_lang = stt_result.get("language", "zh")
+            
+            # asyncio.ensure_future schedules both coroutines onto the event loop immediately,
+            # so they are dispatched concurrently before we await either result.
+            analysis_fut = asyncio.ensure_future(
+                run_in_threadpool(llm_service.analyze_meeting_transcript, user_text)
+            )
+            if segments:
+                trans_fut = asyncio.ensure_future(
+                    run_in_threadpool(llm_service.translate_segments, segments, detected_lang)
+                )
+                analysis, translated_segments = await asyncio.gather(analysis_fut, trans_fut)
+            else:
+                analysis = await analysis_fut
+                translated_segments = []
+            print("[STT] Parallel analysis and translation complete.", flush=True)
+
+            # Step 2: Translate analysis to English (depends on analysis)
             try:
                 en_analysis = await run_in_threadpool(llm_service.translate_analysis, analysis)
             except Exception as te:
@@ -169,6 +190,7 @@ async def transcribe_audio(file: UploadFile = File(...), mode: str = Form("chat"
                 en_analysis = {}
             
             # Step 3: Generate meeting minutes DOCX
+            file_download = None
             try:
                 minutes_svc = MeetingMinutesDocxService()
                 minutes_bytes = await run_in_threadpool(
@@ -194,17 +216,11 @@ async def transcribe_audio(file: UploadFile = File(...), mode: str = Form("chat"
                 }
             except Exception as de:
                 print(f"[STT] MeetingMinutesDocx generation failed: {de}")
-                file_download = None
             
-            # Step 4: Translate segments for bilingual transcript
+            # Step 4b: Generate transcript DOCX (already have translated_segments)
             transcript_download = None
             try:
-                segments = stt_result.get("segments", [])
-                detected_lang = stt_result.get("language", "zh")
-                if segments:
-                    translated_segments = await run_in_threadpool(
-                        llm_service.translate_segments, segments, detected_lang
-                    )
+                if translated_segments:
                     transcript_svc = TranscriptDocxService()
                     is_chinese = detected_lang.lower().startswith("zh")
                     transcript_bytes = await run_in_threadpool(
@@ -221,6 +237,7 @@ async def transcribe_audio(file: UploadFile = File(...), mode: str = Form("chat"
                     }
             except Exception as te2:
                 print(f"[STT] TranscriptDocx generation failed: {te2}")
+
             
             # Step 5: Construct bilingual display fields for frontend
             composite_summary = ""

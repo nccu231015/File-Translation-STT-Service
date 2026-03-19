@@ -56,6 +56,7 @@ class STTService:
             raise RuntimeError("STT Model not initialized")
 
         # beam_size=1 to save memory, default is 5
+        # vad_filter=True to ignore silent parts of the audio, speeding up processing
         print(f"Starting transcription for {audio_path}...", flush=True)
 
         segment_list = []
@@ -63,7 +64,7 @@ class STTService:
 
         # Protect the ENTIRE inference and iteration process within the lock
         with self.lock:
-            segments, info = self.model.transcribe(audio_path, beam_size=1)
+            segments, info = self.model.transcribe(audio_path, beam_size=1, vad_filter=True)
             print(f"Detected language '{info.language}' with probability {info.language_probability}", flush=True)
 
             count = 0
