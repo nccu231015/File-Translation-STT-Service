@@ -10,7 +10,7 @@ load_dotenv()
 
 
 class LLMService:
-    def __init__(self, model="gpt-oss:20b", analysis_model="deepseek-r1:7b", translation_model="qwen3:latest"):
+    def __init__(self, model="gpt-oss:20b", analysis_model="qwen3:latest", translation_model="qwen3:latest"):
         self.model = model
         self.analysis_model = analysis_model
         self.translation_model = translation_model
