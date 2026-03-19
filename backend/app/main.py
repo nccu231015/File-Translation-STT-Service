@@ -159,18 +159,16 @@ async def transcribe_audio(file: UploadFile = File(...), mode: str = Form("chat"
             llm_response = await llm_service.chat(user_text)
             return {"transcription": stt_result, "llm_response": llm_response}
         elif mode == "meeting":
-            import asyncio
-            print( "[STT] Starting parallel bilingual analysis and segment translation (utilizing OLLAMA_NUM_PARALLEL)...", flush=True)
-
+            print("[STT] Starting meeting analysis pipeline...", flush=True)
             segments = stt_result.get("segments", [])
             detected_lang = stt_result.get("language", "zh")
             is_chinese = detected_lang.lower().startswith("zh")
 
-            # Parallel Step 1 (Bilingual Analysis) & Step 2 (Transcript Translation)
+            # ── Phase 1 (並行 2 slots) ───────────────────────────────────────
+            # 摘要分析(中文) ‖ 逐字稿翻譯（根據輸入語言自動決定方向）
             analysis_fut = asyncio.ensure_future(
                 run_in_threadpool(llm_service.analyze_meeting_transcript, user_text)
             )
-
             if segments:
                 trans_fut = asyncio.ensure_future(
                     run_in_threadpool(llm_service.translate_segments, segments, detected_lang)
@@ -179,16 +177,43 @@ async def transcribe_audio(file: UploadFile = File(...), mode: str = Form("chat"
             else:
                 analysis = await analysis_fut
                 translated_segments = []
+            print("[STT] Phase 1 complete: analysis + segment translation done.", flush=True)
 
-            # en_analysis comes from the same dict - no extra call needed!
-            en_analysis = {
-                "meeting_objective":  analysis.get("en_meeting_objective", ""),
-                "discussion_summary": analysis.get("en_discussion_summary", ""),
-                "schedule_notes":     analysis.get("en_schedule_notes", ""),
-                "decisions":          analysis.get("en_decisions", []),
-                "action_items":       analysis.get("en_action_items", []),
-            }
-            print("[STT] Parallel processing complete.", flush=True)
+            # ── Phase 2 (並行 2 slots) ───────────────────────────────────────
+            # 摘要英文翻譯 ‖ 生成逐字稿 DOCX（兩者互不依賴）
+            async def _translate_analysis_en():
+                try:
+                    return await run_in_threadpool(llm_service.translate_analysis, analysis)
+                except Exception as e:
+                    print(f"[STT] translate_analysis failed: {e}")
+                    return {}
+
+            async def _gen_transcript_docx():
+                if not translated_segments:
+                    return None
+                try:
+                    svc = TranscriptDocxService()
+                    tb = await run_in_threadpool(
+                        svc.generate,
+                        file.filename,
+                        translated_segments,
+                        "中文" if is_chinese else "English",
+                        "English" if is_chinese else "中文（繁體）",
+                    )
+                    return {
+                        "filename": f"transcript_{file.filename}.docx",
+                        "content_base64": base64.b64encode(tb).decode("utf-8"),
+                        "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    }
+                except Exception as e:
+                    print(f"[STT] TranscriptDocx failed: {e}")
+                    return None
+
+            en_analysis, transcript_download = await asyncio.gather(
+                _translate_analysis_en(), _gen_transcript_docx()
+            )
+            print("[STT] Phase 2 complete: en-translation + transcript docx done.", flush=True)
+
 
 
             # Step 3: Generate meeting minutes DOCX
