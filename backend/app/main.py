@@ -368,15 +368,11 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                     await asyncio.gather(*tasks)
                     
                     def _apply_docx_tables():
-                        def apply_style(container):
+                        def apply_style(container, prefix=""):
                             if hasattr(container, 'tables'):
-                                for table in container.tables:
-                                    # Only unlock fixed row heights so rows can grow downward.
-                                    # Do NOT change tblLayout to autofit — that causes columns to overflow page margins.
-                                    for row in table.rows:
-                                        # Change row height rule from 'exact' (clips content) to 'atLeast'
-                                        # so rows can expand downward to fit longer translated text.
-                                        # Do NOT delete w:trHeight entirely — that confuses LibreOffice layout.
+                                for t_idx, table in enumerate(container.tables):
+                                    for r_idx, row in enumerate(table.rows):
+                                        # Allow rows to expand downward
                                         try:
                                             trPr = row._tr.trPr
                                             if trPr is not None:
@@ -385,42 +381,50 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                                         except Exception:
                                             pass
                                             
-                                        for cell in row.cells:
-                                            if hasattr(cell, 'paragraphs'):
-                                                for para in cell.paragraphs:
-                                                    lines = para.text.split('\n')
-                                                    needs_update = False
-                                                    new_lines = []
+                                        for c_idx, cell in enumerate(row.cells):
+                                            # Remove noWrap
+                                            try:
+                                                tcPr = cell._tc.get_or_add_tcPr()
+                                                for noWrap in tcPr.findall(qn('w:noWrap')):
+                                                    tcPr.remove(noWrap)
+                                            except Exception:
+                                                pass
+
+                                            key = f"{prefix}t{t_idx}_r{r_idx}_c{c_idx}"
+                                            original_text = cell_texts.get(key)
+                                            translated_text = translation_cache.get(original_text) if original_text else None
+
+                                            if translated_text and hasattr(cell, 'paragraphs'):
+                                                paras = list(cell.paragraphs)
+                                                if paras:
+                                                    first_para = paras[0]
+                                                    if first_para.runs:
+                                                        first_para.runs[0].text = translated_text
+                                                        for j in range(1, len(first_para.runs)):
+                                                            first_para.runs[j].text = ""
+                                                    else:
+                                                        first_para.add_run(translated_text)
                                                     
-                                                    # Apply translation line-by-line; fallback to original if missing
-                                                    for line in lines:
-                                                        cleaned = line.strip()
-                                                        if cleaned in translation_cache:
-                                                            new_lines.append(translation_cache[cleaned])
-                                                            needs_update = True
-                                                        else:
-                                                            new_lines.append(line)
+                                                    # Clear all other paragraphs in the cell
+                                                    for p_idx in range(1, len(paras)):
+                                                        for run in paras[p_idx].runs:
+                                                            run.text = ""
                                                     
-                                                    if needs_update:
-                                                        new_text = '\n'.join(new_lines)
-                                                        if para.runs:
-                                                            para.runs[0].text = new_text
-                                                            for j in range(1, len(para.runs)): 
-                                                                para.runs[j].text = ""
-                                                        else:
-                                                            para.add_run(new_text)
-                                                        
-                                                        # Clear indentation locks set by pdf2docx to allow English text to wrap naturally
-                                                        para.paragraph_format.left_indent = None
-                                                        para.paragraph_format.right_indent = None
-                                                        
-                                                        para.paragraph_format.line_spacing = 1.2
-                                                        for run in para.runs:
-                                                            if run.text:
-                                                                run.font.name = 'Arial'
-                                                                run.font.size = Pt(11)
-                                                                run._element.rPr.rFonts.set(qn('w:eastAsia'), 'Microsoft YaHei')
-                                            apply_style(cell)
+                                                    first_para.paragraph_format.left_indent = None
+                                                    first_para.paragraph_format.right_indent = None
+                                                    first_para.paragraph_format.line_spacing = 1.2
+                                                    
+                                                    for run in first_para.runs:
+                                                        if run.text:
+                                                            run.font.name = 'Arial'
+                                                            run.font.size = Pt(11)
+                                                            try:
+                                                                run._element.rPr.rFonts.set(qn('w:eastAsia'), '微軟正黑體')
+                                                            except Exception:
+                                                                pass
+                                            # Recurse for nested tables
+                                            apply_style(cell, f"{key}_")
+                        
                         apply_style(doc)
                         doc.save(docx_path)
                         
