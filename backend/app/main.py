@@ -405,7 +405,7 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                                             pass
                                             
                                         for c_idx, cell in enumerate(row.cells):
-                                            # Remove noWrap
+                                            # Remove noWrap to allow wrapping
                                             try:
                                                 tcPr = cell._tc.get_or_add_tcPr()
                                                 for noWrap in tcPr.findall(qn('w:noWrap')):
@@ -416,6 +416,12 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                                             key = f"{prefix}t{t_idx}_r{r_idx}_c{c_idx}"
                                             original_text = cell_texts.get(key)
                                             translated_text = translation_cache.get(original_text) if original_text else None
+
+                                            # Fallback: if key lookup misses (e.g. merged cells),
+                                            # try matching the cell's current joined text directly
+                                            if not translated_text and hasattr(cell, 'paragraphs'):
+                                                live_text = "".join(p.text.strip() for p in cell.paragraphs if p.text.strip())
+                                                translated_text = translation_cache.get(live_text)
 
                                             if translated_text and hasattr(cell, 'paragraphs'):
                                                 paras = list(cell.paragraphs)
@@ -445,8 +451,12 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                                                                 run._element.rPr.rFonts.set(qn('w:eastAsia'), '微軟正黑體')
                                                             except Exception:
                                                                 pass
+                                                    # NOTE: We intentionally do NOT touch w:textDirection.
+                                                    # Cells with vertical text (e.g. 操作→Operation) will
+                                                    # keep their original direction so column width is preserved.
                                             # Recurse for nested tables
                                             apply_style(cell, f"{key}_")
+
                         
                         apply_style(doc)
                         doc.save(docx_path)
