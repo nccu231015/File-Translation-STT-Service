@@ -391,9 +391,50 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                     await asyncio.gather(*tasks)
                     
                     def _apply_docx_tables():
+                        # === DIAGNOSTIC: dump DOCX table structure before any changes ===
+                        print("[DOCX-DIAG] ==== Table Structure Diagnosis ====", flush=True)
+                        for t_idx, table in enumerate(doc.tables):
+                            tbl = table._tbl
+                            tblPr = tbl.find(qn('w:tblPr'))
+                            tblLayout_val = "NOT SET"
+                            tblW_info = "NOT SET"
+                            if tblPr is not None:
+                                tblLayout_el = tblPr.find(qn('w:tblLayout'))
+                                if tblLayout_el is not None:
+                                    tblLayout_val = tblLayout_el.get(qn('w:type'))
+                                tblW_el = tblPr.find(qn('w:tblW'))
+                                if tblW_el is not None:
+                                    tblW_info = f"{tblW_el.get(qn('w:w'))} ({tblW_el.get(qn('w:type'))})"
+                            # tblGrid
+                            try:
+                                grid_cols = tbl.tblGrid.findall(qn('w:gridCol'))
+                                grid_widths = [gc.get(qn('w:w')) for gc in grid_cols]
+                            except Exception:
+                                grid_widths = []
+                            print(f"[DOCX-DIAG] Table {t_idx}: tblLayout={tblLayout_val} tblW={tblW_info} grid={grid_widths}", flush=True)
+                            # First 2 rows
+                            for r_idx, row in enumerate(table.rows[:2]):
+                                for c_idx, cell in enumerate(row.cells[:4]):
+                                    tc = cell._tc
+                                    tcPr = tc.find(qn('w:tcPr'))
+                                    tcW_info = noWrap_info = textDir_info = gridSpan_info = "N/A"
+                                    if tcPr is not None:
+                                        tcW_el = tcPr.find(qn('w:tcW'))
+                                        tcW_info = f"{tcW_el.get(qn('w:w'))}({tcW_el.get(qn('w:type'))})" if tcW_el is not None else "None"
+                                        noWrap_info = "YES" if tcPr.find(qn('w:noWrap')) is not None else "no"
+                                        td_el = tcPr.find(qn('w:textDirection'))
+                                        textDir_info = td_el.get(qn('w:val')) if td_el is not None else "None"
+                                        gs_el = tcPr.find(qn('w:gridSpan'))
+                                        gridSpan_info = gs_el.get(qn('w:val')) if gs_el is not None else "1"
+                                    text_preview = "".join(p.text.strip() for p in cell.paragraphs if p.text.strip())[:20]
+                                    print(f"[DOCX-DIAG]   r{r_idx}c{c_idx}: tcW={tcW_info} noWrap={noWrap_info} textDir={textDir_info} span={gridSpan_info} | '{text_preview}'", flush=True)
+                        print("[DOCX-DIAG] ====================================", flush=True)
+                        # === END DIAGNOSTIC ===
+
                         def apply_style(container, prefix=""):
                             if hasattr(container, 'tables'):
                                 for t_idx, table in enumerate(container.tables):
+
                                     # Lock table layout to fixed so LibreOffice
                                     # won't auto-redistribute column widths
                                     try:
