@@ -374,27 +374,20 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                                     # Only unlock fixed row heights so rows can grow downward.
                                     # Do NOT change tblLayout to autofit — that causes columns to overflow page margins.
                                     for row in table.rows:
+                                        # Change row height rule from 'exact' (clips content) to 'atLeast'
+                                        # so rows can expand downward to fit longer translated text.
+                                        # Do NOT delete w:trHeight entirely — that confuses LibreOffice layout.
                                         try:
-                                            row.height_rule = None
-                                            row.height = None
                                             trPr = row._tr.trPr
                                             if trPr is not None:
-                                                for el in trPr.findall(qn('w:trHeight')):
-                                                    trPr.remove(el)
+                                                for trHeight in trPr.findall(qn('w:trHeight')):
+                                                    trHeight.set(qn('w:hRule'), 'atLeast')
                                         except Exception:
                                             pass
                                             
                                         for cell in row.cells:
                                             if hasattr(cell, 'paragraphs'):
                                                 for para in cell.paragraphs:
-                                                    # Remove absolute frame bounding boxes often set by pdf2docx
-                                                    try:
-                                                        pPr = para._element.pPr
-                                                        if pPr is not None:
-                                                            for el in pPr.findall(qn('w:framePr')):
-                                                                pPr.remove(el)
-                                                    except Exception:
-                                                        pass
                                                     lines = para.text.split('\n')
                                                     needs_update = False
                                                     new_lines = []
