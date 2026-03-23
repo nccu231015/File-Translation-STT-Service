@@ -28,6 +28,10 @@ import asyncio
 from fastapi.concurrency import run_in_threadpool
 from pdf2docx import Converter
 from app.services.factory.sql_tools import FactorySqlTools
+import docx
+from docx.shared import Pt
+from docx.oxml.ns import qn
+import asyncio
 
 app = FastAPI()
 factory_agent = FactoryAgentService(llm_service)
@@ -304,7 +308,7 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
         with open(output_pdf_path, 'rb') as f:
             pdf_b64 = base64.b64encode(f.read()).decode('utf-8')
             
-        # Docx generation
+        # Docx generation and Table translation
         docx_b64 = None
         if not debug_mode:
             try:
@@ -316,11 +320,104 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                     cv.close()
                     
                 await run_in_threadpool(_convert)
+
+                # ---- 第二輪翻譯: 處理 Word (DOCX) 中的表格 ----
+                def _process_docx_tables():
+                    doc = docx.Document(docx_path)
+                    to_translate = set()
+                    
+                    def collect_text(container):
+                        if hasattr(container, 'tables'):
+                            for table in container.tables:
+                                for row in table.rows:
+                                    for cell in row.cells:
+                                        if hasattr(cell, 'paragraphs'):
+                                            for para in cell.paragraphs:
+                                                cleaned = para.text.strip()
+                                                if cleaned and len(cleaned) > 1 and not cleaned.isdigit():
+                                                    to_translate.add(cleaned)
+                                        collect_text(cell)
+                    
+                    collect_text(doc)
+                    return doc, list(to_translate)
+                
+                doc, content_list = await run_in_threadpool(_process_docx_tables)
+                
+                translation_cache = {}
+                if content_list:
+                    print(f"[PDF-DOCX] Batch translating {len(content_list)} table cell strings...", flush=True)
+                    batch_size = 50
+                    
+                    async def process_batch(batch):
+                        translated = await llm_service._translate_batch_ollama(batch, target_lang=target_lang)
+                        for orig, trans in zip(batch, translated):
+                            if trans and "<SKIP>" not in trans:
+                                translation_cache[orig] = trans
+
+                    tasks = []
+                    for i in range(0, len(content_list), batch_size):
+                        tasks.append(process_batch(content_list[i : i + batch_size]))
+                    
+                    await asyncio.gather(*tasks)
+                    
+                    def _apply_docx_tables():
+                        def apply_style(container):
+                            if hasattr(container, 'tables'):
+                                for table in container.tables:
+                                    for row in table.rows:
+                                        for cell in row.cells:
+                                            if hasattr(cell, 'paragraphs'):
+                                                for para in cell.paragraphs:
+                                                    cleaned = para.text.strip()
+                                                    if cleaned in translation_cache:
+                                                        if para.runs:
+                                                            para.runs[0].text = translation_cache[cleaned]
+                                                            for j in range(1, len(para.runs)): 
+                                                                para.runs[j].text = ""
+                                                        else:
+                                                            para.add_run(translation_cache[cleaned])
+                                                        
+                                                        para.paragraph_format.line_spacing = 1.2
+                                                        for run in para.runs:
+                                                            if run.text:
+                                                                run.font.name = 'Arial'
+                                                                run.font.size = Pt(11)
+                                                                run._element.rPr.rFonts.set(qn('w:eastAsia'), '微軟正黑體')
+                                            apply_style(cell)
+                        apply_style(doc)
+                        doc.save(docx_path)
+                        
+                    await run_in_threadpool(_apply_docx_tables)
+                    print(f"[PDF-DOCX] Applied {len(translation_cache)} translations to DOCX tables.", flush=True)
+
                 with open(docx_path, 'rb') as f:
                     docx_b64 = base64.b64encode(f.read()).decode('utf-8')
+
+                # ---- 第三輪: DOCX 轉為最終 PDF ----
+                def _docx_to_pdf():
+                    import subprocess
+                    import platform
+                    try:
+                        if platform.system() == "Windows":
+                            from docx2pdf import convert
+                            convert(docx_path, output_pdf_path)
+                        else:
+                            subprocess.run(['libreoffice', '--headless', '--convert-to', 'pdf', '--outdir', os.path.dirname(output_pdf_path), docx_path], check=True)
+                    except Exception as e:
+                        print(f"[PDF-DOCX] Docx to PDF failed: {e}", flush=True)
+
+                await run_in_threadpool(_docx_to_pdf)
+                
+                # Reload the completely translated PDF
+                if os.path.exists(output_pdf_path):
+                    with open(output_pdf_path, 'rb') as f:
+                        pdf_b64 = base64.b64encode(f.read()).decode('utf-8')
+
                 background_tasks.add_task(os.remove, docx_path)
             except Exception as docx_err:
-                print(f"[PDF] Docx conversion failed: {docx_err}")
+                print(f"[PDF] Docx translation/conversion failed: {docx_err}")
+                import traceback
+                traceback.print_exc()
                 if os.path.exists(docx_path): os.remove(docx_path)
                 
         background_tasks.add_task(os.remove, temp_input_path)
