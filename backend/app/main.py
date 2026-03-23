@@ -405,7 +405,21 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                                             pass
                                             
                                         for c_idx, cell in enumerate(row.cells):
-                                            # Remove noWrap to allow wrapping
+                                            key = f"{prefix}t{t_idx}_r{r_idx}_c{c_idx}"
+
+                                            # --- Snapshot original cell width BEFORE changes ---
+                                            original_tcW_w = None
+                                            original_tcW_type = None
+                                            try:
+                                                tcPr = cell._tc.get_or_add_tcPr()
+                                                tcW = tcPr.find(qn('w:tcW'))
+                                                if tcW is not None:
+                                                    original_tcW_w = tcW.get(qn('w:w'))
+                                                    original_tcW_type = tcW.get(qn('w:type'))
+                                            except Exception:
+                                                pass
+
+                                            # Remove noWrap to allow text wrapping
                                             try:
                                                 tcPr = cell._tc.get_or_add_tcPr()
                                                 for noWrap in tcPr.findall(qn('w:noWrap')):
@@ -413,12 +427,10 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                                             except Exception:
                                                 pass
 
-                                            key = f"{prefix}t{t_idx}_r{r_idx}_c{c_idx}"
                                             original_text = cell_texts.get(key)
                                             translated_text = translation_cache.get(original_text) if original_text else None
 
-                                            # Fallback: if key lookup misses (e.g. merged cells),
-                                            # try matching the cell's current joined text directly
+                                            # Fallback: match live cell text directly
                                             if not translated_text and hasattr(cell, 'paragraphs'):
                                                 live_text = "".join(p.text.strip() for p in cell.paragraphs if p.text.strip())
                                                 translated_text = translation_cache.get(live_text)
@@ -434,7 +446,6 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                                                     else:
                                                         first_para.add_run(translated_text)
                                                     
-                                                    # Clear all other paragraphs in the cell
                                                     for p_idx in range(1, len(paras)):
                                                         for run in paras[p_idx].runs:
                                                             run.text = ""
@@ -451,12 +462,26 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                                                                 run._element.rPr.rFonts.set(qn('w:eastAsia'), '微軟正黑體')
                                                             except Exception:
                                                                 pass
-                                                    # NOTE: We intentionally do NOT touch w:textDirection.
-                                                    # Cells with vertical text (e.g. 操作→Operation) will
-                                                    # keep their original direction so column width is preserved.
+
+                                            # --- Restore original cell width AFTER changes ---
+                                            # This prevents narrow category columns (e.g. 操作→Operation)
+                                            # from expanding to fit the longer English text.
+                                            if original_tcW_w is not None:
+                                                try:
+                                                    tcPr = cell._tc.get_or_add_tcPr()
+                                                    tcW = tcPr.find(qn('w:tcW'))
+                                                    if tcW is None:
+                                                        from docx.oxml import OxmlElement
+                                                        tcW = OxmlElement('w:tcW')
+                                                        tcPr.append(tcW)
+                                                    tcW.set(qn('w:w'), original_tcW_w)
+                                                    if original_tcW_type:
+                                                        tcW.set(qn('w:type'), original_tcW_type)
+                                                except Exception:
+                                                    pass
+
                                             # Recurse for nested tables
                                             apply_style(cell, f"{key}_")
-
                         
                         apply_style(doc)
                         doc.save(docx_path)
