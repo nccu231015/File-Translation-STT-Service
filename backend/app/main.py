@@ -339,10 +339,9 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                                     for cell in row.cells:
                                         if hasattr(cell, 'paragraphs'):
                                             for para in cell.paragraphs:
-                                                # Split lines to prevent LLM from being confused by lists/multiline structures
                                                 for line in para.text.split('\n'):
                                                     cleaned = line.strip()
-                                                    if cleaned and len(cleaned) > 1 and not cleaned.isdigit():
+                                                    if cleaned and not cleaned.isdigit():
                                                         to_translate.add(cleaned)
                                         collect_text(cell)
                     
