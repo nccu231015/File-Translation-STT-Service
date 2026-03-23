@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import tempfile
 import httpx
@@ -330,23 +331,45 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                 # ---- Stage 2: Process tables in Word (DOCX) ----
                 def _process_docx_tables():
                     doc = docx.Document(docx_path)
-                    to_translate = set()
+                    to_translate = {}
                     
                     def collect_text(container):
+                        def _has_chinese(text: str) -> bool:
+                            return any('\u4e00' <= c <= '\u9fff' or '\u3400' <= c <= '\u4dbf'
+                                       or '\uf900' <= c <= '\ufaff' for c in text)
+                        
+                        _tgt = (target_lang or "").lower()
+                        _target_is_chinese = any(code in _tgt for code in ['zh', 'tw', 'cn', 'hk'])
+
                         if hasattr(container, 'tables'):
-                            for table in container.tables:
-                                for row in table.rows:
-                                    for cell in row.cells:
+                            for t_idx, table in enumerate(container.tables):
+                                for r_idx, row in enumerate(table.rows):
+                                    for c_idx, cell in enumerate(row.cells):
+                                        key = f"t{t_idx}_r{r_idx}_c{c_idx}"
+                                        
+                                        # Use full-cell collection to prevent fragmenting technical names 
+                                        # (Reference style logic from before)
                                         if hasattr(cell, 'paragraphs'):
-                                            for para in cell.paragraphs:
-                                                for line in para.text.split('\n'):
-                                                    cleaned = line.strip()
-                                                    if cleaned and not cleaned.isdigit():
-                                                        to_translate.add(cleaned)
+                                            full_text = "".join(p.text.strip() for p in cell.paragraphs if p.text.strip())
+                                            
+                                            should_translate = False
+                                            if _target_is_chinese:
+                                                # To Chinese -> pick up Latin only if it's not mostly numbers
+                                                if re.search(r'[a-zA-Z]{2,}', full_text) and not _has_chinese(full_text):
+                                                    should_translate = True
+                                            else:
+                                                # To English -> pick up only if Chinese is present
+                                                if _has_chinese(full_text):
+                                                    should_translate = True
+                                            
+                                            if should_translate:
+                                                to_translate[key] = full_text
                                         collect_text(cell)
                     
+                    to_translate = {} # Changed to dict to keep track of keys for faster replacement
                     collect_text(doc)
-                    return doc, list(to_translate)
+                    cell_texts = to_translate # To be used in Stage 4
+                    return doc, list(set(to_translate.values()))
                 
                 doc, content_list = await run_in_threadpool(_process_docx_tables)
                 
