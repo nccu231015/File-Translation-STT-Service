@@ -38,7 +38,7 @@ factory_agent = FactoryAgentService(llm_service)
 
 @app.on_event("startup")
 async def startup_event():
-    """初始化服務：確保資料庫連線與 Table 就緒"""
+    """Initialization service: ensure DB connection and tables are ready"""
     print("\n[Startup] Application is starting...", flush=True)
     
     # 1. Employee DB (MySQL)
@@ -93,7 +93,7 @@ async def login(body: LoginRequest):
         raise HTTPException(status_code=503, detail=f"LDAP service unavailable: {e}")
 
     if str(data.get("chkIdentity", "false")).lower() != "true":
-        raise HTTPException(status_code=401, detail=data.get("msg", "登入失敗"))
+        raise HTTPException(status_code=401, detail=data.get("msg", "Login failed"))
 
     sso_username = data.get("username", body.username)
     emp = await get_employee(sso_username)
@@ -109,29 +109,29 @@ async def login(body: LoginRequest):
 @app.get("/api/records/{empid}")
 async def get_records(empid: str):
     """
-    獲取員工紀錄清單。
-    如果是經理權限，則獲取下屬清單；如果是普通員工，獲取個人歷史紀錄。
+    Get employee records list.
+    Manager rank: gets subordinates list; Employee rank: gets personal history.
     """
     requester = await get_employee(empid)
     if not requester:
-        # 嘗試直接獲取該員紀錄
+        # Try to get individual records directly
         records = await get_employee_records(empid)
         return {"empid": empid, "employees": [], "records": records}
     
     rank = get_rank(requester.get("DUTYNAME", ""))
     if has_view_permission(rank):
-        # 經理視角：獲取下屬列表
+        # Manager view: get subordinates list
         dept = requester.get("DEPTNAME", "")
         subordinates = await get_subordinates(empid, dept, rank)
         return {"requester_rank": rank, "employees": subordinates}
     else:
-        # 個人視角：獲取個人紀錄
+        # Personal view: get personal records
         records = await get_employee_records(empid)
         return {"empid": empid, "records": records}
 
 @app.post("/api/employee-records")
 async def create_employee_record(body: dict):
-    # 兼容舊版與新版 Request Body
+    # Compatible with old and new Request Body versions
     record_id = await save_employee_record(
         empid=body.get("empid"),
         record_type=body.get("type", "voice"),
@@ -217,8 +217,8 @@ async def transcribe_audio(file: UploadFile = File(...), mode: str = Form("chat"
                         transcript_svc.generate,
                         file.filename,
                         translated_segments,
-                        "中文" if is_chinese else "English",
-                        "English" if is_chinese else "中文（繁體）",
+                        "Chinese" if is_chinese else "English",
+                        "English" if is_chinese else "Chinese (Traditional)",
                     )
                     transcript_download = {
                         "filename": f"transcript_{file.filename}.docx",
@@ -321,7 +321,7 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                     
                 await run_in_threadpool(_convert)
 
-                # ---- 第二輪翻譯: 處理 Word (DOCX) 中的表格 ----
+                # ---- Stage 2: Process tables in Word (DOCX) ----
                 def _process_docx_tables():
                     doc = docx.Document(docx_path)
                     to_translate = set()
@@ -333,7 +333,7 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                                     for cell in row.cells:
                                         if hasattr(cell, 'paragraphs'):
                                             for para in cell.paragraphs:
-                                                # 暴力切碎行，防止 LLM 被長文裡的結構干擾而漏翻
+                                                # Split lines to prevent LLM from being confused by lists/multiline structures
                                                 for line in para.text.split('\n'):
                                                     cleaned = line.strip()
                                                     if cleaned and len(cleaned) > 1 and not cleaned.isdigit():
@@ -366,6 +366,17 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                         def apply_style(container):
                             if hasattr(container, 'tables'):
                                 for table in container.tables:
+                                    # Unlock fixed column width locks set by pdf2docx to avoid text clipping
+                                    try:
+                                        from docx.oxml.ns import qn as _qn
+                                        tbl = table._tbl
+                                        tblPr = tbl.find(_qn('w:tblPr'))
+                                        if tblPr is not None:
+                                            tblLayout = tblPr.find(_qn('w:tblLayout'))
+                                            if tblLayout is not None:
+                                                tblLayout.set(_qn('w:type'), 'autofit')
+                                    except Exception:
+                                        pass
                                     for row in table.rows:
                                         for cell in row.cells:
                                             if hasattr(cell, 'paragraphs'):
@@ -374,7 +385,7 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                                                     needs_update = False
                                                     new_lines = []
                                                     
-                                                    # 逐行套用翻譯結果，如果沒被翻譯到就維持原文
+                                                    # Apply translation line-by-line; fallback to original if missing
                                                     for line in lines:
                                                         cleaned = line.strip()
                                                         if cleaned in translation_cache:
@@ -392,7 +403,7 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                                                         else:
                                                             para.add_run(new_text)
                                                         
-                                                        # 解除 pdf2docx 為了鎖住中文字寬度而下的右縮排封印，讓英文能自然伸展
+                                                        # Clear indentation locks set by pdf2docx to allow English text to wrap naturally
                                                         para.paragraph_format.left_indent = None
                                                         para.paragraph_format.right_indent = None
                                                         
@@ -401,7 +412,7 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                                                             if run.text:
                                                                 run.font.name = 'Arial'
                                                                 run.font.size = Pt(11)
-                                                                run._element.rPr.rFonts.set(qn('w:eastAsia'), '微軟正黑體')
+                                                                run._element.rPr.rFonts.set(qn('w:eastAsia'), 'Microsoft YaHei')
                                             apply_style(cell)
                         apply_style(doc)
                         doc.save(docx_path)
@@ -456,7 +467,7 @@ async def chat_text(payload: dict):
 
 @app.post("/factory-chat")
 async def factory_chat(payload: dict, background_tasks: BackgroundTasks):
-    """工廠數據聊天接口：整合 Session 歷史與 SQL 查詢"""
+    """Factory data chat interface: integrate session history with SQL querying"""
     try:
         user_text = payload.get("text")
         session_id = payload.get("session_id")
@@ -467,7 +478,7 @@ async def factory_chat(payload: dict, background_tasks: BackgroundTasks):
             session = await factory_store.get_session(session_id)
             if session: history = session.get("messages", [])
         
-        # 確保有 Session ID（簡化邏輯，避免 Redis 二次查詢引發異常）
+        # Ensure session id exists (simplified logic for stability)
         if not session_id:
             try:
                 session = await factory_store.create_session(user_text)
@@ -479,7 +490,7 @@ async def factory_chat(payload: dict, background_tasks: BackgroundTasks):
         print(f"\n[Factory Chat] Processing request (session={session_id})", flush=True)
         response = await factory_agent.chat(user_text, history=history)
         
-        # 安全地添加背景存檔任務
+        # Safely add background archive task
         try:
             background_tasks.add_task(factory_store.append_messages, session_id, user_text, str(response))
         except Exception as bg_e:
@@ -487,7 +498,7 @@ async def factory_chat(payload: dict, background_tasks: BackgroundTasks):
 
         print(f"[Factory Chat] Success: {len(str(response))} chars", flush=True)
         
-        # FastAPI 本身具備優異的 JSON 序列化能力，直接回傳字典即可
+        # FastAPI handles JSON serialization automatically
         return {
             "response": str(response),
             "session_id": str(session_id)

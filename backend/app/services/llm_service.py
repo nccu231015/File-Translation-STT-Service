@@ -30,7 +30,8 @@ class LLMService:
 
         self.client = ollama.Client(
             host=self.ollama_host,
-            timeout=300.0  # 配合使用者要求，給予大模型極長的思考時間 (5分鐘) 去整理超長表格
+            # Increasing timeout as per user requirements to allow large models ample time (5 min) for complex table processing
+            timeout=300.0  
         )
         self.async_client = ollama.AsyncClient(
             host=self.ollama_host,
@@ -83,9 +84,10 @@ class LLMService:
         if session_id not in self.chat_history:
             self.chat_history[session_id] = []
 
+        # System message context
         context_message = {
             "role": "system",
-            "content": f"[系統訊息] 使用者已上傳文件 '{filename}'。以下是該文件的摘要內容，請根據此內容回答後續問題:\n\n{summary}",
+            "content": f"[SYSTEM] User uploaded document '{filename}'. Below is the summary. Please answer follow-up questions based on this:\n\n{summary}",
         }
 
         try:
@@ -98,15 +100,16 @@ class LLMService:
         """
         Sends a prompt to the Ollama model with in-memory chat history.
         """
-        base_system_prompt = """你是一個專業的文件 AI 助手。
+        # Default system prompt for Chinese interaction (preserving cultural requirements)
+        base_system_prompt = """You are a professional document AI assistant.
  
- 重要規則：
- 1. 你必須使用「繁體中文」（Traditional Chinese，正體中文）回答。
- 2. 絕對不可以使用「简体中文」（Simplified Chinese）。
- 3. 使用台灣用語和詞彙，例如：「軟體」而非「软件」，「網路」而非「网络」。
- 4. 字形必須是繁體：「體」而非「体」，「國」而非「国」。
+ RULES:
+ 1. You MUST use 'Traditional Chinese' (繁體中文).
+ 2. ABSOLUTELY NO 'Simplified Chinese'.
+ 3. Use Taiwan-standard terminology and phrases (e.g., '軟體' vs '软件').
+ 4. Use Traditional character forms ('體' vs '体').
  
- 請用繁體中文回答使用者的問題。"""
+ Please answer all user questions in Traditional Chinese."""
         
         actual_system_prompt = system_prompt if system_prompt else base_system_prompt
 
@@ -122,7 +125,7 @@ class LLMService:
         messages.append(user_message)
 
         try:
-            # 3. Call Ollama via Client (Run-in-threadpool to keep it async-friendly)
+            # 3. Call Ollama (Using run-in-threadpool for async-friendliness with non-async client)
             from fastapi.concurrency import run_in_threadpool
             print(f"[LLM] Chat request (model: {self.model})...")
             
@@ -144,7 +147,7 @@ class LLMService:
             return assistant_content
         except Exception as e:
             print(f"[LLM Error] {e}")
-            return "抱歉，我現在無法連接到語言模型。"
+            return "Sorry, I am currently unable to connect to the language model."
 
     async def chat_json(self, messages: list, system_prompt: str = None) -> dict:
         """
