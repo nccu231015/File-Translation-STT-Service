@@ -32,6 +32,12 @@ import docx
 from docx.shared import Pt
 from docx.oxml.ns import qn
 import asyncio
+import subprocess
+import platform
+try:
+    from docx2pdf import convert as docx2pdf_convert
+except ImportError:
+    docx2pdf_convert = None
 
 app = FastAPI()
 factory_agent = FactoryAgentService(llm_service)
@@ -368,16 +374,24 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                                 for table in container.tables:
                                     # Unlock fixed column width locks set by pdf2docx to avoid text clipping
                                     try:
-                                        from docx.oxml.ns import qn as _qn
                                         tbl = table._tbl
-                                        tblPr = tbl.find(_qn('w:tblPr'))
+                                        tblPr = tbl.find(qn('w:tblPr'))
                                         if tblPr is not None:
-                                            tblLayout = tblPr.find(_qn('w:tblLayout'))
+                                            tblLayout = tblPr.find(qn('w:tblLayout'))
                                             if tblLayout is not None:
-                                                tblLayout.set(_qn('w:type'), 'autofit')
+                                                tblLayout.set(qn('w:type'), 'autofit')
                                     except Exception:
                                         pass
                                     for row in table.rows:
+                                        # Unlock fixed row heights set by pdf2docx so cells can expand vertically
+                                        try:
+                                            trPr = row._tr.trPr
+                                            if trPr is not None:
+                                                for el in trPr.findall(qn('w:trHeight')):
+                                                    trPr.remove(el)
+                                        except Exception:
+                                            pass
+                                            
                                         for cell in row.cells:
                                             if hasattr(cell, 'paragraphs'):
                                                 for para in cell.paragraphs:
@@ -423,14 +437,14 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                 with open(docx_path, 'rb') as f:
                     docx_b64 = base64.b64encode(f.read()).decode('utf-8')
 
-                # ---- 第三輪: DOCX 轉為最終 PDF ----
+                # ---- Stage 3: Convert DOCX to Final PDF ----
                 def _docx_to_pdf():
-                    import subprocess
-                    import platform
                     try:
                         if platform.system() == "Windows":
-                            from docx2pdf import convert
-                            convert(docx_path, output_pdf_path)
+                            if docx2pdf_convert:
+                                docx2pdf_convert(docx_path, output_pdf_path)
+                            else:
+                                print("[PDF-DOCX] docx2pdf library not found on Windows.", flush=True)
                         else:
                             subprocess.run(['libreoffice', '--headless', '--convert-to', 'pdf', '--outdir', os.path.dirname(output_pdf_path), docx_path], check=True)
                     except Exception as e:
