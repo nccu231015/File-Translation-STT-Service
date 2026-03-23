@@ -368,10 +368,10 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                     
                     to_translate = {} # Changed to dict to keep track of keys for faster replacement
                     collect_text(doc)
-                    cell_texts = to_translate # To be used in Stage 4
-                    return doc, list(set(to_translate.values()))
+                    cell_texts = to_translate  # key -> full_text mapping
+                    return doc, list(set(to_translate.values())), cell_texts
                 
-                doc, content_list = await run_in_threadpool(_process_docx_tables)
+                doc, content_list, cell_texts = await run_in_threadpool(_process_docx_tables)
                 
                 translation_cache = {}
                 if content_list:
