@@ -394,6 +394,21 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                         def apply_style(container, prefix=""):
                             if hasattr(container, 'tables'):
                                 for t_idx, table in enumerate(container.tables):
+                                    # Lock table layout to fixed so LibreOffice
+                                    # won't auto-redistribute column widths
+                                    try:
+                                        from docx.oxml import OxmlElement
+                                        tblPr = table._tbl.tblPr
+                                        if tblPr is not None:
+                                            # Set tblLayout to fixed
+                                            tblLayout = tblPr.find(qn('w:tblLayout'))
+                                            if tblLayout is None:
+                                                tblLayout = OxmlElement('w:tblLayout')
+                                                tblPr.append(tblLayout)
+                                            tblLayout.set(qn('w:type'), 'fixed')
+                                    except Exception:
+                                        pass
+
                                     for r_idx, row in enumerate(table.rows):
                                         # Allow rows to expand downward
                                         try:
