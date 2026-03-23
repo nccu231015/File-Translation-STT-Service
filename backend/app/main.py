@@ -436,14 +436,14 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                                 for t_idx, table in enumerate(container.tables):
 
                                     # === FIX: tblW=auto overrides tblLayout=fixed in LibreOffice ===
-                                    # Compute actual table width from first-row tcW values,
-                                    # then set tblW to that explicit dxa value.
+                                    # Only change tblW from auto → dxa. Do NOT touch tblGrid
+                                    # (changing tblGrid breaks span=2 merged cells).
                                     try:
                                         from docx.oxml import OxmlElement
                                         tblPr = table._tbl.find(qn('w:tblPr'))
                                         if tblPr is not None:
-                                            # 1. Get actual column widths from first row tcW
-                                            actual_col_widths = []
+                                            # Compute actual table width from first-row unique cells
+                                            total_w = 0
                                             seen_cell_ids = set()
                                             if table.rows:
                                                 for cell in table.rows[0].cells:
@@ -452,18 +452,15 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                                                         continue
                                                     seen_cell_ids.add(cid)
                                                     tc_pr = cell._tc.find(qn('w:tcPr'))
-                                                    w = None
                                                     if tc_pr is not None:
                                                         tcW_el = tc_pr.find(qn('w:tcW'))
                                                         if tcW_el is not None:
                                                             try:
-                                                                w = int(tcW_el.get(qn('w:w')) or 0)
+                                                                total_w += int(tcW_el.get(qn('w:w')) or 0)
                                                             except Exception:
                                                                 pass
-                                                    actual_col_widths.append(w or 0)
-                                            total_w = sum(actual_col_widths)
 
-                                            # 2. Set tblW to explicit dxa total
+                                            # Set tblW to explicit dxa (prevents LibreOffice auto-expand)
                                             if total_w > 0:
                                                 tblW_el = tblPr.find(qn('w:tblW'))
                                                 if tblW_el is None:
@@ -472,16 +469,7 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                                                 tblW_el.set(qn('w:w'), str(total_w))
                                                 tblW_el.set(qn('w:type'), 'dxa')
 
-                                            # 3. Sync tblGrid to match actual tcW widths
-                                            if actual_col_widths:
-                                                tblGrid = table._tbl.tblGrid
-                                                if tblGrid is not None:
-                                                    grid_cols = tblGrid.findall(qn('w:gridCol'))
-                                                    for i, gc in enumerate(grid_cols):
-                                                        if i < len(actual_col_widths) and actual_col_widths[i]:
-                                                            gc.set(qn('w:w'), str(actual_col_widths[i]))
-
-                                            # 4. Set tblLayout to fixed
+                                            # Set tblLayout to fixed
                                             tblLayout = tblPr.find(qn('w:tblLayout'))
                                             if tblLayout is None:
                                                 tblLayout = OxmlElement('w:tblLayout')
@@ -489,6 +477,7 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                                             tblLayout.set(qn('w:type'), 'fixed')
                                     except Exception as e:
                                         print(f"[DOCX-WARN] tblLayout fix error: {e}", flush=True)
+
 
 
                                     for r_idx, row in enumerate(table.rows):
