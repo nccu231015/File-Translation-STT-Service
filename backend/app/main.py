@@ -349,7 +349,7 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                     batch_size = 50
                     
                     async def process_batch(batch):
-                        translated = await llm_service._translate_batch_ollama(batch, target_lang=target_lang)
+                        translated = await pdf_service._translate_batch_ollama(batch, target_lang=target_lang)
                         for orig, trans in zip(batch, translated):
                             if trans and "<SKIP>" not in trans:
                                 translation_cache[orig] = trans
