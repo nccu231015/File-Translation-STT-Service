@@ -333,9 +333,11 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                                     for cell in row.cells:
                                         if hasattr(cell, 'paragraphs'):
                                             for para in cell.paragraphs:
-                                                cleaned = para.text.strip()
-                                                if cleaned and len(cleaned) > 1 and not cleaned.isdigit():
-                                                    to_translate.add(cleaned)
+                                                # 暴力切碎行，防止 LLM 被長文裡的結構干擾而漏翻
+                                                for line in para.text.split('\n'):
+                                                    cleaned = line.strip()
+                                                    if cleaned and len(cleaned) > 1 and not cleaned.isdigit():
+                                                        to_translate.add(cleaned)
                                         collect_text(cell)
                     
                     collect_text(doc)
@@ -368,14 +370,31 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                                         for cell in row.cells:
                                             if hasattr(cell, 'paragraphs'):
                                                 for para in cell.paragraphs:
-                                                    cleaned = para.text.strip()
-                                                    if cleaned in translation_cache:
+                                                    lines = para.text.split('\n')
+                                                    needs_update = False
+                                                    new_lines = []
+                                                    
+                                                    # 逐行套用翻譯結果，如果沒被翻譯到就維持原文
+                                                    for line in lines:
+                                                        cleaned = line.strip()
+                                                        if cleaned in translation_cache:
+                                                            new_lines.append(translation_cache[cleaned])
+                                                            needs_update = True
+                                                        else:
+                                                            new_lines.append(line)
+                                                    
+                                                    if needs_update:
+                                                        new_text = '\n'.join(new_lines)
                                                         if para.runs:
-                                                            para.runs[0].text = translation_cache[cleaned]
+                                                            para.runs[0].text = new_text
                                                             for j in range(1, len(para.runs)): 
                                                                 para.runs[j].text = ""
                                                         else:
-                                                            para.add_run(translation_cache[cleaned])
+                                                            para.add_run(new_text)
+                                                        
+                                                        # 解除 pdf2docx 為了鎖住中文字寬度而下的右縮排封印，讓英文能自然伸展
+                                                        para.paragraph_format.left_indent = None
+                                                        para.paragraph_format.right_indent = None
                                                         
                                                         para.paragraph_format.line_spacing = 1.2
                                                         for run in para.runs:
