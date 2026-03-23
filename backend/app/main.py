@@ -375,6 +375,8 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                                     # Do NOT change tblLayout to autofit — that causes columns to overflow page margins.
                                     for row in table.rows:
                                         try:
+                                            row.height_rule = None
+                                            row.height = None
                                             trPr = row._tr.trPr
                                             if trPr is not None:
                                                 for el in trPr.findall(qn('w:trHeight')):
@@ -385,6 +387,14 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                                         for cell in row.cells:
                                             if hasattr(cell, 'paragraphs'):
                                                 for para in cell.paragraphs:
+                                                    # Remove absolute frame bounding boxes often set by pdf2docx
+                                                    try:
+                                                        pPr = para._element.pPr
+                                                        if pPr is not None:
+                                                            for el in pPr.findall(qn('w:framePr')):
+                                                                pPr.remove(el)
+                                                    except Exception:
+                                                        pass
                                                     lines = para.text.split('\n')
                                                     needs_update = False
                                                     new_lines = []
