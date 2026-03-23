@@ -372,18 +372,9 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                         def apply_style(container):
                             if hasattr(container, 'tables'):
                                 for table in container.tables:
-                                    # Unlock fixed column width locks set by pdf2docx to avoid text clipping
-                                    try:
-                                        tbl = table._tbl
-                                        tblPr = tbl.find(qn('w:tblPr'))
-                                        if tblPr is not None:
-                                            tblLayout = tblPr.find(qn('w:tblLayout'))
-                                            if tblLayout is not None:
-                                                tblLayout.set(qn('w:type'), 'autofit')
-                                    except Exception:
-                                        pass
+                                    # Only unlock fixed row heights so rows can grow downward.
+                                    # Do NOT change tblLayout to autofit — that causes columns to overflow page margins.
                                     for row in table.rows:
-                                        # Unlock fixed row heights set by pdf2docx so cells can expand vertically
                                         try:
                                             trPr = row._tr.trPr
                                             if trPr is not None:
