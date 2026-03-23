@@ -133,17 +133,17 @@ class PDFLayoutPreservingService:
                 input_path, page_num, page.rect.width, page.rect.height
             )
 
-            PROTECTED_TYPES = {"figure", "table", "equation", "formula"}
+            PROTECTED_TYPES = {"figure", "equation", "formula"}
             protected_rects_pdf = []
             for b in layout_blocks:
                 # Only protect if confidence is high enough (e.g. > 0.45).
                 # This prevents low-confidence misclassifications (like a single line of text 
-                # being mistaken for a 'table') from blocking translation.
+                # being mistaken for a 'figure') from blocking translation.
                 if b.type.lower() in PROTECTED_TYPES and b.confidence > 0.45:
                     pdf_rect = self.layout_detector.pixel_to_pdf_rect(
                         b.bbox, page, b.page_width, b.page_height
                     )
-                    # Vertical buffer (8px) is enough to catch leaked table headers
+                    # Vertical buffer (8px) is used to catch leaked figure captions
                     # while avoiding nearby legitimate headings.
                     protected_rects_pdf.append(
                         fitz.Rect(
@@ -173,7 +173,7 @@ class PDFLayoutPreservingService:
                 is_protected = any(
                     block_area > 0
                     and block_rect.intersects(p)
-                    # Lower threshold (0.10) means even slight overlap with a table/figure will cause a skip
+                    # Lower threshold (0.10) means even slight overlap with a figure will cause a skip
                     and block_rect.intersect(p).get_area() / block_area > 0.10
                     for p in protected_rects_pdf
                 )
@@ -305,17 +305,6 @@ class PDFLayoutPreservingService:
                         # REMOVED strict is_numeric check to allow dates/titles to pass.
                         if not block_text or len(block_text) < 1:
                             continue
-                            
-                        # IMPROVED: Technical vs. Human Language Detection
-                        # If the block has Chinese, it's a heading or description -> ALWAYS TRANSLATE.
-                        has_chinese = any("\u4e00" <= c <= "\u9fff" for c in block_text)
-                        is_technical = ("_" in block_text or (len(block_text) > 4 and block_text.isupper())) and not has_chinese
-                        
-                        if is_technical:
-                            # Only treat as missed table row if it's VERY near (8px)
-                            is_near_table = any(raw_rect.distance_to(p) < 8 for p in protected_rects_pdf)
-                            if is_near_table:
-                                continue
 
                         format_info = self._extract_format_info(page, raw_rect, block_type=block.type)
                         processed_queue.append({
