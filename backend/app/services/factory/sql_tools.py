@@ -419,10 +419,15 @@ class FactorySqlTools:
         LEFT JOIN today_data t ON l.line_no = t.line_no
         LEFT JOIN past_data p ON l.line_no = p.line_no
         WHERE ISNULL(t.today_defects, 0) > 0 OR ISNULL(p.past_total_defects, 0) > 0
-        ORDER BY [今日不良率百分比] DESC
+        ORDER BY [今日不良率百分比] DESC, [不良率差值(百分點)] DESC
         """
         result = self._execute_mssql_query(query)
-        return {"status": "success", "target_date": target_date, "lookback_days": lookback_days, "data": result}
+        
+        warning_msg = (
+            "【系統強制警告】：此資料已由高到低針對「今日不良率百分比」排序完畢！"
+            "若使用者詢問『不良率最高的產線前幾名』，絕對不可私自改用「歷史平均不良率」重新排序。請確實按照 [今日不良率百分比] 數值高低回答！"
+        )
+        return {"status": "success", "target_date": target_date, "lookback_days": lookback_days, "metadata_warning": warning_msg, "data": result}
         
     def get_downtime_trend_report(self, target_date: str = None, lookback_days: int = 7) -> Dict[str, Any]:
         """
