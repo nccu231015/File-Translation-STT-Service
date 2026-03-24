@@ -143,10 +143,10 @@ class FactorySqlTools:
             "summary": f"共 {len(rows)} 筆工單",
             "table": table
         }
-    def get_kpi_ranking(self, kpi_type: str, target_date: str = None, lookback_days: int = 1) -> Dict[str, Any]:
+    def get_kpi_ranking(self, kpi_type: str = 'top_achieving', target_date: str = None, lookback_days: int = 1, limit: int = 10) -> Dict[str, Any]:
         """
         獲取績效排行 (如: 達成率、不良率、停機)。
-        支援多日聚合查詢 (指定 lookback_days > 1)。
+        支援動態限制數量 (limit) 與多日聚合。
         """
         import datetime
         if not target_date:
@@ -158,9 +158,6 @@ class FactorySqlTools:
         else:
             time_cond = f"PRO_TIME = '{target_date}'"
 
-        # BAD_PRO_RATE: 業主定義之不良指標 (需使用 SUM 累加)
-        # ACHIEVING_RATE: 達成率 (十進位) (需使用 AVG)
-        # LOST_TIME_PRO_RATE: 損失工時總和 (需使用 SUM)
         configs = {
             "top_achieving": {"col": "ACHIEVING_RATE", "order": "DESC", "label": "達成率", "agg": "AVG"},
             "lagging": {"col": "ACHIEVING_RATE", "order": "ASC", "label": "達成率(落後)", "agg": "AVG"},
@@ -175,11 +172,10 @@ class FactorySqlTools:
         label = c["label"]
         agg_func = c["agg"]
         
-        # 異常排行榜需與指定內容一致
         if kpi_type == "abnormal":
             query = f"""
                 SELECT 
-                TOP 10
+                TOP {limit}
                 jz, sum(BAD_PRO_RATE) as blsl
                 FROM [dbo].[Daily_Status_Report] 
                 WHERE {time_cond} AND BAD_PRO_RATE > 0
@@ -188,7 +184,7 @@ class FactorySqlTools:
             """
         else:
             query = f"""
-                SELECT TOP 10 
+                SELECT TOP {limit}
                     jz as [機種],
                     [NO] as [產線],
                     [WORK_ORDER_NO] as [工單],
@@ -198,18 +194,20 @@ class FactorySqlTools:
                 GROUP BY jz, [NO], [WORK_ORDER_NO]
                 ORDER BY [KPI數值] {sql_order}
             """
+            
         result = self._execute_mssql_query(query)
-        
+
         # 建立強制性的工具回報警告，防止較小的 LLM 出現資料幻覺
         warning_msg = (
-            "【系統強制警告】：1. 以下資料僅為排行前 10 名 (TOP 10) 的極端數據，絕不可宣稱『全廠共計 10 條產線』。"
-            " 2. 若此為『達成率』排行，工廠達標標準為 1.0 (100%)。若數值皆小於 1.0，則這 10 條全為嚴重未達標，嚴禁說它們『表現良好』或『高於目標』。"
+            f"【系統強制警告】：1. 以下資料僅為排行前 {limit} 名的數據，絕不可宣稱全廠只有 {limit} 條產線。"
+            " 2. 若此為『達成率』排行，工廠達標標準為 1.0 (100%)。"
         )
         
         return {
             "status": "success", 
             "kpi_target": label, 
             "lookback_days": lookback_days, 
+            "limit": limit,
             "metadata_warning": warning_msg,
             "data": result
         }
