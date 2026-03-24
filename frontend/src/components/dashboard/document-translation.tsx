@@ -186,30 +186,52 @@ export function DocumentTranslation() {
                         </div>
                     </div>
 
-                    <div className="flex flex-col gap-4 pt-6 border-t mt-4">
-                        <div className="flex items-center justify-between">
-                            <Label htmlFor="complex-table" className="flex flex-col gap-1 cursor-pointer">
-                                <span className="text-sm font-medium text-slate-900">使用 Word 表格解析模式 (建議複雜表格文件使用)</span>
-                                <span className="text-xs text-slate-500 font-normal">
-                                    開啟後將採用 Word 二次轉譯機制，能更精準對齊雙語清單與巢狀表格，避免排版隨意偏移。
-                                </span>
-                            </Label>
+                    <div className="pt-6 border-t mt-4 space-y-3">
+                        <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-1">
+                            <Maximize2 className="size-3" />
+                            進階功能設定
+                        </div>
+
+                        {/* Complex Table Mode Option */}
+                        <div className="group flex items-center justify-between p-3 rounded-xl border border-slate-100 bg-slate-50/50 hover:bg-white hover:border-blue-200 transition-all duration-200">
+                            <div className="flex gap-3 items-start">
+                                <div className="p-2 rounded-lg bg-blue-100/50 text-blue-600 group-hover:bg-blue-600 group-hover:text-white transition-colors">
+                                    <LayoutGrid className="size-4" />
+                                </div>
+                                <Label htmlFor="complex-table" className="flex flex-col gap-1 cursor-pointer">
+                                    <span className="text-sm font-semibold text-slate-900 leading-tight">使用 Word 表格解析模式</span>
+                                    <span className="text-[11px] text-slate-500 font-normal leading-relaxed">
+                                        建議複雜/巢狀表格使用。開啟後將採用 Word 二次轉譯機制，能更精準對應儲存格內容。
+                                    </span>
+                                </Label>
+                            </div>
                             <Switch
                                 id="complex-table"
                                 checked={isComplexTable}
                                 onCheckedChange={setIsComplexTable}
+                                className="ml-4"
                             />
                         </div>
-                        <div className="flex items-center space-x-2">
+
+                        {/* Debug Mode Option */}
+                        <div className="group flex items-center justify-between p-3 rounded-xl border border-slate-100 bg-slate-50/50 hover:bg-white hover:border-orange-200 transition-all duration-200">
+                            <div className="flex gap-3 items-start">
+                                <div className="p-2 rounded-lg bg-orange-100/50 text-orange-600 group-hover:bg-orange-600 group-hover:text-white transition-colors">
+                                    <Bug className="size-4" />
+                                </div>
+                                <Label htmlFor="debug-mode" className="flex flex-col gap-1 cursor-pointer">
+                                    <span className="text-sm font-semibold text-slate-900 leading-tight">開啟排版偵測預覽模式</span>
+                                    <span className="text-[11px] text-slate-500 font-normal leading-relaxed">
+                                        僅標記 YOLO 偵測到的區塊 (Figure/Table) 供診斷使用，不會實際扣除翻譯額度。
+                                    </span>
+                                </Label>
+                            </div>
                             <Switch
                                 id="debug-mode"
                                 checked={debugMode}
                                 onCheckedChange={handleDebugToggle}
+                                className="ml-4"
                             />
-                            <Label htmlFor="debug-mode" className="flex items-center gap-2 cursor-pointer text-slate-700">
-                                <Bug className="size-4 text-orange-500" />
-                                <span>開啟排版偵測預覽模式 <span className="text-xs text-slate-500 font-normal">(標記偵測區域，不進行翻譯)</span></span>
-                            </Label>
                         </div>
                     </div>
 
