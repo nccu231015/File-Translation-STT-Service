@@ -31,6 +31,7 @@ export function QAInterface() {
     const [quickQuestions, setQuickQuestions] = useState<string[]>([]);
     const [input, setInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
+    const [scope, setScope] = useState<'產線' | '設備'>('產線');
 
     // Session state
     const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
@@ -148,14 +149,17 @@ export function QAInterface() {
     const handleSend = async (text: string = input) => {
         if (!text.trim() || isLoading) return;
 
-        const userText = text;
+        // 若 text 已經帶有括號前綴 (例如點擊範例問題時自己加的)，就不再重複加
+        const hasPrefix = text.startsWith('【產線】') || text.startsWith('【設備】');
+        const finalUserText = hasPrefix ? text : `【${scope}】${text}`;
+
         const msgId = `user-${Date.now()}`;
         setInput('');
 
         const userMsg: Message = {
             id: msgId,
             role: 'user',
-            content: userText,
+            content: finalUserText,
             timestamp: new Date(),
         };
 
@@ -168,7 +172,7 @@ export function QAInterface() {
         setIsLoading(true);
 
         try {
-            const data = await askFactory(userText, currentSessionId ?? undefined);
+            const data = await askFactory(finalUserText, currentSessionId ?? undefined);
 
             if (!currentSessionId) {
                 setCurrentSessionId(data.session_id);
@@ -373,8 +377,31 @@ export function QAInterface() {
                 </div>
 
                 {/* Input area */}
-                <div className="p-4 bg-white border-t border-slate-100">
-                    <div className="max-w-4xl mx-auto flex gap-3 items-end bg-slate-50 p-2 rounded-2xl border border-slate-200 focus-within:border-indigo-400 focus-within:ring-2 focus-within:ring-indigo-100 transition-all shadow-inner">
+                <div className="p-4 bg-white border-t border-slate-100 flex flex-col gap-3">
+                    {/* Scope Selector */}
+                    <div className="flex items-center gap-2 max-w-4xl mx-auto w-full px-2">
+                        <span className="text-xs font-semibold text-slate-500 mr-1">檢索範圍：</span>
+                        <button
+                            onClick={() => setScope('產線')}
+                            className={`px-3.5 py-1.5 text-xs rounded-full font-bold transition-all flex items-center gap-1.5 ${scope === '產線'
+                                ? 'bg-indigo-100 text-indigo-700 border border-indigo-200 shadow-sm'
+                                : 'bg-slate-100 text-slate-500 hover:bg-slate-200 border border-transparent'
+                                }`}
+                        >
+                            🏭 產線看板
+                        </button>
+                        <button
+                            onClick={() => setScope('設備')}
+                            className={`px-3.5 py-1.5 text-xs rounded-full font-bold transition-all flex items-center gap-1.5 ${scope === '設備'
+                                ? 'bg-indigo-100 text-indigo-700 border border-indigo-200 shadow-sm'
+                                : 'bg-slate-100 text-slate-500 hover:bg-slate-200 border border-transparent'
+                                }`}
+                        >
+                            ⚙️ 設備狀態
+                        </button>
+                    </div>
+
+                    <div className="max-w-4xl mx-auto w-full flex gap-3 items-end bg-slate-50 p-2 rounded-2xl border border-slate-200 focus-within:border-indigo-400 focus-within:ring-2 focus-within:ring-indigo-100 transition-all shadow-inner">
                         <Textarea
                             ref={inputRef}
                             value={input}
