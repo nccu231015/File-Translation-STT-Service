@@ -36,7 +36,7 @@ class SqlAgent:
                 "type": "function",
                 "function": {
                     "name": "get_workorder_quantity",
-                    "description": "獲取工單的『目標生產數量』(WORK_ORDER_NUM) 與 『現在實際生產數量』(ACTUAL_PRO)。",
+                    "description": "獲獲工單的『目標生產數量』(WORK_ORDER_NUM) 與 『現在實際生產數量』(ACTUAL_PRO)。",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -162,7 +162,6 @@ class SqlAgent:
                             "lookback_days": {"type": "integer", "description": "要回溯統計的天數，預設為 7。"}
                         }
                     }
-                    }
                 }
             }
         ]
@@ -209,7 +208,7 @@ class SqlAgent:
    - **日期精準度**：請務必對齊使用者詢問的「時間點」。若使用者詢問「昨日」，回覆文案必須明確說是「昨日的達成率」，嚴禁一律套用「今日/今天」的模板字眼。
 6. **嚴格禁止憑對話記憶回答產線數據 (防幻覺最高指導)**：永遠不要從先前的對話紀錄推導或記憶某條產線「有無產出」、「有無不良」。只要使用者問「XX產線今日有產出嗎」、「目前有多少產線報工」，**必須、立刻、絕對要調用 SQL 工具向資料庫拉取最新數據**。若未去資料庫調用工具，不准給出具體數量結論。
 7. **禁止暴露系統內部邏輯**：永遠不要在回覆中向使用者展現思考過程或底層數據名稱。
-8. **禁止虛構**：資料源已鎖定，絕對不要自行撰寫 SQL 語句、函數代碼或編造數據門檻。
+8. **禁止虛構**：資料源已鎖定，絕對不要自行撰寫 SQL 語句、函數代碼 or 編造數據門檻。
 9. **回答風格**：有數據時，以 Markdown 表格呈現並提供專業解說。無數據時，務必使用上述的「專業回覆規範」。
 """
         messages = [{"role": "system", "content": system_prompt}]
