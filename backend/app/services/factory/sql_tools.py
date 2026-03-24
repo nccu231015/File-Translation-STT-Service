@@ -143,37 +143,58 @@ class FactorySqlTools:
             "summary": f"共 {len(rows)} 筆工單",
             "table": table
         }
-
-    def get_kpi_ranking(self, kpi_type: str, target_date: str = None) -> Dict[str, Any]:
+    def get_kpi_ranking(self, kpi_type: str, target_date: str = None, lookback_days: int = 1) -> Dict[str, Any]:
         """
-        6. 進度達標前10台
-        7. 進度落後前10台
-        8. 異常數量?
-        9. 停機時間?
-        10. 達成率?
+        獲取績效排行 (如: 達成率、不良率、停機)。
+        支援多日聚合查詢 (指定 lookback_days > 1)。
         """
-        date_cond = f"PRO_TIME='{target_date}'" if target_date else "PRO_TIME=CONVERT(date, GETDATE())"
-        
-        if kpi_type == 'top_achieving':
-            # 進度達標前10台
-            query = f"SELECT top 10 jz, ACHIEVING_RATE FROM [dbo].[Daily_Status_Report] WHERE {date_cond} GROUP BY jz, ACHIEVING_RATE ORDER BY ACHIEVING_RATE DESC"
-        elif kpi_type == 'lagging':
-            # 進度落後前10台
-            query = f"SELECT top 10 jz, ACHIEVING_RATE FROM [dbo].[Daily_Status_Report] WHERE {date_cond} GROUP BY jz, ACHIEVING_RATE ORDER BY ACHIEVING_RATE ASC"
-        elif kpi_type == 'abnormal':
-            # 異常數量比例排行
-            query = f"SELECT top 10 jz, sum(BAD_PRO_RATE) as BLSL FROM [dbo].[Daily_Status_Report] WHERE {date_cond} AND BAD_PRO_RATE > 0 GROUP BY jz ORDER BY BLSL DESC"
-        elif kpi_type == 'downtime':
-            # 停機時間比例排行
-            query = f"SELECT top 10 jz, sum(LOST_TIME_PRO_RATE) as LOST_RATE FROM [dbo].[Daily_Status_Report] WHERE {date_cond} AND LOST_TIME_PRO_RATE > 0 GROUP BY jz ORDER BY LOST_RATE DESC"
-        elif kpi_type == 'unachieved':
-            # 達成率不足 0.5 的台數 (作為補充)
-            query = f"SELECT jz, ACHIEVING_RATE FROM [dbo].[Daily_Status_Report] WHERE {date_cond} AND ACHIEVING_RATE < 0.5 GROUP BY jz, ACHIEVING_RATE ORDER BY ACHIEVING_RATE ASC"
-        else:
-            return {"status": "error", "message": "Unknown kpi_type"}
+        import datetime
+        if not target_date:
+            target_date = datetime.date.today().isoformat()
             
+        # 時間區間判定
+        if lookback_days > 1:
+            time_cond = f"PRO_TIME >= DATEADD(day, -{lookback_days-1}, '{target_date}') AND PRO_TIME <= '{target_date}'"
+            agg_func = "AVG" # 跨日使用平均值評估
+        else:
+            time_cond = f"PRO_TIME = '{target_date}'"
+            agg_func = "SUM" # 單日使用聚合總數
+
+        # 欄位映射依據 Daily_Status_Report 表結構：
+        # REJECT_RATE: 不良率 (十進位)
+        # ACHIEVING_RATE: 達成率 (十進位)
+        # LOST_TIME_PRO_RATE: 所有時間段損失工時總和
+        configs = {
+            "top_achieving": {"col": "ACHIEVING_RATE", "order": "DESC", "label": "達成率"},
+            "lagging": {"col": "ACHIEVING_RATE", "order": "ASC", "label": "達成率(落後)"},
+            "abnormal": {"col": "REJECT_RATE", "order": "DESC", "label": "機台不良率(%)"},
+            "downtime": {"col": "LOST_TIME_PRO_RATE", "order": "DESC", "label": "損失工時(總分)"},
+            "unachieved": {"col": "ACHIEVING_RATE", "order": "ASC", "label": "達成率"},
+        }
+        
+        c = configs.get(kpi_type, configs["top_achieving"])
+        sql_col = c["col"]
+        sql_order = c["order"]
+        label = c["label"]
+        
+        query = f"""
+            SELECT TOP 10 
+                jz as [機種],
+                [NO] as [產線],
+                [WORK_ORDER_NO] as [工單],
+                {agg_func}({sql_col}) as [KPI數值]
+            FROM [dbo].[Daily_Status_Report]
+            WHERE {time_cond} AND [NO] IS NOT NULL
+            GROUP BY jz, [NO], [WORK_ORDER_NO]
+            ORDER BY [KPI數值] {sql_order}
+        """
         result = self._execute_mssql_query(query)
-        return {"status": "success", "kpi_type": kpi_type, "data": result}
+        return {
+            "status": "success", 
+            "kpi_target": label, 
+            "lookback_days": lookback_days, 
+            "data": result
+        }
 
     def get_line_defect_records(self, target_date: str = None) -> Dict[str, Any]:
         """

@@ -49,16 +49,17 @@ class SqlAgent:
                 "type": "function",
                 "function": {
                     "name": "get_kpi_ranking",
-                    "description": "獲取各類績效前10名排行。可用於：進度達標(top_achieving)、落後(lagging)、異常(abnormal)、停機時間(downtime)、達成率未標(unachieved)。",
+                    "description": "獲取各種 KPI 指標的機台/機種排行 (如: 達成率、不良率、停機時間)。支援跨日聚合。",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "kpi_type": {
-                                "type": "string", 
+                                "type": "string",
                                 "enum": ["top_achieving", "lagging", "abnormal", "downtime", "unachieved"],
-                                "description": "排行類型。"
+                                "description": "KPI 類型：top_achieving (達標前10), lagging (落後前10), abnormal (不良率高), downtime (停機長), unachieved (未達標)"
                             },
-                            "target_date": {"type": "string", "description": "例如 '2026-03-17'。"}
+                            "target_date": {"type": "string", "description": "基準日期，預設為今天。"},
+                            "lookback_days": {"type": "integer", "description": "回溯天數。若問『這周』請傳入 7，預設為 1 (單日)。"}
                         },
                         "required": ["kpi_type"]
                     }
