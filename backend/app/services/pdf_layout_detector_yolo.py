@@ -69,6 +69,9 @@ class PDFLayoutDetectorYOLO:
         
         # Load model following official pattern
         try:
+            import threading
+            self._lock = threading.Lock()
+            
             from doclayout_yolo import YOLOv10
             
             # Model path (configurable via env var)
@@ -160,25 +163,27 @@ class PDFLayoutDetectorYOLO:
         h, w = image.shape[:2]
         
         try:
-            results = self.model.predict(
-                image, 
-                imgsz=self.img_size,
-                conf=0.05,  # 內部用極低門檣擷取原始結果，再由我們手動過濾
-                iou=self.iou_thres,
-                verbose=False,
-                device='cuda'
-            )[0]
+            with self._lock:
+                results = self.model.predict(
+                    image, 
+                    imgsz=self.img_size,
+                    conf=0.05,  # 內部用極低門檣擷取原始結果，再由我們手動過濾
+                    iou=self.iou_thres,
+                    verbose=False,
+                    device='cuda'
+                )[0]
         except Exception as e:
             print(f"[DocLayout-YOLO] CUDA inference FAILED: {e}", flush=True)
             print(f"[DocLayout-YOLO] Retrying on CPU...", flush=True)
-            results = self.model.predict(
-                image,
-                imgsz=self.img_size,
-                conf=0.05,
-                iou=self.iou_thres,
-                verbose=False,
-                device='cpu'
-            )[0]
+            with self._lock:
+                results = self.model.predict(
+                    image,
+                    imgsz=self.img_size,
+                    conf=0.05,
+                    iou=self.iou_thres,
+                    verbose=False,
+                    device='cpu'
+                )[0]
         
         # Official result parsing
         # Source: Same file, lines 63-65
