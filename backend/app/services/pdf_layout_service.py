@@ -139,8 +139,7 @@ class PDFLayoutPreservingService:
                 self.layout_detector.detect_layout,
                 input_path, page_num, page.rect.width, page.rect.height
             )
-            # Only protect equations and formulas. For 'figure' (charts), we DO want to translate labels inside.
-            PROTECTED_TYPES = {"equation", "formula"}
+            PROTECTED_TYPES = {"figure", "equation", "formula"}
             if is_complex_table:
                 PROTECTED_TYPES.add("table")
                 
@@ -313,9 +312,7 @@ class PDFLayoutPreservingService:
                             continue
 
                         has_chinese = any("\u4e00" <= c <= "\u9fff" for c in block_text)
-                        
-                        # Looser technical check: only skip if it's really code/formulas (e.g. contains underscore and NO spaces)
-                        is_technical = ("_" in block_text and " " not in block_text) and not has_chinese
+                        is_technical = ("_" in block_text or (len(block_text) > 4 and block_text.isupper())) and not has_chinese
                         if is_technical:
                             is_near_table = any(raw_rect.distance_to(p) < 8 for p in protected_rects_pdf)
                             if is_near_table:
