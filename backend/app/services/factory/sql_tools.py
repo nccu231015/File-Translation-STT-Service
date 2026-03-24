@@ -324,7 +324,7 @@ class FactorySqlTools:
         res = self._execute_mssql_query(query)
         return {"status": "success", "work_order": work_order, "data": res}
 
-    def get_defect_anomaly_report(self, target_date: str = None, lookback_days: int = 30) -> Dict[str, Any]:
+    def get_defect_anomaly_report(self, target_date: str = None, lookback_days: int = 30, limit: int = 10) -> Dict[str, Any]:
         """
         跨日不良異常分析: 比對產線今日的不良數與過去 N 天的平均不良數。
         """
@@ -351,7 +351,7 @@ class FactorySqlTools:
             SELECT line_no, CAST(total_past_defects AS FLOAT) / {lookback_days} as avg_past_defects
             FROM past
         )
-        SELECT 
+        SELECT TOP {limit}
             COALESCE(t.line_no, p.line_no) as [產線],
             ISNULL(t.today_defects, 0) as [今日不良總數],
             ROUND(ISNULL(p.avg_past_defects, 0), 2) as [過去平均不良數],
@@ -364,9 +364,14 @@ class FactorySqlTools:
         ORDER BY [異常偏差百分比] DESC
         """
         result = self._execute_mssql_query(query)
-        return {"status": "success", "target_date": target_date, "lookback_days": lookback_days, "data": result}
         
-    def get_defect_rate_anomaly_report(self, target_date: str = None, lookback_days: int = 7) -> Dict[str, Any]:
+        warning_msg = (
+            f"【系統強制警告】：此資料已由高到低針對「異常偏差百分比」排序完畢，且僅顯示最極端的前 {limit} 筆產線！"
+            "若使用者詢問『最高的前幾名』，絕對不可私自改用其他欄位重新排序。請確實按照 [異常偏差百分比] 數值高低回答！"
+        )
+        return {"status": "success", "target_date": target_date, "lookback_days": lookback_days, "limit": limit, "metadata_warning": warning_msg, "data": result}
+        
+    def get_defect_rate_anomaly_report(self, target_date: str = None, lookback_days: int = 7, limit: int = 10) -> Dict[str, Any]:
         """
         不良率異常分析: 讀取 Daily_Status_Report，比對產線今日不良率百分比（不良數量/總產量）與過去 N 天的平均不良率。
         """
@@ -396,7 +401,7 @@ class FactorySqlTools:
               AND [NO] IS NOT NULL
             GROUP BY [NO]
         )
-        SELECT 
+        SELECT TOP {limit}
             l.line_no as [產線],
             ISNULL(t.today_defects, 0) as [今日不良總數],
             ISNULL(t.today_pro, 0) as [今日總產量],
@@ -422,12 +427,12 @@ class FactorySqlTools:
         result = self._execute_mssql_query(query)
         
         warning_msg = (
-            "【系統強制警告】：此資料已由高到低針對「今日不良率百分比」排序完畢！"
+            f"【系統強制警告】：此資料已由高到低針對「今日不良率百分比」排序完畢，且僅顯示最極端的前 {limit} 筆產線！"
             "若使用者詢問『不良率最高的產線前幾名』，絕對不可私自改用「歷史平均不良率」重新排序。請確實按照 [今日不良率百分比] 數值高低回答！"
         )
-        return {"status": "success", "target_date": target_date, "lookback_days": lookback_days, "metadata_warning": warning_msg, "data": result}
+        return {"status": "success", "target_date": target_date, "lookback_days": lookback_days, "limit": limit, "metadata_warning": warning_msg, "data": result}
         
-    def get_downtime_trend_report(self, target_date: str = None, lookback_days: int = 7) -> Dict[str, Any]:
+    def get_downtime_trend_report(self, target_date: str = None, lookback_days: int = 7, limit: int = 10) -> Dict[str, Any]:
         """
         跨日「停機趨勢」分析: 回溯過去 N 天，按類別、單位統計總停機時間與占比。
         產出數據：停機類別、責任單位、總停機時間(分)、歷史占比。
@@ -455,14 +460,18 @@ class FactorySqlTools:
         totals AS (
             SELECT SUM([總停機時間(分)]) as grand_total FROM range_data
         )
-        SELECT 
+        SELECT TOP {limit}
             r.*,
             CASE WHEN t.grand_total = 0 THEN 0 ELSE ROUND(CAST(r.[總停機時間(分)] AS FLOAT) / t.grand_total * 100, 2) END as [累積占比百分比]
         FROM range_data r, totals t
         ORDER BY [總停機時間(分)] DESC
         """
         result = self._execute_mssql_query(query)
-        return {"status": "success", "target_date": target_date, "lookback_days": lookback_days, "data": result}
+        
+        warning_msg = (
+            f"【系統強制警告】：此資料已由高到低針對「總停機時間」排序完畢，且僅顯示最極端的前 {limit} 筆類別！"
+        )
+        return {"status": "success", "target_date": target_date, "lookback_days": lookback_days, "limit": limit, "metadata_warning": warning_msg, "data": result}
         
     def get_active_equipment(self, target_date: str = None) -> Dict[str, Any]:
         """ PostgreSQL 查詢: 當前稼動設備。 """

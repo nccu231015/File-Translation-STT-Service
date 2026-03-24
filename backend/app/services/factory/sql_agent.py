@@ -131,7 +131,8 @@ class SqlAgent:
                         "type": "object",
                         "properties": {
                             "target_date": {"type": "string", "description": "目前的查詢日期，例如 '2026-03-24'。"},
-                            "lookback_days": {"type": "integer", "description": "要回溯計算平均的天數，預設為 30。"}
+                            "lookback_days": {"type": "integer", "description": "要回溯計算平均的天數，預設為 30。"},
+                            "limit": {"type": "integer", "description": "要輸出的排行榜筆數或產線數量，例如『前5台』傳入 5。預設為10。"}
                         }
                     }
                 }
@@ -145,7 +146,8 @@ class SqlAgent:
                         "type": "object",
                         "properties": {
                             "target_date": {"type": "string", "description": "目前的查詢日期，例如 '2026-03-24'。"},
-                            "lookback_days": {"type": "integer", "description": "要回溯計算平均的天數，預設為 7 或 30。"}
+                            "lookback_days": {"type": "integer", "description": "要回溯計算平均的天數，預設為 7 或 30。"},
+                            "limit": {"type": "integer", "description": "要輸出的排行榜筆數或產線數量，例如『前5台』傳入 5。預設為10。"}
                         }
                     }
                 }
@@ -159,7 +161,8 @@ class SqlAgent:
                         "type": "object",
                         "properties": {
                             "target_date": {"type": "string", "description": "目前的查詢日期，例如 '2026-03-24'。"},
-                            "lookback_days": {"type": "integer", "description": "要回溯統計的天數，預設為 7。"}
+                            "lookback_days": {"type": "integer", "description": "要回溯統計的天數，預設為 7。"},
+                            "limit": {"type": "integer", "description": "要輸出的筆數，例如『前3類』傳入 3。預設為10。"}
                         }
                     }
                 }
