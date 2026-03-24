@@ -318,6 +318,16 @@ class PDFLayoutPreservingService:
                             if is_near_table:
                                 continue
 
+                        # --- SKIP BLOCKS INSIDE PROTECTED AREAS ---
+                        # This is critical for tables. If a text block falls inside a YOLO-detected 'table',
+                        # we must NOT translate/render it here in Stage 1, because it will be handled
+                        # in Stage 2 (docx-based complex table translation) or it should remain untouched
+                        # (for figures). Overlapping here leads to structural corruption.
+                        is_protected = any(raw_rect.intersects(p) for p in protected_rects_pdf)
+                        if is_protected:
+                            # print(f"  [PDF Layout] Skipping protected block: '{block_text[:20]}...'")
+                            continue
+                        
                         format_info = self._extract_format_info(page, raw_rect, block_type=block.type)
                         processed_queue.append({
                             "block": block,
