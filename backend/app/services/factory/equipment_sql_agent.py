@@ -33,6 +33,20 @@ class EquipmentSqlAgent:
             {
                 "type": "function",
                 "function": {
+                    "name": "get_equipment_location",
+                    "description": "[設備檢索] 根據設備名稱關鍵字搜尋設備的安裝位置/樓層。適用於『成型機在哪裡』、『XX機裝在哪』等位置查詢問題。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "keyword": {"type": "string", "description": "設備名稱關鍵字，例如 '成型機'、'真空泵'、'SMT' 等。"}
+                        },
+                        "required": ["keyword"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
                     "name": "get_equipment_by_floor",
                     "description": "[設備檢索] 根據安裝地點樓層獲取設備配置資料，例如查詢 1F 有哪些成型機。如果是 SMT，樓層為 '3F'。",
                     "parameters": {
@@ -48,7 +62,7 @@ class EquipmentSqlAgent:
                 "type": "function",
                 "function": {
                     "name": "get_equipment_production_status",
-                    "description": "[設備檢索] 獲取指定日期的所有生產設備的總結運行狀況，包含 RUN、DOWN 時間以及良率、進度等。",
+                    "description": "[設備檢索] 獲取指定日期的所有生產設備的總結運行狀況，包含 RUN、DOWN 時間以及良率、進度等。【注意：此工具不含工單號碼，若需查工單號碼或生產機種，請改用 get_equipment_downtime_stats】",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -76,7 +90,7 @@ class EquipmentSqlAgent:
                 "type": "function",
                 "function": {
                     "name": "get_equipment_downtime_stats",
-                    "description": "[設備檢索] 設備深入停機時間統計，包含 RUN, IDEL, DOWN, SHUTDOWN 的具體數值，以及故障次數、良率、標準產能與達成狀況。",
+                    "description": "[設備檢索] 設備深入停機時間統計，包含 RUN/IDEL/DOWN/SHUTDOWN 各項具體數值、故障次數、良率、標準產能，以及【工單號碼 (WORK_ORDER_NO)】與生產機種資訊。若用戶需要查詢工單號碼、昨天/今天正在生產的機種，必須使用此工具。",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -86,7 +100,7 @@ class EquipmentSqlAgent:
                         "required": ["start_date", "end_date"]
                     }
                 }
-            }
+            },
         ]
 
     async def execute_task(self, question: str) -> str:
@@ -109,10 +123,11 @@ class EquipmentSqlAgent:
 
 規範：
 1. **設備查詢調用**：
+   - 詢問「XX設備/機台在哪裡」、「安裝位置」，調用 `get_equipment_location`（用設備名稱關鍵字模糊搜尋）。
    - 詢問設備配置、樓層機台，調用 `get_equipment_by_floor`。
-   - 詢問設備一般生產狀態、稼動狀態、良率、進度，調用 `get_equipment_production_status`。
+   - 詢問設備一般生產狀態、稼動狀態、良率、進度，調用 `get_equipment_production_status`（注意：不含工單號碼）。
    - 詢問設備故障趨勢，調用 `get_equipment_failure_trend`。
-   - 詢問設備深入停機各項時間統計 (RUN/IDEL/DOWN)、原因，調用 `get_equipment_downtime_stats`。
+   - 詢問設備深入停機各項時間統計 (RUN/IDEL/DOWN)、原因、**工單號碼、生產機種**，調用 `get_equipment_downtime_stats`。
    - 當用戶詢問『當前有哪些設備正在跨線支援/稼動』，調用 `get_active_equipment`。
    
 2. **查無資料處理機制 (極重要)**：如果工具回傳的結果為空 (例如 `data` 陣列長度為 0)，**嚴格禁止暴露後端變數結構**。
@@ -138,5 +153,5 @@ class EquipmentSqlAgent:
             )
             return self.llm.s2tw.convert(response)
         except Exception as e:
-            print(f"[SQL Agent Error] {e}")
+            print(f"[Equipment SQL Agent Error] {e}")
             return f"抱歉，在查詢資料庫時發生錯誤：{str(e)}"
