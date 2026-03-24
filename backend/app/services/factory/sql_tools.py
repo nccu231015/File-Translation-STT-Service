@@ -152,30 +152,29 @@ class FactorySqlTools:
         if not target_date:
             target_date = datetime.date.today().isoformat()
             
-        # 時間區間判定
+        # 決定時間條件
         if lookback_days > 1:
             time_cond = f"PRO_TIME >= DATEADD(day, -{lookback_days-1}, '{target_date}') AND PRO_TIME <= '{target_date}'"
-            agg_func = "AVG" # 跨日使用平均值評估
         else:
             time_cond = f"PRO_TIME = '{target_date}'"
-            agg_func = "SUM" # 單日使用聚合總數
 
         # 欄位映射依據 Daily_Status_Report 表結構：
-        # REJECT_RATE: 不良率 (十進位)
-        # ACHIEVING_RATE: 達成率 (十進位)
-        # LOST_TIME_PRO_RATE: 所有時間段損失工時總和
+        # REJECT_RATE: 不良率 (十進位) (需使用 AVG)
+        # ACHIEVING_RATE: 達成率 (十進位) (需使用 AVG)
+        # LOST_TIME_PRO_RATE: 損失工時總和 (需使用 SUM)
         configs = {
-            "top_achieving": {"col": "ACHIEVING_RATE", "order": "DESC", "label": "達成率"},
-            "lagging": {"col": "ACHIEVING_RATE", "order": "ASC", "label": "達成率(落後)"},
-            "abnormal": {"col": "REJECT_RATE", "order": "DESC", "label": "機台不良率(%)"},
-            "downtime": {"col": "LOST_TIME_PRO_RATE", "order": "DESC", "label": "損失工時(總分)"},
-            "unachieved": {"col": "ACHIEVING_RATE", "order": "ASC", "label": "達成率"},
+            "top_achieving": {"col": "ACHIEVING_RATE", "order": "DESC", "label": "達成率", "agg": "AVG"},
+            "lagging": {"col": "ACHIEVING_RATE", "order": "ASC", "label": "達成率(落後)", "agg": "AVG"},
+            "abnormal": {"col": "REJECT_RATE", "order": "DESC", "label": "機台不良率(%)", "agg": "AVG"},
+            "downtime": {"col": "LOST_TIME_PRO_RATE", "order": "DESC", "label": "損失工時(總分)", "agg": "SUM"},
+            "unachieved": {"col": "ACHIEVING_RATE", "order": "ASC", "label": "達成率", "agg": "AVG"},
         }
         
         c = configs.get(kpi_type, configs["top_achieving"])
         sql_col = c["col"]
         sql_order = c["order"]
         label = c["label"]
+        agg_func = c["agg"]
         
         query = f"""
             SELECT TOP 10 
