@@ -22,7 +22,7 @@ export interface TranslationFile {
 
 interface TranslationContextType {
     files: TranslationFile[];
-    addFiles: (fileList: File[], sourceLang: string, targetLang: string, debug?: boolean) => void;
+    addFiles: (fileList: File[], sourceLang: string, targetLang: string, debug?: boolean, isComplexTable?: boolean) => void;
     removeFile: (fileId: string) => void;
 }
 
@@ -157,14 +157,14 @@ export function TranslationProvider({ children }: { children: ReactNode }) {
         setFiles(prev => prev.map(f => f.id === id ? { ...f, ...updates } : f));
     };
 
-    const uploadAndTranslate = async (fileRecord: TranslationFile, fileObj: File, debug: boolean = false) => {
+    const uploadAndTranslate = async (fileRecord: TranslationFile, fileObj: File, debug: boolean = false, isComplexTable: boolean = false) => {
         updateFileStatus(fileRecord.id, { status: 'uploading', progress: 30 });
 
         try {
             updateFileStatus(fileRecord.id, { status: 'processing', progress: 60 });
 
             // Delegate API call to lib/api/translation.ts (browser-side, direct backend)
-            const { pdfBlob, docxBlob } = await translatePDF(fileObj, fileRecord.targetLang, debug);
+            const { pdfBlob, docxBlob } = await translatePDF(fileObj, fileRecord.targetLang, debug, isComplexTable);
 
             // Persist translated PDF to IndexedDB so it survives page refresh
             await saveBlob(`${fileRecord.id}_translated`, pdfBlob);
@@ -191,7 +191,7 @@ export function TranslationProvider({ children }: { children: ReactNode }) {
         }
     };
 
-    const addFiles = (fileList: File[], sourceLang: string, targetLang: string, debug: boolean = false) => {
+    const addFiles = (fileList: File[], sourceLang: string, targetLang: string, debug: boolean = false, isComplexTable: boolean = false) => {
         const pdfFiles = fileList.filter(file => file.type === 'application/pdf');
 
         pdfFiles.forEach(file => {
@@ -214,7 +214,7 @@ export function TranslationProvider({ children }: { children: ReactNode }) {
             saveBlob(`${id}_original`, file).catch(console.error);
 
             setFiles(prev => [newFile, ...prev]);
-            uploadAndTranslate(newFile, file, debug);
+            uploadAndTranslate(newFile, file, debug, isComplexTable);
         });
     };
 

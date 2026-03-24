@@ -115,14 +115,14 @@ export function DocumentTranslation() {
             return;
         }
 
-        addFiles(pdfFiles, sourceLang, targetLang, debugMode);
+        addFiles(pdfFiles, sourceLang, targetLang, debugMode, isComplexTable);
     };
 
     // When the user finally picks a target language, flush any pending files
     const handleTargetLangChange = (lang: string) => {
         setTargetLang(lang);
         if (pendingFiles.length > 0) {
-            addFiles(pendingFiles, sourceLang, lang, debugMode);
+            addFiles(pendingFiles, sourceLang, lang, debugMode, isComplexTable);
             setPendingFiles([]);
             toast.success(`開始翻譯 ${pendingFiles.length} 個已暫存的檔案`);
         }
