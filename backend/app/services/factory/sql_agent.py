@@ -119,6 +119,34 @@ class SqlAgent:
                         "required": ["work_order"]
                     }
                 }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_defect_anomaly_report",
+                    "description": "跨日不良異常分析：一次比對產線今日的不良數與過去 N 天的平均不良數，判斷是否發生異常飆高。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "target_date": {"type": "string", "description": "目前的查詢日期，例如 '2026-03-24'。"},
+                            "lookback_days": {"type": "integer", "description": "要回溯計算平均的天數，預設為 30。"}
+                        }
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_defect_rate_anomaly_report",
+                    "description": "跨日『不良率』異常分析：跨表彙整總產出與不良數，一次比對產線今日的不良「率」與過去 N 天的平均不良「率」。適用於需要考慮總產量基準的情境。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "target_date": {"type": "string", "description": "目前的查詢日期，例如 '2026-03-24'。"},
+                            "lookback_days": {"type": "integer", "description": "要回溯計算平均的天數，預設為 7 或 30。"}
+                        }
+                    }
+                }
             }
         ]
 
@@ -151,8 +179,13 @@ class SqlAgent:
    - 詢問「工單生產數量、目標數與實際數統計」，才調用 `get_workorder_quantity`。
    - 詢問「停機時間異常、誰停機最久、停機時間排行」，必須調用 `get_kpi_ranking(kpi_type='downtime')`。
    - 詢問「異常比例排行、誰不良最嚴重」，必須調用 `get_kpi_ranking(kpi_type='abnormal')`。
-4. **禁止虛構**：資料源已鎖定，絕對不要自行撰寫 SQL 語句。
-5. **回答風格**：所有結果請以 Markdown 表格呈現，**數據必須完整顯示原始清單**。在表格下方，請根據數據提供**具建設性的專業文字解說**（不須使用亮點、風險或建議等固定標題）。
+4. **異常趨勢與跨日比對**：
+   - 當詢問「今天產線不良『數量』是否異常？」時，調用 `get_defect_anomaly_report`。
+   - 當詢問「今天產線不良『率』是否異常？」或「把今天的平均不良率與最近7天的日均不良率作對比」時，**必須調用 `get_defect_rate_anomaly_report`**。
+5. **查無資料處理機制 (極重要)**：如果工具回傳的結果為空 (長度為 0)、查無數據，或無法進行計算，**請直接簡潔回答「目前系統無相關資料可供查詢」即可**。絕對禁止回覆「內部工具代碼」、虛擬 Python 語法、內部函數名稱 (如 get_line_defect_records)，或向使用者解釋系統底層的「API 呼叫步驟」。
+6. **禁止暴露系統內部邏輯**：永遠不要在回覆中向使用者展現你的思考過程、工具名稱、爬取步驟，不需要告訴使用者你打算怎麼拿到資料或怎麼算。
+7. **禁止虛構**：資料源已鎖定，絕對不要自行撰寫 SQL 語句或瞎掰數據。
+8. **回答風格**：有數據時，以 Markdown 表格呈現並提供專業解說。無數據時，簡短回答查無資料即可，不要過度解釋。
 """
         messages = [{"role": "system", "content": system_prompt}]
         if history:

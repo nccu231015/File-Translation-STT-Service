@@ -275,6 +275,144 @@ class FactorySqlTools:
         res = self._execute_mssql_query(query)
         return {"status": "success", "work_order": work_order, "data": res}
 
+    def get_defect_anomaly_report(self, target_date: str = None, lookback_days: int = 30) -> Dict[str, Any]:
+        """
+        跨日不良異常分析: 比對產線今日的不良數與過去 N 天的平均不良數。
+        """
+        import datetime
+        if not target_date:
+            target_date = datetime.date.today().isoformat()
+            
+        query = f"""
+        WITH today AS (
+            SELECT [NO] as line_no, SUM(blsl) as today_defects
+            FROM [dbo].[blpjl_new_copy1] a
+            WHERE a.blsl > 0 AND a.gdhm <> 'undefined' AND a.PRO_TIME = '{target_date}'
+            AND NOT( 
+                (a.jcgx ='設備判定 (CCD/成測)' and a.ljfl ='成品') 
+                or (a.jcgx='分析 (設備判定異常品)' AND a.ljfl ='重測/復判後OK數量') 
+                or (a.jcgx ='設備判定 (CCD/成測)' and a.ljfl ='成品' and a.bllt is null)
+                or (a.ljfl in('重測/復判後OK數量','其他復判後OK數量'))
+            )
+            GROUP BY [NO]
+        ),
+        past AS (
+            SELECT [NO] as line_no, SUM(blsl) as total_past_defects
+            FROM [dbo].[blpjl_new_copy1] a
+            WHERE a.blsl > 0 AND a.gdhm <> 'undefined' 
+              AND CAST(a.PRO_TIME AS DATE) >= DATEADD(day, -{lookback_days}, CAST('{target_date}' AS DATE))
+              AND CAST(a.PRO_TIME AS DATE) < CAST('{target_date}' AS DATE)
+            AND NOT( 
+                (a.jcgx ='設備判定 (CCD/成測)' and a.ljfl ='成品') 
+                or (a.jcgx='分析 (設備判定異常品)' AND a.ljfl ='重測/復判後OK數量') 
+                or (a.jcgx ='設備判定 (CCD/成測)' and a.ljfl ='成品' and a.bllt is null)
+                or (a.ljfl in('重測/復判後OK數量','其他復判後OK數量'))
+            )
+            GROUP BY [NO]
+        ),
+        past_avg AS (
+            SELECT line_no, CAST(total_past_defects AS FLOAT) / {lookback_days} as avg_past_defects
+            FROM past
+        )
+        SELECT 
+            COALESCE(t.line_no, p.line_no) as [產線],
+            ISNULL(t.today_defects, 0) as [今日不良總數],
+            ROUND(ISNULL(p.avg_past_defects, 0), 2) as [過去平均不良數],
+            CASE 
+                WHEN ISNULL(p.avg_past_defects, 0) = 0 THEN NULL
+                ELSE ROUND((ISNULL(t.today_defects, 0) - p.avg_past_defects) / p.avg_past_defects * 100, 2)
+            END as [異常偏差百分比]
+        FROM today t
+        FULL OUTER JOIN past_avg p ON t.line_no = p.line_no
+        ORDER BY [異常偏差百分比] DESC
+        """
+        result = self._execute_mssql_query(query)
+        return {"status": "success", "target_date": target_date, "lookback_days": lookback_days, "data": result}
+        
+    def get_defect_rate_anomaly_report(self, target_date: str = None, lookback_days: int = 7) -> Dict[str, Any]:
+        """
+        不良率異常分析: 跨表聯集 Daily_Status_Report(產出) 與 blpjl_new_copy1(不良)，計算跨日真實不良率。
+        解決只看「數量」而忽視「產量基數」造成的偏差。
+        """
+        import datetime
+        if not target_date:
+            target_date = datetime.date.today().isoformat()
+            
+        query = f"""
+        WITH lines AS (
+            SELECT DISTINCT [NO] as line_no 
+            FROM [dbo].[Daily_Status_Report] 
+            WHERE CAST(PRO_TIME AS DATE) >= DATEADD(day, -{lookback_days}, CAST('{target_date}' AS DATE)) 
+              AND CAST(PRO_TIME AS DATE) <= CAST('{target_date}' AS DATE)
+              AND [NO] IS NOT NULL
+        ),
+        today_defects AS (
+            SELECT [NO] as line_no, SUM(blsl) as total_defects
+            FROM [dbo].[blpjl_new_copy1] a
+            WHERE a.blsl > 0 AND a.gdhm <> 'undefined' AND a.PRO_TIME = '{target_date}'
+            AND NOT( 
+                (a.jcgx ='設備判定 (CCD/成測)' and a.ljfl ='成品') 
+                or (a.jcgx='分析 (設備判定異常品)' AND a.ljfl ='重測/復判後OK數量') 
+                or (a.jcgx ='設備判定 (CCD/成測)' and a.ljfl ='成品' and a.bllt is null)
+                or (a.ljfl in('重測/復判後OK數量','其他復判後OK數量'))
+            )
+            GROUP BY [NO]
+        ),
+        today_production AS (
+            SELECT [NO] as line_no, SUM(ACTUAL_PRO) as total_pro
+            FROM [dbo].[Daily_Status_Report]
+            WHERE PRO_TIME = '{target_date}'
+            GROUP BY [NO]
+        ),
+        past_defects AS (
+            SELECT [NO] as line_no, SUM(blsl) as past_total_defects
+            FROM [dbo].[blpjl_new_copy1] a
+            WHERE a.blsl > 0 AND a.gdhm <> 'undefined' 
+              AND CAST(a.PRO_TIME AS DATE) >= DATEADD(day, -{lookback_days}, CAST('{target_date}' AS DATE))
+              AND CAST(a.PRO_TIME AS DATE) < CAST('{target_date}' AS DATE)
+            AND NOT( 
+                (a.jcgx ='設備判定 (CCD/成測)' and a.ljfl ='成品') 
+                or (a.jcgx='分析 (設備判定異常品)' AND a.ljfl ='重測/復判後OK數量') 
+                or (a.jcgx ='設備判定 (CCD/成測)' and a.ljfl ='成品' and a.bllt is null)
+                or (a.ljfl in('重測/復判後OK數量','其他復判後OK數量'))
+            )
+            GROUP BY [NO]
+        ),
+        past_production AS (
+            SELECT [NO] as line_no, SUM(ACTUAL_PRO) as past_total_pro
+            FROM [dbo].[Daily_Status_Report]
+            WHERE CAST(PRO_TIME AS DATE) >= DATEADD(day, -{lookback_days}, CAST('{target_date}' AS DATE))
+              AND CAST(PRO_TIME AS DATE) < CAST('{target_date}' AS DATE)
+            GROUP BY [NO]
+        )
+        SELECT 
+            l.line_no as [產線],
+            ISNULL(td.total_defects, 0) as [今日不良總數],
+            ISNULL(tp.total_pro, 0) as [今日總產量],
+            CASE WHEN ISNULL(tp.total_pro, 0) = 0 THEN 0 ELSE ROUND(CAST(ISNULL(td.total_defects, 0) AS FLOAT) / tp.total_pro * 100, 2) END as [今日不良率],
+            ISNULL(pd.past_total_defects, 0) as [歷史不良總數],
+            ISNULL(pp.past_total_pro, 0) as [歷史總產量],
+            CASE WHEN ISNULL(pp.past_total_pro, 0) = 0 THEN 0 ELSE ROUND(CAST(ISNULL(pd.past_total_defects, 0) AS FLOAT) / pp.past_total_pro * 100, 2) END as [歷史平均不良率],
+            CASE 
+                WHEN ISNULL(pp.past_total_pro, 0) = 0 THEN NULL
+                WHEN ISNULL(tp.total_pro, 0) = 0 THEN NULL
+                ELSE 
+                    ROUND( 
+                        (CAST(ISNULL(td.total_defects, 0) AS FLOAT) / tp.total_pro * 100) - 
+                        (CAST(ISNULL(pd.past_total_defects, 0) AS FLOAT) / pp.past_total_pro * 100), 2
+                    )
+            END as [不良率差值(百分點)]
+        FROM lines l
+        LEFT JOIN today_defects td ON l.line_no = td.line_no
+        LEFT JOIN today_production tp ON l.line_no = tp.line_no
+        LEFT JOIN past_defects pd ON l.line_no = pd.line_no
+        LEFT JOIN past_production pp ON l.line_no = pp.line_no
+        WHERE ISNULL(td.total_defects, 0) > 0 OR ISNULL(pd.past_total_defects, 0) > 0
+        ORDER BY [今日不良率] DESC
+        """
+        result = self._execute_mssql_query(query)
+        return {"status": "success", "target_date": target_date, "lookback_days": lookback_days, "data": result}
+        
     def get_active_equipment(self, target_date: str = None) -> Dict[str, Any]:
         """ PostgreSQL 查詢: 當前稼動設備。 """
         date_val = f"'{target_date}'" if target_date else "TO_CHAR(CURRENT_DATE, 'YYYYMMDD')"
