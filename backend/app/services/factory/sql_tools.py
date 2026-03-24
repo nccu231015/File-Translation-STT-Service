@@ -336,29 +336,17 @@ class FactorySqlTools:
             
         query = f"""
         WITH today AS (
-            SELECT [NO] as line_no, SUM(blsl) as today_defects
-            FROM [dbo].[blpjl_new_copy1] a
-            WHERE a.blsl > 0 AND a.gdhm <> 'undefined' AND a.PRO_TIME = '{target_date}'
-            AND NOT( 
-                (a.jcgx ='設備判定 (CCD/成測)' and a.ljfl ='成品') 
-                or (a.jcgx='分析 (設備判定異常品)' AND a.ljfl ='重測/復判後OK數量') 
-                or (a.jcgx ='設備判定 (CCD/成測)' and a.ljfl ='成品' and a.bllt is null)
-                or (a.ljfl in('重測/復判後OK數量','其他復判後OK數量'))
-            )
+            SELECT [NO] as line_no, SUM(BAD_PRO_RATE) as today_defects
+            FROM [dbo].[Daily_Status_Report]
+            WHERE PRO_TIME = '{target_date}' AND [NO] IS NOT NULL AND BAD_PRO_RATE > 0
             GROUP BY [NO]
         ),
         past AS (
-            SELECT [NO] as line_no, SUM(blsl) as total_past_defects
-            FROM [dbo].[blpjl_new_copy1] a
-            WHERE a.blsl > 0 AND a.gdhm <> 'undefined' 
-              AND CAST(a.PRO_TIME AS DATE) >= DATEADD(day, -{lookback_days}, CAST('{target_date}' AS DATE))
-              AND CAST(a.PRO_TIME AS DATE) < CAST('{target_date}' AS DATE)
-            AND NOT( 
-                (a.jcgx ='設備判定 (CCD/成測)' and a.ljfl ='成品') 
-                or (a.jcgx='分析 (設備判定異常品)' AND a.ljfl ='重測/復判後OK數量') 
-                or (a.jcgx ='設備判定 (CCD/成測)' and a.ljfl ='成品' and a.bllt is null)
-                or (a.ljfl in('重測/復判後OK數量','其他復判後OK數量'))
-            )
+            SELECT [NO] as line_no, SUM(BAD_PRO_RATE) as total_past_defects
+            FROM [dbo].[Daily_Status_Report]
+            WHERE CAST(PRO_TIME AS DATE) >= DATEADD(day, -{lookback_days}, CAST('{target_date}' AS DATE))
+              AND CAST(PRO_TIME AS DATE) < CAST('{target_date}' AS DATE)
+              AND [NO] IS NOT NULL AND BAD_PRO_RATE > 0
             GROUP BY [NO]
         ),
         past_avg AS (
@@ -397,69 +385,42 @@ class FactorySqlTools:
               AND CAST(PRO_TIME AS DATE) <= CAST('{target_date}' AS DATE)
               AND [NO] IS NOT NULL
         ),
-        today_defects AS (
-            SELECT [NO] as line_no, SUM(blsl) as total_defects
-            FROM [dbo].[blpjl_new_copy1] a
-            WHERE a.blsl > 0 AND a.gdhm <> 'undefined' AND a.PRO_TIME = '{target_date}'
-            AND NOT( 
-                (a.jcgx ='設備判定 (CCD/成測)' and a.ljfl ='成品') 
-                or (a.jcgx='分析 (設備判定異常品)' AND a.ljfl ='重測/復判後OK數量') 
-                or (a.jcgx ='設備判定 (CCD/成測)' and a.ljfl ='成品' and a.bllt is null)
-                or (a.ljfl in('重測/復判後OK數量','其他復判後OK數量'))
-            )
-            GROUP BY [NO]
-        ),
-        today_production AS (
-            SELECT [NO] as line_no, SUM(ACTUAL_PRO) as total_pro
+        today_data AS (
+            SELECT [NO] as line_no, SUM(BAD_PRO_RATE) as today_defects, SUM(ACTUAL_PRO) as today_pro
             FROM [dbo].[Daily_Status_Report]
-            WHERE PRO_TIME = '{target_date}'
+            WHERE PRO_TIME = '{target_date}' AND [NO] IS NOT NULL
             GROUP BY [NO]
         ),
-        past_defects AS (
-            SELECT [NO] as line_no, SUM(blsl) as past_total_defects
-            FROM [dbo].[blpjl_new_copy1] a
-            WHERE a.blsl > 0 AND a.gdhm <> 'undefined' 
-              AND CAST(a.PRO_TIME AS DATE) >= DATEADD(day, -{lookback_days}, CAST('{target_date}' AS DATE))
-              AND CAST(a.PRO_TIME AS DATE) < CAST('{target_date}' AS DATE)
-            AND NOT( 
-                (a.jcgx ='設備判定 (CCD/成測)' and a.ljfl ='成品') 
-                or (a.jcgx='分析 (設備判定異常品)' AND a.ljfl ='重測/復判後OK數量') 
-                or (a.jcgx ='設備判定 (CCD/成測)' and a.ljfl ='成品' and a.bllt is null)
-                or (a.ljfl in('重測/復判後OK數量','其他復判後OK數量'))
-            )
-            GROUP BY [NO]
-        ),
-        past_production AS (
-            SELECT [NO] as line_no, SUM(ACTUAL_PRO) as past_total_pro
+        past_data AS (
+            SELECT [NO] as line_no, SUM(BAD_PRO_RATE) as past_total_defects, SUM(ACTUAL_PRO) as past_total_pro
             FROM [dbo].[Daily_Status_Report]
             WHERE CAST(PRO_TIME AS DATE) >= DATEADD(day, -{lookback_days}, CAST('{target_date}' AS DATE))
               AND CAST(PRO_TIME AS DATE) < CAST('{target_date}' AS DATE)
+              AND [NO] IS NOT NULL
             GROUP BY [NO]
         )
         SELECT 
             l.line_no as [產線],
-            ISNULL(td.total_defects, 0) as [今日不良總數],
-            ISNULL(tp.total_pro, 0) as [今日總產量],
-            CASE WHEN ISNULL(tp.total_pro, 0) = 0 THEN 0 ELSE ROUND(CAST(ISNULL(td.total_defects, 0) AS FLOAT) / tp.total_pro * 100, 2) END as [今日不良率],
-            ISNULL(pd.past_total_defects, 0) as [歷史不良總數],
-            ISNULL(pp.past_total_pro, 0) as [歷史總產量],
-            CASE WHEN ISNULL(pp.past_total_pro, 0) = 0 THEN 0 ELSE ROUND(CAST(ISNULL(pd.past_total_defects, 0) AS FLOAT) / pp.past_total_pro * 100, 2) END as [歷史平均不良率],
+            ISNULL(t.today_defects, 0) as [今日不良總數],
+            ISNULL(t.today_pro, 0) as [今日總產量],
+            CASE WHEN ISNULL(t.today_pro, 0) = 0 THEN 0 ELSE ROUND(CAST(ISNULL(t.today_defects, 0) AS FLOAT) / t.today_pro * 100, 2) END as [今日不良率百分比],
+            ISNULL(p.past_total_defects, 0) as [歷史不良總數],
+            ISNULL(p.past_total_pro, 0) as [歷史總產量],
+            CASE WHEN ISNULL(p.past_total_pro, 0) = 0 THEN 0 ELSE ROUND(CAST(ISNULL(p.past_total_defects, 0) AS FLOAT) / p.past_total_pro * 100, 2) END as [歷史平均不良率百分比],
             CASE 
-                WHEN ISNULL(pp.past_total_pro, 0) = 0 THEN NULL
-                WHEN ISNULL(tp.total_pro, 0) = 0 THEN NULL
+                WHEN ISNULL(p.past_total_pro, 0) = 0 THEN NULL
+                WHEN ISNULL(t.today_pro, 0) = 0 THEN NULL
                 ELSE 
                     ROUND( 
-                        (CAST(ISNULL(td.total_defects, 0) AS FLOAT) / tp.total_pro * 100) - 
-                        (CAST(ISNULL(pd.past_total_defects, 0) AS FLOAT) / pp.past_total_pro * 100), 2
+                        (CAST(ISNULL(t.today_defects, 0) AS FLOAT) / t.today_pro * 100) - 
+                        (CAST(ISNULL(p.past_total_defects, 0) AS FLOAT) / p.past_total_pro * 100), 2
                     )
             END as [不良率差值(百分點)]
         FROM lines l
-        LEFT JOIN today_defects td ON l.line_no = td.line_no
-        LEFT JOIN today_production tp ON l.line_no = tp.line_no
-        LEFT JOIN past_defects pd ON l.line_no = pd.line_no
-        LEFT JOIN past_production pp ON l.line_no = pp.line_no
-        WHERE ISNULL(td.total_defects, 0) > 0 OR ISNULL(pd.past_total_defects, 0) > 0
-        ORDER BY [今日不良率] DESC
+        LEFT JOIN today_data t ON l.line_no = t.line_no
+        LEFT JOIN past_data p ON l.line_no = p.line_no
+        WHERE ISNULL(t.today_defects, 0) > 0 OR ISNULL(p.past_total_defects, 0) > 0
+        ORDER BY [今日不良率百分比] DESC
         """
         result = self._execute_mssql_query(query)
         return {"status": "success", "target_date": target_date, "lookback_days": lookback_days, "data": result}
