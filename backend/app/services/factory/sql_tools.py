@@ -450,9 +450,14 @@ class FactorySqlTools:
         
     def get_active_equipment(self, target_date: str = None) -> Dict[str, Any]:
         """ PostgreSQL 查詢: 當前稼動設備。 """
-        date_val = f"'{target_date}'" if target_date else "TO_CHAR(CURRENT_DATE, 'YYYYMMDD')"
+        if target_date:
+            # YMD 欄位格式為 'YYYYMMDD'（8位數字），移除 ISO 格式中的連字符
+            date_compact = target_date.replace("-", "")
+            date_val = f"'{date_compact}'"
+        else:
+            date_val = "TO_CHAR(CURRENT_DATE, 'YYYYMMDD')"
         query = f"SELECT distinct \"TOPIC\" FROM \"public\".\"CIM_MQTTCOLLECT\" WHERE \"YMD\"={date_val} AND CAST(\"CODEVALUE\" AS NUMERIC)>0"
-        return {"status": "success", "data": self._execute_postgres_query(query)}
+        return {"status": "success", "date_queried": date_val, "data": self._execute_postgres_query(query)}
 
     def get_equipment_by_floor(self, floor: str) -> Dict[str, Any]:
         """ PostgreSQL 查詢: 根據安裝地點樓層獲取設備配置資料 """
