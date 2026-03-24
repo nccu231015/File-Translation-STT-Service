@@ -18,7 +18,8 @@ import {
     Trash2,
     FileCheck,
     Maximize2,
-    Bug // Import Bug icon
+    Bug,
+    LayoutGrid
 } from 'lucide-react';
 import { Switch } from '@/components/ui/switch'; // Import Switch
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -45,6 +46,9 @@ export function DocumentTranslation() {
     // Files staged before the user has picked a target language
     const [pendingFiles, setPendingFiles] = useState<File[]>([]);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    // Word 下載前提醒對話框
+    const [showWordWarning, setShowWordWarning] = useState(false);
+    const [pendingDocxInfo, setPendingDocxInfo] = useState<{ url: string; filename: string } | null>(null);
 
     const handleDebugToggle = (checked: boolean) => {
         if (checked) {
@@ -316,12 +320,21 @@ export function DocumentTranslation() {
                                                 </a>
                                             )}
                                             {file.status === 'completed' && file.docxUrl && (
-                                                <a href={file.docxUrl} download={`translated_${file.name.replace(/\.pdf$/i, '.docx')}`}>
-                                                    <Button size="sm" variant="outline" className="h-8 border-blue-200 text-blue-600 hover:bg-blue-50">
-                                                        <FileText className="size-3.5 mr-2" />
-                                                        下載 Word
-                                                    </Button>
-                                                </a>
+                                                <Button
+                                                    size="sm"
+                                                    variant="outline"
+                                                    className="h-8 border-blue-200 text-blue-600 hover:bg-blue-50"
+                                                    onClick={() => {
+                                                        setPendingDocxInfo({
+                                                            url: file.docxUrl!,
+                                                            filename: `translated_${file.name.replace(/\.pdf$/i, '.docx')}`
+                                                        });
+                                                        setShowWordWarning(true);
+                                                    }}
+                                                >
+                                                    <FileText className="size-3.5 mr-2" />
+                                                    下載 Word
+                                                </Button>
                                             )}
                                             <Button
                                                 variant="ghost"
@@ -393,6 +406,81 @@ export function DocumentTranslation() {
                     </div>
                 </div>
             )}
+
+            {/* Word 下載前の温馨提醒 Dialog */}
+            <Dialog open={showWordWarning} onOpenChange={setShowWordWarning}>
+                <DialogContent className="sm:max-w-sm p-0 overflow-hidden rounded-2xl">
+                    <div className="flex flex-col items-center px-6 pt-8 pb-6 gap-5">
+                        {/* 雲端下載圖示 */}
+                        <div className="w-20 h-20 rounded-2xl bg-green-50 flex items-center justify-center">
+                            <Download className="size-9 text-green-500" strokeWidth={2} />
+                        </div>
+
+                        {/* 標題 */}
+                        <h2 className="text-xl font-bold text-slate-800 text-center">
+                            下載後再檢查一下吧！
+                        </h2>
+
+                        {/* 提示卡片區 */}
+                        <div className="w-full space-y-3">
+                            {/* 術語核對建議 */}
+                            <div className="flex items-start gap-3 rounded-xl border border-slate-100 bg-slate-50 p-4">
+                                <div className="mt-0.5 flex-shrink-0 w-8 h-8 rounded-lg bg-purple-100 flex items-center justify-center">
+                                    <span className="text-xs font-bold text-purple-600">AB</span>
+                                </div>
+                                <div>
+                                    <p className="text-sm font-semibold text-slate-800">術語核對建議</p>
+                                    <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">
+                                        AI 翻譯可能對「專有名詞」理解有誤，建議進行最終確認。
+                                    </p>
+                                </div>
+                            </div>
+
+                            {/* 排版檢查提示 */}
+                            <div className="flex items-start gap-3 rounded-xl border border-slate-100 bg-slate-50 p-4">
+                                <div className="mt-0.5 flex-shrink-0 w-8 h-8 rounded-lg bg-blue-100 flex items-center justify-center">
+                                    <LayoutGrid className="size-4 text-blue-600" />
+                                </div>
+                                <div>
+                                    <p className="text-sm font-semibold text-slate-800">排版檢查提示</p>
+                                    <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">
+                                        複雜的圖表或跑位是正常現象，您只需微調 Word 檔案即可恢復完美外觀。
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* 確認下載按鈕 */}
+                        <button
+                            className="w-full bg-green-500 hover:bg-green-600 active:bg-green-700 transition-colors text-white font-semibold rounded-xl py-3.5 flex items-center justify-center gap-2 shadow-md shadow-green-200"
+                            onClick={() => {
+                                if (pendingDocxInfo) {
+                                    const a = document.createElement('a');
+                                    a.href = pendingDocxInfo.url;
+                                    a.download = pendingDocxInfo.filename;
+                                    a.click();
+                                }
+                                setShowWordWarning(false);
+                                setPendingDocxInfo(null);
+                            }}
+                        >
+                            <CheckCircle2 className="size-5" />
+                            沒問題，立即下載
+                        </button>
+
+                        {/* 取消連結 */}
+                        <button
+                            className="text-sm text-slate-400 hover:text-slate-600 transition-colors"
+                            onClick={() => {
+                                setShowWordWarning(false);
+                                setPendingDocxInfo(null);
+                            }}
+                        >
+                            取消
+                        </button>
+                    </div>
+                </DialogContent>
+            </Dialog>
         </div>
     );
 }
