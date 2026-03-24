@@ -29,7 +29,12 @@ export function QAInterface() {
     // ... (其餘狀態保持不變)
     const [messages, setMessages] = useState<Message[]>([]);
     const [quickQuestions, setQuickQuestions] = useState<string[]>([]);
-    const [input, setInput] = useState('');
+    const [input, setInputRaw] = useState('');
+    // 用 sessionStorage 同步輸入文字，切換分頁後不會消失
+    const setInput = (val: string) => {
+        setInputRaw(val);
+        try { sessionStorage.setItem('factory_chat_input', val); } catch {}
+    };
     const [isLoading, setIsLoading] = useState(false);
     const [scope, setScope] = useState<'產線' | '設備'>('產線');
 
@@ -80,9 +85,35 @@ export function QAInterface() {
             '分析上週設備故障的主要趨勢',
         ]);
         
-        // 3. 載入對話歷史 (只在 mount 時載入一次)
+        // 3. 恢復輸入框文字（切換分頁後不遺失）
+        try {
+            const savedInput = sessionStorage.getItem('factory_chat_input');
+            if (savedInput) setInputRaw(savedInput);
+        } catch {}
+
+        // 4. 載入 session 清單，並自動恢復最近一個 session 的對話紀錄
         listFactorySessions()
-            .then(list => setSessions(list))
+            .then(async list => {
+                setSessions(list);
+                // 若有歷史 session，自動載入最近一筆
+                if (list.length > 0) {
+                    try {
+                        const detail = await getFactorySession(list[0].session_id);
+                        if (detail && detail.messages.length > 0) {
+                            const restored: Message[] = detail.messages.map((m: {role: string; content: string; ts: string}, i: number) => ({
+                                id: `${m.role}-${i}-restored`,
+                                role: m.role as 'user' | 'assistant',
+                                content: m.content,
+                                timestamp: new Date(m.ts),
+                            }));
+                            setCurrentSessionId(list[0].session_id);
+                            setMessages(restored);
+                        }
+                    } catch (e) {
+                        console.warn('Failed to restore last session', e);
+                    }
+                }
+            })
             .catch(e => console.error("Failed to load sessions", e));
 
     }, []); // 將依賴改為空陣列，防止重新渲染導致的無限迴圈
