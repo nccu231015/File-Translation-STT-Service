@@ -41,6 +41,7 @@ export function DocumentTranslation() {
     const [targetLang, setTargetLang] = useState('');
     const [isDragging, setIsDragging] = useState(false);
     const [debugMode, setDebugMode] = useState(false);
+    const [isComplexTable, setIsComplexTable] = useState(false);
     const [showPasswordDialog, setShowPasswordDialog] = useState(false);
     const [password, setPassword] = useState('');
     // Files staged before the user has picked a target language
@@ -185,16 +186,31 @@ export function DocumentTranslation() {
                         </div>
                     </div>
 
-                    <div className="flex items-center space-x-2 pt-6 border-t mt-4">
-                        <Switch
-                            id="debug-mode"
-                            checked={debugMode}
-                            onCheckedChange={handleDebugToggle}
-                        />
-                        <Label htmlFor="debug-mode" className="flex items-center gap-2 cursor-pointer text-slate-700">
-                            <Bug className="size-4 text-orange-500" />
-                            <span>開啟排版偵測預覽模式 <span className="text-xs text-slate-500 font-normal">(標記偵測區域，不進行翻譯)</span></span>
-                        </Label>
+                    <div className="flex flex-col gap-4 pt-6 border-t mt-4">
+                        <div className="flex items-center justify-between">
+                            <Label htmlFor="complex-table" className="flex flex-col gap-1 cursor-pointer">
+                                <span className="text-sm font-medium text-slate-900">使用 Word 表格解析模式 (建議複雜表格文件使用)</span>
+                                <span className="text-xs text-slate-500 font-normal">
+                                    開啟後將採用 Word 二次轉譯機制，能更精準對齊雙語清單與巢狀表格，避免排版隨意偏移。
+                                </span>
+                            </Label>
+                            <Switch
+                                id="complex-table"
+                                checked={isComplexTable}
+                                onCheckedChange={setIsComplexTable}
+                            />
+                        </div>
+                        <div className="flex items-center space-x-2">
+                            <Switch
+                                id="debug-mode"
+                                checked={debugMode}
+                                onCheckedChange={handleDebugToggle}
+                            />
+                            <Label htmlFor="debug-mode" className="flex items-center gap-2 cursor-pointer text-slate-700">
+                                <Bug className="size-4 text-orange-500" />
+                                <span>開啟排版偵測預覽模式 <span className="text-xs text-slate-500 font-normal">(標記偵測區域，不進行翻譯)</span></span>
+                            </Label>
+                        </div>
                     </div>
 
                     <Dialog open={showPasswordDialog} onOpenChange={setShowPasswordDialog}>

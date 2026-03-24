@@ -375,7 +375,7 @@ class PDFService:
         print(f"[PDF] Chunked translation complete. Original: {len(text)} chars -> Translated: {len(final_translation)} chars", flush=True)
         return final_translation
 
-    async def process_pdf(self, input_pdf_path: str, force_target_lang: str = None, debug_mode: bool = False):
+    async def process_pdf(self, input_pdf_path: str, force_target_lang: str = None, debug_mode: bool = False, is_complex_table: bool = False):
         """
         Processes the PDF (Async Entry Point).
         """
@@ -396,7 +396,8 @@ class PDFService:
                 input_path=input_pdf_path,
                 output_path=output_pdf_path,
                 target_lang=target_lang,
-                debug_mode=debug_mode
+                debug_mode=debug_mode,
+                is_complex_table=is_complex_table
             )
             
             return [

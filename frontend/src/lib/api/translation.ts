@@ -26,11 +26,13 @@ export const translatePDF = async (
     file: File,
     targetLang: string = 'zh-TW',
     debug: boolean = false,
+    isComplexTable: boolean = false,
 ): Promise<TranslationResponse> => {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('target_lang', targetLang);
     formData.append('debug', debug.toString());
+    formData.append('is_complex_table', isComplexTable.toString());
 
     // DIRECT CALL to backend to bypass Next.js proxy/body-size issues
     const BACKEND_URL = "http://172.16.2.68:8000";

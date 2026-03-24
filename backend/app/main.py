@@ -300,8 +300,9 @@ async def transcribe_audio(file: UploadFile = File(...), mode: str = Form("chat"
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/pdf-translation")
-async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = File(...), target_lang: str = Form(None), debug: str = Form("false")):
+async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = File(...), target_lang: str = Form(None), debug: str = Form("false"), is_complex_table: str = Form("false")):
     debug_mode = str(debug).lower() in ("true", "1", "t", "yes", "on")
+    is_complex_table_bool = str(is_complex_table).lower() in ("true", "1", "t", "yes", "on")
     temp_input_path = ""
     docx_path = ""
     try:
@@ -309,7 +310,7 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
             shutil.copyfileobj(file.file, temp_input)
             temp_input_path = temp_input.name
             
-        result_list = await pdf_service.process_pdf(temp_input_path, force_target_lang=target_lang, debug_mode=debug_mode)
+        result_list = await pdf_service.process_pdf(temp_input_path, force_target_lang=target_lang, debug_mode=debug_mode, is_complex_table=is_complex_table_bool)
         output_pdf_path = result_list[0]["file_path"]
         
         with open(output_pdf_path, 'rb') as f:
@@ -371,7 +372,10 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                     cell_texts = to_translate  # key -> full_text mapping
                     return doc, list(set(to_translate.values())), cell_texts
                 
-                doc, content_list, cell_texts = await run_in_threadpool(_process_docx_tables)
+                if is_complex_table_bool:
+                    doc, content_list, cell_texts = await run_in_threadpool(_process_docx_tables)
+                else:
+                    doc, content_list, cell_texts = None, [], {}
                 
                 translation_cache = {}
                 if content_list:
@@ -614,6 +618,16 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                         print(f"[PDF-DOCX] Docx to PDF failed: {e}", flush=True)
 
                 await run_in_threadpool(_docx_to_pdf)
+                
+                # If we skipped stage 2 docx translation, the resulting docx is just a format conversion
+                # of the translated PDF. So output_pdf_path already contains the translation. We don't need
+                # to read it back from the docx-to-pdf step unless needed, but docx_to_pdf overwrites it anyway.
+                # Actually, if we didn't do stage 2, docx_to_pdf just converts the same DOCX back to PDF, 
+                # which is redundant but safe. We can skip docx_to_pdf if not is_complex_table_bool.
+                if is_complex_table_bool:
+                    await run_in_threadpool(_docx_to_pdf)
+                else:
+                    print("[PDF-DOCX] Skipping docx_to_pdf conversion since stage 2 was bypassed.", flush=True)
                 
                 # Reload the completely translated PDF
                 if os.path.exists(output_pdf_path):

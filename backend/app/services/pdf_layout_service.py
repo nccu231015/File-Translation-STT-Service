@@ -46,6 +46,7 @@ class PDFLayoutPreservingService:
         output_path: str,
         target_lang: str = "zh-TW",
         debug_mode: bool = False,
+        is_complex_table: bool = False,
     ):
         """
         Main pipeline: detect → extract → translate (async) → render.
@@ -65,7 +66,7 @@ class PDFLayoutPreservingService:
         async def bounded(page_num: int):
             async with self.semaphore:
                 return await self._process_single_page(
-                    input_path, page_num, total_pages, target_lang, debug_mode
+                    input_path, page_num, total_pages, target_lang, debug_mode, is_complex_table
                 )
 
         # Launch all pages; asyncio.gather preserves result order
@@ -110,6 +111,7 @@ class PDFLayoutPreservingService:
         total_pages: int,
         target_lang: str,
         debug_mode: bool,
+        is_complex_table: bool = False,
     ) -> str | None:
         """
         Process one page of the PDF:
@@ -137,8 +139,10 @@ class PDFLayoutPreservingService:
                 self.layout_detector.detect_layout,
                 input_path, page_num, page.rect.width, page.rect.height
             )
-
-            PROTECTED_TYPES = {"figure", "table", "equation", "formula"}
+            PROTECTED_TYPES = {"figure", "equation", "formula"}
+            if is_complex_table:
+                PROTECTED_TYPES.add("table")
+                
             protected_rects_pdf = []
             for b in layout_blocks:
                 # Only protect if confidence is high enough (e.g. > 0.45).
