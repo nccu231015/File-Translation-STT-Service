@@ -296,113 +296,222 @@ class PDFLayoutPreservingService:
                         continue
                 # Fall through to save
             else:
-                # ── PHASE 1: Prepare & Wipe ─────────────────────────────────
                 page_context = page.get_text()
-                processed_queue = []
 
-                for idx, block in enumerate(text_blocks):
-                    try:
-                        raw_rect = self.layout_detector.pixel_to_pdf_rect(
-                            block.bbox, page, block.page_width, block.page_height
-                        )
-                        raw_rect.intersect(page.rect)
+                if not is_complex_table:
+                    # ══════════════════════════════════════════════════════════
+                    # NORMAL MODE: Span-level precise bbox detection & refilling
+                    # Each span gets its EXACT original coordinates preserved.
+                    # ══════════════════════════════════════════════════════════
+                    span_queue = []  # list of {text, bbox (fitz.Rect), format_info}
 
-                        block_text = page.get_text("text", clip=raw_rect).strip()
-                        if not block_text:
+                    for pb in page.get_text("dict").get("blocks", []):
+                        if pb.get("type") != 0:
+                            continue
+                        block_rect = fitz.Rect(pb["bbox"])
+
+                        # Skip blocks that overlap with YOLO-protected areas (figures/formulas)
+                        block_area = block_rect.get_area()
+                        if any(
+                            block_area > 0
+                            and block_rect.intersects(p)
+                            and block_rect.intersect(p).get_area() / block_area > 0.10
+                            for p in protected_rects_pdf
+                        ):
                             continue
 
-                        # REMOVED strict is_numeric check to allow dates/titles to pass.
-                        if not block_text or len(block_text) < 1:
-                            continue
-                            
-                        # If the block has Chinese, it's a heading or description -> ALWAYS TRANSLATE.
-                        has_chinese = any("\u4e00" <= c <= "\u9fff" for c in block_text)
-                        is_technical = ("_" in block_text or (len(block_text) > 4 and block_text.isupper())) and not has_chinese
-                        
-                        if is_technical:
-                            # Only treat as missed table row if it's VERY near (8px)
-                            is_near_table = any(raw_rect.distance_to(p) < 8 for p in protected_rects_pdf)
-                            if is_near_table:
-                                continue
+                        for line in pb.get("lines", []):
+                            for span in line.get("spans", []):
+                                span_text = span.get("text", "").strip()
+                                if not span_text or len(span_text) < 2:
+                                    continue
+                                # Skip pure numbers/symbols
+                                if span_text.isdigit():
+                                    continue
+                                # Skip technical identifiers
+                                has_chinese = any("\u4e00" <= c <= "\u9fff" for c in span_text)
+                                is_technical = ("_" in span_text or (len(span_text) > 4 and span_text.isupper())) and not has_chinese
+                                if is_technical:
+                                    continue
 
-                        format_info = self._extract_format_info(page, raw_rect, block_type=block.type)
-                        processed_queue.append({
-                            "block": block,
-                            "raw_rect": raw_rect,
-                            "text": block_text,
-                            "format": format_info,
-                            "sort_key": raw_rect.y0,
-                        })
+                                span_rect = fitz.Rect(span["bbox"])
+                                if span_rect.is_empty or span_rect.width < 3 or span_rect.height < 3:
+                                    continue
 
-                        wipe_rect = self._get_precise_wipe_rect(page, raw_rect, margin=1)
-                        # fill=None for transparent redaction (removes strokes, keeps background)
-                        page.add_redact_annot(wipe_rect, fill=None)
+                                # Collect font info from span directly (most accurate)
+                                sz = span.get("size", 11)
+                                c = span.get("color", 0)
+                                color_tuple = (
+                                    ((c >> 16) & 0xFF) / 255.0,
+                                    ((c >> 8) & 0xFF) / 255.0,
+                                    (c & 0xFF) / 255.0,
+                                )
+                                is_bold = "bold" in span.get("font", "").lower()
+                                format_info = {
+                                    "font": "helv",
+                                    "fontsize": sz if sz >= 4 else 9,
+                                    "color": color_tuple,
+                                    "bold": is_bold,
+                                    "align": "left",
+                                }
+                                span_queue.append({
+                                    "text": span_text,
+                                    "rect": span_rect,
+                                    "format": format_info,
+                                    "sort_key": span_rect.y0,
+                                })
 
-                    except Exception as e:
-                        print(f"[PDF Layout] Page {page_num+1} Prep Block {idx}: {e}")
+                    span_queue.sort(key=lambda x: x["sort_key"])
+                    print(f"[PDF Layout] Page {page_num+1}: Span-level candidates: {len(span_queue)}", flush=True)
 
-                processed_queue.sort(key=lambda x: x["sort_key"])
-
-                try:
-                    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=False)
-                    print(
-                        f"[PDF Layout] Page {page_num+1}: Redactions applied ({len(processed_queue)} blocks)",
-                        flush=True,
-                    )
-                except Exception as redact_err:
-                    print(f"[PDF Layout] Page {page_num+1}: Redaction fallback — {redact_err}", flush=True)
-                    for item in processed_queue:
+                    # Wipe all spans at once
+                    for item in span_queue:
                         try:
-                            wipe_rect = self._get_precise_wipe_rect(page, item["raw_rect"], margin=1)
-                            page.draw_rect(wipe_rect, color=(1, 1, 1), fill=(1, 1, 1), fill_opacity=1)
+                            page.add_redact_annot(item["rect"], fill=None)
                         except Exception:
                             pass
 
-                # ── PHASE 2: Translate (Batch) & Render ──────────────────────
-                n_blocks = len(processed_queue)
-                print(
-                    f"[PDF Layout] Page {page_num+1}: Batch-translating {n_blocks} blocks...",
-                    flush=True,
-                )
-
-                all_texts = [item["text"] for item in processed_queue]
-
-                # Use batch func if available, otherwise fall back to sequential
-                if self.translate_batch_func and n_blocks > 1:
                     try:
-                        translations = await self.translate_batch_func(all_texts, target_lang, page_context)
-                    except Exception as batch_err:
-                        print(f"[PDF Layout] Batch translate error, falling back: {batch_err}", flush=True)
-                        translations = [await self.translate_func(t, target_lang, page_context) for t in all_texts]
+                        page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=False)
+                        print(f"[PDF Layout] Page {page_num+1}: Span redactions applied ({len(span_queue)} spans)", flush=True)
+                    except Exception as redact_err:
+                        print(f"[PDF Layout] Page {page_num+1}: Span redaction fallback — {redact_err}", flush=True)
+                        for item in span_queue:
+                            try:
+                                page.draw_rect(item["rect"], color=(1,1,1), fill=(1,1,1), fill_opacity=1)
+                            except Exception:
+                                pass
+
+                    # Batch translate all spans
+                    all_span_texts = [item["text"] for item in span_queue]
+                    print(f"[PDF Layout] Page {page_num+1}: Batch-translating {len(all_span_texts)} spans...", flush=True)
+
+                    if self.translate_batch_func and len(all_span_texts) > 1:
+                        try:
+                            span_translations = await self.translate_batch_func(all_span_texts, target_lang, page_context)
+                        except Exception as batch_err:
+                            print(f"[PDF Layout] Span batch translate error, fallback: {batch_err}", flush=True)
+                            span_translations = [await self.translate_func(t, target_lang, page_context) for t in all_span_texts]
+                    else:
+                        span_translations = [await self.translate_func(t, target_lang, page_context) for t in all_span_texts]
+
+                    # Refill each span at its original precise position
+                    for item, translated in zip(span_queue, span_translations):
+                        try:
+                            if not translated or not translated.strip():
+                                continue
+                            translated = translated.replace("<SKIP>", "").strip()
+                            if not translated or translated == item["text"]:
+                                continue
+                            self._insert_text_adaptive(
+                                page,
+                                item["rect"],
+                                translated,
+                                target_lang,
+                                item["format"],
+                                "text",
+                            )
+                        except Exception as render_err:
+                            print(f"[PDF Layout] Page {page_num+1} Span render error: {render_err}")
+
                 else:
-                    translations = [await self.translate_func(t, target_lang, page_context) for t in all_texts]
+                    # ══════════════════════════════════════════════════════════
+                    # COMPLEX TABLE MODE: Block-level YOLO detection & refilling
+                    # ══════════════════════════════════════════════════════════
+                    processed_queue = []
 
-                for i, (item, translated_text) in enumerate(zip(processed_queue, translations)):
+                    for idx, block in enumerate(text_blocks):
+                        try:
+                            raw_rect = self.layout_detector.pixel_to_pdf_rect(
+                                block.bbox, page, block.page_width, block.page_height
+                            )
+                            raw_rect.intersect(page.rect)
+
+                            block_text = page.get_text("text", clip=raw_rect).strip()
+                            if not block_text or len(block_text) < 1:
+                                continue
+
+                            has_chinese = any("\u4e00" <= c <= "\u9fff" for c in block_text)
+                            is_technical = ("_" in block_text or (len(block_text) > 4 and block_text.isupper())) and not has_chinese
+                            if is_technical:
+                                is_near_table = any(raw_rect.distance_to(p) < 8 for p in protected_rects_pdf)
+                                if is_near_table:
+                                    continue
+
+                            format_info = self._extract_format_info(page, raw_rect, block_type=block.type)
+                            processed_queue.append({
+                                "block": block,
+                                "raw_rect": raw_rect,
+                                "text": block_text,
+                                "format": format_info,
+                                "sort_key": raw_rect.y0,
+                            })
+
+                            wipe_rect = self._get_precise_wipe_rect(page, raw_rect, margin=1)
+                            page.add_redact_annot(wipe_rect, fill=None)
+
+                        except Exception as e:
+                            print(f"[PDF Layout] Page {page_num+1} Prep Block {idx}: {e}")
+
+                    processed_queue.sort(key=lambda x: x["sort_key"])
+
                     try:
-                        if not translated_text or not translated_text.strip():
-                            continue
-
-                        # Intercept the <SKIP> token from LLM for meaningless fragments
-                        translated_text = translated_text.replace("<SKIP>", "").strip()
-                        if not translated_text:
-                            continue
-
-                        # REMOVED length filter (len > 10 etc.) to ensure short headers/dates remain visible.
-                        if translated_text.strip() == item["text"]:
-                            continue
-                        if translated_text.strip() == item["text"]:
-                            continue
-
-                        self._insert_text_adaptive(
-                            page,
-                            item["raw_rect"],
-                            translated_text,
-                            target_lang,
-                            item["format"],
-                            item["block"].type,
+                        page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=False)
+                        print(
+                            f"[PDF Layout] Page {page_num+1}: Redactions applied ({len(processed_queue)} blocks)",
+                            flush=True,
                         )
-                    except Exception as render_err:
-                        print(f"[PDF Layout] Page {page_num+1} Render Item {i}: {render_err}")
+                    except Exception as redact_err:
+                        print(f"[PDF Layout] Page {page_num+1}: Redaction fallback — {redact_err}", flush=True)
+                        for item in processed_queue:
+                            try:
+                                wipe_rect = self._get_precise_wipe_rect(page, item["raw_rect"], margin=1)
+                                page.draw_rect(wipe_rect, color=(1, 1, 1), fill=(1, 1, 1), fill_opacity=1)
+                            except Exception:
+                                pass
+
+                    # ── PHASE 2: Translate (Batch) & Render ──────────────────────
+                    n_blocks = len(processed_queue)
+                    print(
+                        f"[PDF Layout] Page {page_num+1}: Batch-translating {n_blocks} blocks...",
+                        flush=True,
+                    )
+
+                    all_texts = [item["text"] for item in processed_queue]
+
+                    # Use batch func if available, otherwise fall back to sequential
+                    if self.translate_batch_func and n_blocks > 1:
+                        try:
+                            translations = await self.translate_batch_func(all_texts, target_lang, page_context)
+                        except Exception as batch_err:
+                            print(f"[PDF Layout] Batch translate error, falling back: {batch_err}", flush=True)
+                            translations = [await self.translate_func(t, target_lang, page_context) for t in all_texts]
+                    else:
+                        translations = [await self.translate_func(t, target_lang, page_context) for t in all_texts]
+
+                    for i, (item, translated_text) in enumerate(zip(processed_queue, translations)):
+                        try:
+                            if not translated_text or not translated_text.strip():
+                                continue
+
+                            # Intercept the <SKIP> token from LLM for meaningless fragments
+                            translated_text = translated_text.replace("<SKIP>", "").strip()
+                            if not translated_text:
+                                continue
+
+                            if translated_text.strip() == item["text"]:
+                                continue
+
+                            self._insert_text_adaptive(
+                                page,
+                                item["raw_rect"],
+                                translated_text,
+                                target_lang,
+                                item["format"],
+                                item["block"].type,
+                            )
+                        except Exception as render_err:
+                            print(f"[PDF Layout] Page {page_num+1} Render Item {i}: {render_err}")
 
         except Exception as page_error:
             print(

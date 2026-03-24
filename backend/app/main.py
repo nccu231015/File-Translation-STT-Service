@@ -595,44 +595,40 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                                             # Recurse for nested tables
                                             apply_style(cell, f"{key}_")
                         
-                        apply_style(doc)
-                        doc.save(docx_path)
-                        
+                if is_complex_table_bool:
+                    # Complex mode: apply table translations then convert DOCX -> PDF (overwrites the layout-preserved PDF)
                     await run_in_threadpool(_apply_docx_tables)
                     print(f"[PDF-DOCX] Applied {len(translation_cache)} translations to DOCX tables.", flush=True)
+                    
+                    with open(docx_path, 'rb') as f:
+                        docx_b64 = base64.b64encode(f.read()).decode('utf-8')
 
-                with open(docx_path, 'rb') as f:
-                    docx_b64 = base64.b64encode(f.read()).decode('utf-8')
-
-                # ---- Stage 3: Convert DOCX to Final PDF ----
-                def _docx_to_pdf():
-                    try:
-                        if platform.system() == "Windows":
-                            if docx2pdf_convert:
-                                docx2pdf_convert(docx_path, output_pdf_path)
+                    # Stage 3: Convert translated DOCX back to PDF
+                    def _docx_to_pdf():
+                        try:
+                            if platform.system() == "Windows":
+                                if docx2pdf_convert:
+                                    docx2pdf_convert(docx_path, output_pdf_path)
+                                else:
+                                    print("[PDF-DOCX] docx2pdf library not found on Windows.", flush=True)
                             else:
-                                print("[PDF-DOCX] docx2pdf library not found on Windows.", flush=True)
-                        else:
-                            subprocess.run(['libreoffice', '--headless', '--convert-to', 'pdf', '--outdir', os.path.dirname(output_pdf_path), docx_path], check=True)
-                    except Exception as e:
-                        print(f"[PDF-DOCX] Docx to PDF failed: {e}", flush=True)
+                                subprocess.run(['libreoffice', '--headless', '--convert-to', 'pdf', '--outdir', os.path.dirname(output_pdf_path), docx_path], check=True)
+                        except Exception as e:
+                            print(f"[PDF-DOCX] Docx to PDF failed: {e}", flush=True)
 
-                await run_in_threadpool(_docx_to_pdf)
-                
-                # If we skipped stage 2 docx translation, the resulting docx is just a format conversion
-                # of the translated PDF. So output_pdf_path already contains the translation. We don't need
-                # to read it back from the docx-to-pdf step unless needed, but docx_to_pdf overwrites it anyway.
-                # Actually, if we didn't do stage 2, docx_to_pdf just converts the same DOCX back to PDF, 
-                # which is redundant but safe. We can skip docx_to_pdf if not is_complex_table_bool.
-                if is_complex_table_bool:
                     await run_in_threadpool(_docx_to_pdf)
+
+                    # Reload the re-rendered PDF
+                    if os.path.exists(output_pdf_path):
+                        with open(output_pdf_path, 'rb') as f:
+                            pdf_b64 = base64.b64encode(f.read()).decode('utf-8')
                 else:
-                    print("[PDF-DOCX] Skipping docx_to_pdf conversion since stage 2 was bypassed.", flush=True)
-                
-                # Reload the completely translated PDF
-                if os.path.exists(output_pdf_path):
-                    with open(output_pdf_path, 'rb') as f:
-                        pdf_b64 = base64.b64encode(f.read()).decode('utf-8')
+                    # Normal mode: DOCX is just the pdf2docx conversion of the already-translated PDF.
+                    # No stage 2 table translation, no docx->pdf roundtrip (avoids layout corruption).
+                    # The original layout-preserved PDF from stage 1 is already in pdf_b64.
+                    print("[PDF-DOCX] Normal mode: skipping table re-translation and docx->pdf roundtrip.", flush=True)
+                    with open(docx_path, 'rb') as f:
+                        docx_b64 = base64.b64encode(f.read()).decode('utf-8')
 
                 background_tasks.add_task(os.remove, docx_path)
             except Exception as docx_err:
