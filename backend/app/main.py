@@ -570,6 +570,7 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                                                         if run.text:
                                                             try:
                                                                 run.font.name = 'Arial'
+                                                                run.font.size = Pt(11)
                                                                 run._element.rPr.rFonts.set(qn('w:eastAsia'), '微軟正黑體')
                                                             except Exception:
                                                                 pass
@@ -593,6 +594,9 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
 
                                             # Recurse for nested tables
                                             apply_style(cell, f"{key}_")
+                        
+                        apply_style(doc)
+                        doc.save(docx_path)
                         
                 if is_complex_table_bool:
                     # Complex mode: apply table translations then convert DOCX -> PDF (overwrites the layout-preserved PDF)
