@@ -569,6 +569,7 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                                                     for run in first_para.runs:
                                                         if run.text:
                                                             try:
+                                                                run.font.name = 'Arial'
                                                                 run._element.rPr.rFonts.set(qn('w:eastAsia'), '微軟正黑體')
                                                             except Exception:
                                                                 pass
