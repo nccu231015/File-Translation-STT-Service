@@ -158,14 +158,13 @@ class FactorySqlTools:
         else:
             time_cond = f"PRO_TIME = '{target_date}'"
 
-        # 欄位映射依據 Daily_Status_Report 表結構：
-        # REJECT_RATE: 不良率 (十進位) (需使用 AVG)
+        # BAD_PRO_RATE: 業主定義之不良指標 (需使用 SUM 累加)
         # ACHIEVING_RATE: 達成率 (十進位) (需使用 AVG)
         # LOST_TIME_PRO_RATE: 損失工時總和 (需使用 SUM)
         configs = {
             "top_achieving": {"col": "ACHIEVING_RATE", "order": "DESC", "label": "達成率", "agg": "AVG"},
             "lagging": {"col": "ACHIEVING_RATE", "order": "ASC", "label": "達成率(落後)", "agg": "AVG"},
-            "abnormal": {"col": "REJECT_RATE", "order": "DESC", "label": "機台不良率(%)", "agg": "AVG"},
+            "abnormal": {"col": "BAD_PRO_RATE", "order": "DESC", "label": "不良數量", "agg": "SUM"},
             "downtime": {"col": "LOST_TIME_PRO_RATE", "order": "DESC", "label": "損失工時(總分)", "agg": "SUM"},
             "unachieved": {"col": "ACHIEVING_RATE", "order": "ASC", "label": "達成率", "agg": "AVG"},
         }
@@ -176,17 +175,29 @@ class FactorySqlTools:
         label = c["label"]
         agg_func = c["agg"]
         
-        query = f"""
-            SELECT TOP 10 
-                jz as [機種],
-                [NO] as [產線],
-                [WORK_ORDER_NO] as [工單],
-                {agg_func}({sql_col}) as [KPI數值]
-            FROM [dbo].[Daily_Status_Report]
-            WHERE {time_cond} AND [NO] IS NOT NULL
-            GROUP BY jz, [NO], [WORK_ORDER_NO]
-            ORDER BY [KPI數值] {sql_order}
-        """
+        # 異常排行榜需與指定內容一致
+        if kpi_type == "abnormal":
+            query = f"""
+                SELECT 
+                TOP 10
+                jz, sum(BAD_PRO_RATE) as blsl
+                FROM [dbo].[Daily_Status_Report] 
+                WHERE {time_cond} AND BAD_PRO_RATE > 0
+                GROUP BY jz, BAD_PRO_RATE
+                ORDER BY BAD_PRO_RATE DESC
+            """
+        else:
+            query = f"""
+                SELECT TOP 10 
+                    jz as [機種],
+                    [NO] as [產線],
+                    [WORK_ORDER_NO] as [工單],
+                    {agg_func}({sql_col}) as [KPI數值]
+                FROM [dbo].[Daily_Status_Report]
+                WHERE {time_cond} AND [NO] IS NOT NULL
+                GROUP BY jz, [NO], [WORK_ORDER_NO]
+                ORDER BY [KPI數值] {sql_order}
+            """
         result = self._execute_mssql_query(query)
         
         # 建立強制性的工具回報警告，防止較小的 LLM 出現資料幻覺
@@ -241,33 +252,45 @@ class FactorySqlTools:
         query = f"""
         WITH src AS (
             SELECT
-                a.jcgx [檢查工序], a.ljfl [零件分類], a.bllt [不良型態], a.blwz [不良位置],
+                a.jcgx [檢查工序],
+                a.ljfl [零件分類],
+                a.bllt [不良型態],
+                a.blwz [不良位置],
                 SUM(a.blsl) AS [不良品數量]
             FROM [dbo].[blpjl_new_copy1] a
             WHERE a.blsl > 0
             AND NOT( 
-                (jcgx ='設備判定 (CCD/成測)' and ljfl ='成品') 
+                jcgx ='設備判定 (CCD/成測)' and ljfl ='成品' 
                 or (a.jcgx='分析 (設備判定異常品)' AND a.ljfl ='重測/復判後OK數量') 
                 or (jcgx ='設備判定 (CCD/成測)' and ljfl ='成品' and bllt is null)
                 or (ljfl in('重測/復判後OK數量','其他復判後OK數量'))
             )
-            AND gdhm = '{work_order}' AND {date_cond}
+            AND gdhm = '{work_order}'
+            AND {date_cond}
             GROUP BY jcgx, ljfl, bllt, blwz
         ),
         calc AS (
             SELECT DISTINCT *, 
-                零件分類 + ' / ' + 不良型態 AS [分類_型態],
+                零件分類+' / '+不良型態 AS [分類_型態],
                 SUM(不良品數量) OVER () AS [總計],
                 ROUND(1.0 * 不良品數量 / NULLIF(SUM(不良品數量) OVER (), 0), 2) AS [個別佔比],
                 ROW_NUMBER() OVER (ORDER BY 不良品數量 DESC) AS [列序號],
                 CAST(不良品數量 AS DECIMAL(18,6)) / NULLIF(SUM(不良品數量) OVER (), 0) AS ratio
             FROM src
         )
-        SELECT 列序號, 檢查工序, 分類_型態,
-            CAST(列序號 AS varchar(3)) + ' ' + 不良位置 AS [位置_備註],
-            不良品數量, 個別佔比, '不良品紀錄' jllb,
-            ROUND(SUM(ratio) OVER (ORDER BY 不良品數量 DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW), 2) AS [累積百分比]
-        FROM calc ORDER BY 不良品數量 DESC
+        SELECT
+            列序號,
+            檢查工序,
+            分類_型態,
+            CAST(列序號 AS varchar(3))+' '+ 不良位置 AS [位置_備註],
+            不良品數量,
+            個別佔比,
+            '不良品紀錄' jllb,
+            ROUND(
+                SUM(ratio) OVER (ORDER BY 不良品數量 DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW), 2 
+            ) AS [累積百分比]
+        FROM calc
+        ORDER BY 不良品數量 DESC
         """
         result = self._execute_mssql_query(query)
         return {"status": "success", "work_order": work_order, "data": result}
