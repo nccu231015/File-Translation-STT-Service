@@ -159,16 +159,26 @@ class PDFLayoutDetectorYOLO:
         """
         h, w = image.shape[:2]
         
-        # Official inference call
-        # Source: pdf_extract_kit/tasks/layout_detection/models/yolo.py#L56
-        results = self.model.predict(
-            image, 
-            imgsz=self.img_size,
-            conf=self.conf_thres,
-            iou=self.iou_thres,
-            verbose=False,
-            device='cuda'  # Explicitly use CUDA
-        )[0]
+        try:
+            results = self.model.predict(
+                image, 
+                imgsz=self.img_size,
+                conf=0.05,  # 內部用極低門檣擷取原始結果，再由我們手動過濾
+                iou=self.iou_thres,
+                verbose=False,
+                device='cuda'
+            )[0]
+        except Exception as e:
+            print(f"[DocLayout-YOLO] CUDA inference FAILED: {e}", flush=True)
+            print(f"[DocLayout-YOLO] Retrying on CPU...", flush=True)
+            results = self.model.predict(
+                image,
+                imgsz=self.img_size,
+                conf=0.05,
+                iou=self.iou_thres,
+                verbose=False,
+                device='cpu'
+            )[0]
         
         # Official result parsing
         # Source: Same file, lines 63-65
@@ -204,6 +214,18 @@ class PDFLayoutDetectorYOLO:
         if abandon_count > 0:
             print(f"[DocLayout-YOLO] Passed-through {abandon_count} 'abandon' regions for rescue check", flush=True)
         
+        # 加入原始結果詳細 log，方便調機
+        all_raw = [(self.id_to_names.get(int(c), 'unknown'), float(s)) 
+                   for c, s in zip(classes, scores)]
+        above_thresh = [(t, round(s, 3)) for t, s in all_raw if s >= self.conf_thres]
+        below_thresh = [(t, round(s, 3)) for t, s in all_raw if s < self.conf_thres]
+        if below_thresh:
+            print(f"[DocLayout-YOLO] Filtered out (conf < {self.conf_thres}): {below_thresh[:10]}", flush=True)
+        if above_thresh:
+            print(f"[DocLayout-YOLO] Passed conf filter: {above_thresh}", flush=True)
+        
+        # 只保留信心度 >= conf_thres 的 block
+        blocks = [b for b in blocks if b.confidence >= self.conf_thres]
         print(f"[DocLayout-YOLO] Detected {len(blocks)} blocks (including abandon candidates)", flush=True)
         return blocks
     
