@@ -526,15 +526,29 @@ class PDFLayoutPreservingService:
         target_align = align_map.get(format_info.get("align", "left"), fitz.TEXT_ALIGN_LEFT)
 
         try:
-            # We try fitting the text natively first.
-            # Allow the textbox to expand downward by 50% to accommodate line-wrapped Chinese text.
+            # First attempt: Try to fit in the ORIGINAL rectangle with font shrinking.
+            for fs in range(int(original_size + 1), 3, -1):
+                rc = page.insert_textbox(
+                    rect, 
+                    text, 
+                    fontsize=fs, 
+                    fontname=font_name,
+                    color=format_info["color"],
+                    align=target_align
+                )
+                if rc >= 0:
+                    return
+
+            # Second attempt: If it doesn't fit, allow a VERY TINY vertical expansion 
+            # (max 6 points or 15%) to avoid overlapping the next line of text.
+            tiny_expansion = min(6, rect.height * 0.15)
             expanded_rect = fitz.Rect(
                 rect.x0, 
                 rect.y0, 
                 rect.x1, 
-                rect.y1 + max(20, rect.height * 0.5)
+                rect.y1 + tiny_expansion
             )
-            for fs in range(int(original_size + 1), 3, -1):
+            for fs in range(int(original_size), 3, -1):
                 rc = page.insert_textbox(
                     expanded_rect, 
                     text, 
