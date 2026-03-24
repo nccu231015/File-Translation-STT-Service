@@ -370,8 +370,7 @@ class FactorySqlTools:
         
     def get_defect_rate_anomaly_report(self, target_date: str = None, lookback_days: int = 7) -> Dict[str, Any]:
         """
-        不良率異常分析: 跨表聯集 Daily_Status_Report(產出) 與 blpjl_new_copy1(不良)，計算跨日真實不良率。
-        解決只看「數量」而忽視「產量基數」造成的偏差。
+        不良率異常分析: 讀取 Daily_Status_Report，比對產線今日不良率百分比（不良數量/總產量）與過去 N 天的平均不良率。
         """
         import datetime
         if not target_date:
