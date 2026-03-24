@@ -107,21 +107,7 @@ class SqlAgent:
                     }
                 }
             },
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_downtime_cause_analysis",
-                    "description": "對特定工單進行【停機時間統計、原因分析】。包含停機類別、責任單位、占比與累積占比。",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "work_order": {"type": "string", "description": "工單號碼，如 'N511-2512150027'"},
-                            "target_date": {"type": "string", "description": "查詢日期，例如 '2026-03-06'。"}
-                        },
-                        "required": ["work_order"]
-                    }
-                }
-            },
+
             {
                 "type": "function",
                 "function": {
@@ -192,7 +178,7 @@ class SqlAgent:
 規範：
 1. **明細紀錄與原因查詢**：
    - 詢問「不良紀錄明細、缺陷位置、Pareto」，請調用 `get_line_defect_records` 或 `get_defect_pareto_analysis`。
-   - 詢問「停機紀錄明細、具體停機原因、責任單位分析」，請調用 `get_line_downtime_records` 或 `get_downtime_cause_analysis`。
+   - 詢問「停機紀錄明細、具體停機時間」，請調用 `get_line_downtime_records`。
 2. **趨勢分析、月/週報表與異常對比 (高階分析)**：
    - 詢問「今天產線不良『數量』是否異常？」，調用 `get_defect_anomaly_report`。
    - 詢問「今天產線不良『率』是否異常？」或「對比最近7天的日均不良率」，必須調用 `get_defect_rate_anomaly_report`。

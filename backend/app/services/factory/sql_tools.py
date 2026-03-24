@@ -6,6 +6,12 @@ from .db_config import MSSQL_CONFIG, POSTGRES_CONFIG
 from decimal import Decimal
 import datetime
 
+from .sql_pg_queries import (
+    _get_query_1_production_status,
+    _get_query_2_failure_trend,
+    _get_query_3_downtime_stats
+)
+
 def _sanitize(row: dict) -> dict:
     """
     Convert non-JSON-serializable types to safe Python equivalents.
@@ -293,37 +299,6 @@ class FactorySqlTools:
         result = self._execute_mssql_query(query)
         return {"status": "success", "work_order": work_order, "data": result}
 
-    def get_downtime_cause_analysis(self, work_order: str, target_date: str = None) -> Dict[str, Any]:
-        """
-        停機時間統計與原因分析 (對齊專家範例)
-        使用 tjsjjl_new_copy1
-        """
-        date_cond = f"PRO_TIME='{target_date}'" if target_date else "PRO_TIME=CONVERT(date, GETDATE())"
-        query = f"""
-        WITH base AS (
-            SELECT DISTINCT 
-                a.tjlb as [停機類別], a.zrdw as [責任單位], a.tjxz as [停機細項],
-                count(*) OVER (PARTITION by a.tjlb, a.zrdw, a.tjxz) as [分組項次],
-                SUM(a.tjsj) OVER() as [總停機時間],
-                SUM(a.tjsj) OVER (PARTITION by a.tjlb, a.zrdw, a.tjxz) as [停機時間],
-                CAST(SUM(a.tjsj) OVER (PARTITION by a.tjlb, a.zrdw, a.tjxz) AS float) / 
-                NULLIF(CAST(SUM(a.tjsj) OVER() AS float), 0) as [個別占比]
-            FROM [dbo].[tjsjjl_new_copy1] a
-            WHERE 1=1 AND gdhm='{work_order}' AND {date_cond} AND tjsj > 0
-            AND NOT (
-                (a.tjlb='不良品分析(分)' AND zrdw='製造' AND tjxz='「備註」載明：分析多少pcs')
-                OR (a.tjlb='值日生' AND zrdw='製造' AND tjxz='「備註」載明：姓名&幾人')
-            )
-        ),
-        answer AS (
-            SELECT *, ROW_NUMBER() OVER(ORDER BY [停機時間] DESC) as t_row FROM base 
-        )
-        SELECT *, SUM(個別占比) OVER (ORDER BY t_row) as [累積占比]
-        FROM answer ORDER BY 停機時間 DESC
-        """
-        res = self._execute_mssql_query(query)
-        return {"status": "success", "work_order": work_order, "data": res}
-
     def get_defect_anomaly_report(self, target_date: str = None, lookback_days: int = 30, limit: int = 10) -> Dict[str, Any]:
         """
         跨日不良異常分析: 比對產線今日的不良數與過去 N 天的平均不良數。
@@ -478,6 +453,30 @@ class FactorySqlTools:
         date_val = f"'{target_date}'" if target_date else "TO_CHAR(CURRENT_DATE, 'YYYYMMDD')"
         query = f"SELECT distinct \"TOPIC\" FROM \"public\".\"CIM_MQTTCOLLECT\" WHERE \"YMD\"={date_val} AND CAST(\"CODEVALUE\" AS NUMERIC)>0"
         return {"status": "success", "data": self._execute_postgres_query(query)}
+
+    def get_equipment_by_floor(self, floor: str) -> Dict[str, Any]:
+        """ PostgreSQL 查詢: 根據安裝地點樓層獲取設備配置資料 """
+        query = f"SELECT * FROM \"public\".\"EQUIPMENT_INFO_DICT\" WHERE \"EQUIP_INSTALL_POSITION\"='{floor}'"
+        return {"status": "success", "floor": floor, "data": self._execute_postgres_query(query)}
+        
+    def get_equipment_production_status(self, target_date: str = None) -> Dict[str, Any]:
+        """ PostgreSQL 查詢: 依據日期抓取生產設備的運行狀況、總結良率等等 """
+        import datetime
+        if not target_date:
+            target_date = datetime.date.today().isoformat()
+        query = _get_query_1_production_status(target_date)
+        return {"status": "success", "target_date": target_date, "data": self._execute_postgres_query(query)}
+
+    def get_equipment_failure_trend(self, start_date: str, end_date: str) -> Dict[str, Any]:
+        """ PostgreSQL 查詢: 故障趨勢，依據時間範圍抓取各設備的故障次數與代碼 """
+        query = _get_query_2_failure_trend(start_date, end_date)
+        return {"status": "success", "start_date": start_date, "end_date": end_date, "data": self._execute_postgres_query(query)}
+
+    def get_equipment_downtime_stats(self, start_date: str, end_date: str) -> Dict[str, Any]:
+        """ PostgreSQL 查詢: 停機時間深入統計 (RUN, IDEL, DOWN, SHUTDOWN, 故障次數, 產量) 等等 """
+        query = _get_query_3_downtime_stats(start_date, end_date)
+        return {"status": "success", "start_date": start_date, "end_date": end_date, "data": self._execute_postgres_query(query)}
+
 
     def _execute_postgres_query(self, query: str) -> List[Dict[str, Any]]:
         try:
