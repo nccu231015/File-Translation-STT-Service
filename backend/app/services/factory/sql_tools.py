@@ -413,6 +413,43 @@ class FactorySqlTools:
         result = self._execute_mssql_query(query)
         return {"status": "success", "target_date": target_date, "lookback_days": lookback_days, "data": result}
         
+    def get_downtime_trend_report(self, target_date: str = None, lookback_days: int = 7) -> Dict[str, Any]:
+        """
+        跨日「停機趨勢」分析: 回溯過去 N 天，按類別、單位統計總停機時間與占比。
+        產出數據：停機類別、責任單位、總停機時間(分)、歷史占比。
+        """
+        import datetime
+        if not target_date:
+            target_date = datetime.date.today().isoformat()
+            
+        query = f"""
+        WITH range_data AS (
+            SELECT 
+                a.tjlb as [停機類別], 
+                a.zrdw as [責任單位], 
+                SUM(a.tjsj) as [總停機時間(分)]
+            FROM [dbo].[tjsjjl_new_copy1] a
+            WHERE CAST(a.PRO_TIME AS DATE) >= DATEADD(day, -{lookback_days}, CAST('{target_date}' AS DATE)) 
+              AND CAST(a.PRO_TIME AS DATE) <= CAST('{target_date}' AS DATE)
+              AND a.tjsj > 0 AND a.gdhm <> 'undefined'
+              AND NOT (
+                (a.tjlb='不良品分析(分)' AND zrdw='製造' AND tjxz='「備註」載明：分析多少pcs')
+                OR (a.tjlb='值日生' AND zrdw='製造' AND tjxz='「備註」載明：姓名&幾人')
+              )
+            GROUP BY a.tjlb, a.zrdw
+        ),
+        totals AS (
+            SELECT SUM([總停機時間(分)]) as grand_total FROM range_data
+        )
+        SELECT 
+            r.*,
+            CASE WHEN t.grand_total = 0 THEN 0 ELSE ROUND(CAST(r.[總停機時間(分)] AS FLOAT) / t.grand_total * 100, 2) END as [累積占比百分比]
+        FROM range_data r, totals t
+        ORDER BY [總停機時間(分)] DESC
+        """
+        result = self._execute_mssql_query(query)
+        return {"status": "success", "target_date": target_date, "lookback_days": lookback_days, "data": result}
+        
     def get_active_equipment(self, target_date: str = None) -> Dict[str, Any]:
         """ PostgreSQL 查詢: 當前稼動設備。 """
         date_val = f"'{target_date}'" if target_date else "TO_CHAR(CURRENT_DATE, 'YYYYMMDD')"

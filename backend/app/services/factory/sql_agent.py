@@ -147,6 +147,20 @@ class SqlAgent:
                         }
                     }
                 }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_downtime_trend_report",
+                    "description": "跨日『停機趨勢』分析：自動回溯過去 N 天，彙整各類別、責任單位的總停機時間與累積占比百分點。適合回答：『上週設備故障趨勢為何？』、『過去七天哪一類停機最久？』。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "target_date": {"type": "string", "description": "目前的查詢日期，例如 '2026-03-24'。"},
+                            "lookback_days": {"type": "integer", "description": "要回溯統計的天數，預設為 7。"}
+                        }
+                    }
+                }
             }
         ]
 
@@ -174,7 +188,11 @@ class SqlAgent:
 2. **明細紀錄與原因查詢**：
    - 詢問「不良紀錄明細、缺陷位置、Pareto」，請調用 `get_line_defect_records` 或 `get_defect_pareto_analysis`。
    - 詢問「停機紀錄明細、具體停機原因、責任單位分析」，請調用 `get_line_downtime_records` 或 `get_downtime_cause_analysis`。
-3. **KPI 指標與異常排行 (關鍵)**：
+3. **趨勢分析、月/週報表與異常對比 (高階分析)**：
+   - 詢問「今天產線不良『數量』是否異常？」，調用 `get_defect_anomaly_report`。
+   - 詢問「今天產線不良『率』是否異常？」或「對比最近7天的日均不良率」，必須調用 `get_defect_rate_anomaly_report`。
+   - 詢問「上週設備故障趨勢」、「分析過去n天停機狀況」，**必須調用 `get_downtime_trend_report`** 以取得多日聚合數據。
+4. **KPI 指標與即時排行 (基礎統計)**：
    - 詢問「正在生產的工單清單、哪些機種開工、今日開工概況」，**必須**調用 `get_production_overview`。
    - 詢問「工單生產數量、目標數與實際數統計」，才調用 `get_workorder_quantity`。
    - 詢問「停機時間異常、誰停機最久、停機時間排行」，必須調用 `get_kpi_ranking(kpi_type='downtime')`。
