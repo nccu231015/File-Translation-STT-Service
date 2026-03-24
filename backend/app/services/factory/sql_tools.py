@@ -188,10 +188,18 @@ class FactorySqlTools:
             ORDER BY [KPI數值] {sql_order}
         """
         result = self._execute_mssql_query(query)
+        
+        # 建立強制性的工具回報警告，防止較小的 LLM 出現資料幻覺
+        warning_msg = (
+            "【系統強制警告】：1. 以下資料僅為排行前 10 名 (TOP 10) 的極端數據，絕不可宣稱『全廠共計 10 條產線』。"
+            " 2. 若此為『達成率』排行，工廠達標標準為 1.0 (100%)。若數值皆小於 1.0，則這 10 條全為嚴重未達標，嚴禁說它們『表現良好』或『高於目標』。"
+        )
+        
         return {
             "status": "success", 
             "kpi_target": label, 
             "lookback_days": lookback_days, 
+            "metadata_warning": warning_msg,
             "data": result
         }
 
