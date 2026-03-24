@@ -22,13 +22,12 @@ services:
       # Each page opens its own fitz.Document (thread-safe) and saves a temp PDF;
       # results are merged in order at the end.
       # A40 (48 GB VRAM) comfortably handles 2 concurrent pages + YOLO + Whisper.
-      - PDF_PARALLEL_PAGES=2
+      - PDF_PARALLEL_PAGES=10
       # ── NOTE: Ollama runs on the HOST, not in this container. ──────────────
-      # To enable parallel LLM calls, set on the HOST before starting Ollama:
-      #   export OLLAMA_NUM_PARALLEL=3   (A40 48 GB can handle 3x gpt-oss:20b)
+      # EXTREME MODE: Optimized for 48GB VRAM (A40/A6000)
+      #   export OLLAMA_NUM_PARALLEL=16  (Handle 16 simultaneous requests)
+      #   export OLLAMA_MAX_LOADED_MODELS=3
       #   sudo systemctl restart ollama
-      # OR if Ollama is managed via another docker-compose, add to its env:
-      #   OLLAMA_NUM_PARALLEL=3
     volumes:
       - ./backend/app:/app/app
     restart: always

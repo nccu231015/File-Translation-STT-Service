@@ -7,7 +7,7 @@ import uuid
 from typing import Callable
 
 from .pdf_layout_detector_yolo import LayoutBlock
-
+from fastapi.concurrency import run_in_threadpool
 
 class PDFLayoutPreservingService:
     """
@@ -27,6 +27,14 @@ class PDFLayoutPreservingService:
         self.translate_func = translate_func
         self.translate_batch_func = translate_batch_func
         self.layout_detector = layout_detector
+        
+        # ── GLOBAL RESOURCE THROTTLING ──────────────────────────────────────────
+        # We cap GLOBAL translation concurrency at PDF_PARALLEL_PAGES (e.g. 10).
+        # This ensures that even with multiple translation tasks running, 
+        # translation NEVER exceeds its quota, leaving room for RAG/SQL/STT.
+        parallel = int(os.getenv("PDF_PARALLEL_PAGES", "10"))
+        self.semaphore = asyncio.Semaphore(parallel)
+        print(f"[PDF Layout] Global Throttling: Concurrent Page Limit set to {parallel}", flush=True)
 
     # ──────────────────────────────────────────────────────────────────────────
     # Public entry point
@@ -49,17 +57,13 @@ class PDFLayoutPreservingService:
         with fitz.open(input_path) as probe:
             total_pages = len(probe)
 
-        parallel = int(os.getenv("PDF_PARALLEL_PAGES", "2"))
-        semaphore = asyncio.Semaphore(parallel)
-
         print(
-            f"[PDF Layout] Starting translation: {total_pages} pages, "
-            f"{parallel} concurrent (Target: {target_lang}, Debug: {debug_mode})",
+            f"[PDF Layout] Starting translation: {total_pages} pages (Global Capacity: {self.semaphore._value})",
             flush=True,
         )
 
         async def bounded(page_num: int):
-            async with semaphore:
+            async with self.semaphore:
                 return await self._process_single_page(
                     input_path, page_num, total_pages, target_lang, debug_mode
                 )
@@ -128,8 +132,9 @@ class PDFLayoutPreservingService:
 
         try:
             # ── STEP 1: YOLO — detect protected areas ──────────────────────
-            print(f"[PDF Layout] Page {page_num+1}: YOLO detecting protected areas...", flush=True)
-            layout_blocks = self.layout_detector.detect_layout(
+            print(f"[PDF Layout] Page {page_num+1}: YOLO detecting protected areas (Async)...", flush=True)
+            layout_blocks = await run_in_threadpool(
+                self.layout_detector.detect_layout,
                 input_path, page_num, page.rect.width, page.rect.height
             )
 
