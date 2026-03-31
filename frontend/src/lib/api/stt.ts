@@ -56,3 +56,27 @@ export const analyzeMeetingAudio = async (file: File): Promise<STTResponse> => {
         throw error;
     }
 };
+
+export const transcribeAudio = async (file: File): Promise<{transcription: {text: string}}> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('mode', 'stt_only');
+
+    const BACKEND_URL = "http://172.16.2.68:8000";
+    try {
+        const response = await fetch(`${BACKEND_URL}/stt`, {
+            method: 'POST',
+            body: formData,
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`STT Transcription failed: ${response.status} ${errorText}`);
+        }
+
+        return response.json();
+    } catch (error) {
+        console.error("Transcription call failed:", error);
+        throw error;
+    }
+};

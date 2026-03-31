@@ -6,11 +6,12 @@ import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import {
     Send, Loader2, Database, Bot, User as UserIcon,
-    PlusCircle, Trash2, MessageSquare, ChevronRight
+    PlusCircle, Trash2, MessageSquare, ChevronRight, Mic, Square
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
+import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     askFactory, listFactorySessions, getFactorySession, deleteFactorySession,
@@ -37,6 +38,11 @@ export function QAInterface() {
     };
     const [isLoading, setIsLoading] = useState(false);
     const [scope, setScope] = useState<'產線' | '設備'>('產線');
+
+    // Voice Input State
+    const [isRecording, setIsRecording] = useState(false);
+    const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+    const audioChunksRef = useRef<Blob[]>([]);
 
     // Session state
     const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
@@ -82,7 +88,6 @@ export function QAInterface() {
             `今日 (${today}) 產線開工與工單狀況？`,
             '分析目前正在生產業績最好與最差的機種',
             '哪些設備現在處於停機 (DOWN) 狀態？',
-            '分析上週設備故障的主要趨勢',
         ]);
         
         // 3. 恢復輸入框文字（切換分頁後不遺失）
@@ -173,6 +178,60 @@ export function QAInterface() {
         } catch (err) {
             console.error("Delete failed", err);
             alert("刪除失敗，請稍後再試。");
+        }
+    };
+
+    // ── Voice Input ──────────────────────────────────────────────────────────
+    const startRecording = async () => {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const mediaRecorder = new MediaRecorder(stream);
+            mediaRecorderRef.current = mediaRecorder;
+            audioChunksRef.current = [];
+
+            mediaRecorder.ondataavailable = (event) => {
+                if (event.data.size > 0) audioChunksRef.current.push(event.data);
+            };
+
+            mediaRecorder.onstop = async () => {
+                const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+                stream.getTracks().forEach(track => track.stop());
+                
+                const file = new File([audioBlob], "voice_input.webm", { type: 'audio/webm' });
+                setIsLoading(true);
+                toast.info("正在辨識語音...");
+                try {
+                    const { transcribeAudio } = await import('@/lib/api/stt');
+                    const result = await transcribeAudio(file);
+                    if (result.transcription?.text) {
+                        const newText = result.transcription.text.trim();
+                        setInputRaw(prev => {
+                            const val = (prev + " " + newText).trim();
+                            try { sessionStorage.setItem('factory_chat_input', val); } catch {}
+                            return val;
+                        });
+                        toast.success("語音辨識完成");
+                    }
+                } catch (err) {
+                    console.error("STT error:", err);
+                    toast.error("語音辨識失敗，請稍後再試");
+                } finally {
+                    setIsLoading(false);
+                }
+            };
+
+            mediaRecorder.start();
+            setIsRecording(true);
+        } catch (error) {
+            console.error(error);
+            toast.error("無法存取麥克風，請確認瀏覽器權限");
+        }
+    };
+
+    const stopRecording = () => {
+        if (mediaRecorderRef.current && isRecording) {
+            mediaRecorderRef.current.stop();
+            setIsRecording(false);
         }
     };
 
@@ -441,11 +500,23 @@ export function QAInterface() {
                             placeholder="在這裡輸入問題... (Shift+Enter 換行)"
                             rows={1}
                             className="flex-1 min-h-[44px] max-h-32 resize-none bg-transparent border-none text-sm focus-visible:ring-0 focus-visible:ring-offset-0 px-3 py-3"
-                            disabled={isLoading}
+                            disabled={isLoading || isRecording}
                         />
                         <Button
+                            onClick={isRecording ? stopRecording : startRecording}
+                            disabled={isLoading}
+                            variant="outline"
+                            className={`size-10 rounded-xl p-0 flex-shrink-0 shadow-sm transition-all ${
+                                isRecording 
+                                    ? 'bg-red-50 hover:bg-red-100 text-red-500 border-red-200 animate-pulse' 
+                                    : 'bg-white text-slate-500 hover:text-indigo-600 border-slate-200 hover:border-indigo-200'
+                            }`}
+                        >
+                            {isRecording ? <Square className="size-4" /> : <Mic className="size-5" />}
+                        </Button>
+                        <Button
                             onClick={() => handleSend()}
-                            disabled={isLoading || !input.trim()}
+                            disabled={isLoading || isRecording || !input.trim()}
                             className="size-10 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white p-0 flex-shrink-0 shadow-lg active:scale-90 transition-all disabled:bg-slate-300"
                         >
                             {isLoading ? <Loader2 className="size-5 animate-spin" /> : <Send className="size-5" />}
