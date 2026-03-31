@@ -35,6 +35,17 @@ class SqlAgent:
             {
                 "type": "function",
                 "function": {
+                    "name": "get_production_line_count",
+                    "description": "查詢廠內【各樓層共有多少條產線】的固定基準數據（不依日期，直接查 Scx_base 資料表）。適用於回答：『工廠總共有幾條產線？』、『每層樓有多少條產線？』、『根據樓層統計產線數』等問題。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {}
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
                     "name": "get_workorder_quantity",
                     "description": "獲獲工單的『目標生產數量』(WORK_ORDER_NUM) 與 『現在實際生產數量』(ACTUAL_PRO)。",
                     "parameters": {
@@ -184,6 +195,7 @@ class SqlAgent:
    - 詢問「今天產線不良『率』是否異常？」或「對比最近7天的日均不良率」，必須調用 `get_defect_rate_anomaly_report`。
    - 詢問「上週設備故障趨勢」、「分析過去n天停機狀況」，**必須調用 `get_downtime_trend_report`** 以取得多日聚合數據。
 3. **KPI 指標與即時排行 (基礎統計)**：
+   - 詢問「工廠總共有幾條產線、每層樓有多少條產線、根據樓層統計產線數」，**必須**調用 `get_production_line_count`。
    - 詢問「正在生產的工單清單、哪些機種開工、今日開工概況」，**必須**調用 `get_production_overview`。
    - 詢問「工單生產數量、目標數與實際數統計」，才調用 `get_workorder_quantity`。
    - 詢問「停機時間異常、誰停機最久、停機時間排行」，必須調用 `get_kpi_ranking(kpi_type='downtime')`。

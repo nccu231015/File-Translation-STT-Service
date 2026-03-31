@@ -119,6 +119,29 @@ class FactorySqlTools:
             "active_models": [r.get("jz") for r in models_res if r.get("jz")]
         }
 
+    def get_production_line_count(self) -> Dict[str, Any]:
+        """
+        查詢各樓層共有多少條產線 (不分日期的固定基準數據)。
+        SELECT count([scx_value]) ct FROM [dbo].[Scx_base]
+        """
+        query = """
+            SELECT [scx_name] AS [樓層], count([scx_value]) AS [產線數量]
+            FROM [dbo].[Scx_base]
+            GROUP BY [scx_name]
+            ORDER BY [scx_name]
+        """
+        result = self._execute_mssql_query(query)
+
+        total_query = "SELECT count([scx_value]) AS [總產線數] FROM [dbo].[Scx_base]"
+        total_result = self._execute_mssql_query(total_query)
+        total = total_result[0].get("總產線數", 0) if total_result and "error" not in total_result[0] else 0
+
+        return {
+            "status": "success",
+            "total_lines": total,
+            "breakdown_by_floor": result
+        }
+
     def get_workorder_quantity(self, target_date: str = None) -> Dict[str, Any]:
         """
         4. 工單的生產數量
@@ -458,6 +481,22 @@ class FactorySqlTools:
             date_val = "TO_CHAR(CURRENT_DATE, 'YYYYMMDD')"
         query = f"SELECT distinct \"TOPIC\" FROM \"public\".\"CIM_MQTTCOLLECT\" WHERE \"YMD\"={date_val} AND CAST(\"CODEVALUE\" AS NUMERIC)>0"
         return {"status": "success", "date_queried": date_val, "data": self._execute_postgres_query(query)}
+
+    def get_equipment_location(self, keyword: str) -> Dict[str, Any]:
+        """
+        PostgreSQL 查詢: 根據設備名稱關鍵字模糊搜尋設備的安裝位置 (樓層)。
+        例如：輸入 '成型機' 可找到所有成型機及其所在樓層。
+        """
+        safe_keyword = keyword.replace("'", "''")  # 防止 SQL Injection
+        query = f"""
+            SELECT "EQUIP_ID", "EQUIP_NAME", "EQUIP_INSTALL_POSITION", "EQUIP_TYPE"
+            FROM "public"."EQUIPMENT_INFO_DICT"
+            WHERE "EQUIP_NAME" ILIKE '%{safe_keyword}%'
+               OR "EQUIP_TYPE" ILIKE '%{safe_keyword}%'
+            ORDER BY "EQUIP_INSTALL_POSITION", "EQUIP_NAME"
+        """
+        result = self._execute_postgres_query(query)
+        return {"status": "success", "keyword": keyword, "data": result}
 
     def get_equipment_by_floor(self, floor: str) -> Dict[str, Any]:
         """ PostgreSQL 查詢: 根據安裝地點樓層獲取設備配置資料 """

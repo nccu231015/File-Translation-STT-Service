@@ -90,7 +90,7 @@ class EquipmentSqlAgent:
                 "type": "function",
                 "function": {
                     "name": "get_equipment_downtime_stats",
-                    "description": "[設備檢索] 設備深入停機時間統計，包含 RUN/IDEL/DOWN/SHUTDOWN 各項具體數值、故障次數、良率、標準產能，以及【工單號碼 (WORK_ORDER_NO)】與生產機種資訊。若用戶需要查詢工單號碼、昨天/今天正在生產的機種，必須使用此工具。",
+                    "description": "[設備檢索] 設備深入停機時間統計，包含 RUN/IDEL/DOWN/SHUTDOWN 各項具體數値、故障次數、良率、標準產能，以及【工單號碼 (WORK_ORDER_NO)】與生產機種資訊。若用戶需要查詢工單號碼、昨天/今天正在生產的機種，必須使用此工具。",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -98,6 +98,17 @@ class EquipmentSqlAgent:
                             "end_date": {"type": "string", "description": "查詢的結束日期字串，包含這一天，格式為 YYYY-MM-DD。"}
                         },
                         "required": ["start_date", "end_date"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_production_line_count",
+                    "description": "查詢廠內【各樓層共有多少條產線】的固定基準數據（不依日期，查 Scx_base 資料表）。適用於回答：『工廠總共有幾條產線？』、『1F 這樓有幾條產線？』（注意：產線數 ≠ 設備數，產線是報工用的逻輯線别，設備是實體機台）。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {}
                     }
                 }
             },
@@ -124,7 +135,8 @@ class EquipmentSqlAgent:
 規範：
 1. **設備查詢調用**：
    - 詢問「XX設備/機台在哪裡」、「安裝位置」，調用 `get_equipment_location`（用設備名稱關鍵字模糊搜尋）。
-   - 詢問設備配置、樓層機台，調用 `get_equipment_by_floor`。
+   - 詢問設備配置、樓層機台（例：「1F 有哪些設備？」），調用 `get_equipment_by_floor`。
+   - 詢問「工廠總共有幾條產線、各樓有幾條產線」（產線 ≠ 設備，產線是報工用的逻輯線别），調用 `get_production_line_count`。
    - 詢問設備一般生產狀態、稼動狀態、良率、進度，調用 `get_equipment_production_status`（注意：不含工單號碼）。
    - 詢問設備故障趨勢，調用 `get_equipment_failure_trend`。
    - 詢問設備深入停機各項時間統計 (RUN/IDEL/DOWN)、原因、**工單號碼、生產機種**，調用 `get_equipment_downtime_stats`。
