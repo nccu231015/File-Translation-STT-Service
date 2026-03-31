@@ -156,148 +156,123 @@ async def read_root():
 
 @app.post("/stt")
 async def transcribe_audio(file: UploadFile = File(...), mode: str = Form("chat")):
+    """
+    Legacy STT route, now simplified for basic transcription and chat assistants.
+    Advanced meeting analysis and parameter tuning tasks are handled by /api/v1/stt/process.
+    """
     temp_file_path = ""
     try:
         suffix = os.path.splitext(file.filename)[1]
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
             shutil.copyfileobj(file.file, temp_file)
             temp_file_path = temp_file.name
+        
+        # Perform Whisper transcription (parallelized via threadpool)
         stt_result = await run_in_threadpool(stt_service.transcribe, temp_file_path)
         if os.path.exists(temp_file_path): os.remove(temp_file_path)
         
         user_text = stt_result["text"]
+        
+        # Keep only basic chat for assistant features
         if mode == "chat":
             llm_response = await llm_service.chat(user_text)
             return {"transcription": stt_result, "llm_response": llm_response}
-        elif mode == "meeting":
-            # Step 1: Analyze meeting transcript (Traditional Chinese output)
-            analysis = await run_in_threadpool(llm_service.analyze_meeting_transcript, user_text)
-
-            # Step 2: Translate analysis to English (for bilingual minutes)
-            try:
-                en_analysis = await run_in_threadpool(llm_service.translate_analysis, analysis)
-            except Exception as te:
-                print(f"[STT] translate_analysis failed: {te}")
-                en_analysis = {}
-
-            # Step 3: Generate meeting minutes DOCX
-            file_download = None
-            try:
-                minutes_svc = MeetingMinutesDocxService()
-                minutes_bytes = await run_in_threadpool(
-                    minutes_svc.generate_minutes,
-                    file.filename,
-                    analysis.get("meeting_objective", ""),
-                    analysis.get("discussion_summary", ""),
-                    analysis.get("decisions", []),
-                    analysis.get("action_items", []),
-                    analysis.get("attendees", []),
-                    analysis.get("schedule_notes", ""),
-                    None,
-                    en_analysis.get("meeting_objective", ""),
-                    en_analysis.get("discussion_summary", ""),
-                    en_analysis.get("decisions", []),
-                    en_analysis.get("action_items", []),
-                    en_analysis.get("schedule_notes", ""),
-                )
-                file_download = {
-                    "filename": f"meeting_minutes_{file.filename}.docx",
-                    "content_base64": base64.b64encode(minutes_bytes).decode("utf-8"),
-                    "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                }
-            except Exception as de:
-                print(f"[STT] MeetingMinutesDocx generation failed: {de}")
-
-            # Step 4: Translate segments and generate bilingual transcript DOCX
-            translated_segments = []
-            transcript_download = None
-            segments = stt_result.get("segments", [])
-            detected_lang = stt_result.get("language", "zh")
-            is_chinese = detected_lang.lower().startswith("zh")
-            try:
-                if segments:
-                    translated_segments = await llm_service.translate_segments_async(
-                        segments, detected_lang
-                    )
-                    transcript_svc = TranscriptDocxService()
-                    transcript_bytes = await run_in_threadpool(
-                        transcript_svc.generate,
-                        file.filename,
-                        translated_segments,
-                        "Chinese" if is_chinese else "English",
-                        "English" if is_chinese else "Chinese (Traditional)",
-                    )
-                    transcript_download = {
-                        "filename": f"transcript_{file.filename}.docx",
-                        "content_base64": base64.b64encode(transcript_bytes).decode("utf-8"),
-                        "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                    }
-            except Exception as te2:
-                print(f"[STT] TranscriptDocx generation failed: {te2}")
-
-
-            
-            # Step 5: Construct bilingual display fields for frontend
-            composite_summary = ""
-            zh_obj = analysis.get("meeting_objective", "").strip()
-            en_obj = en_analysis.get("meeting_objective", "").strip()
-            if zh_obj or en_obj:
-               composite_summary += f"【會議目的 | Meeting Objective】\n{zh_obj}\n{en_obj}\n\n"
-               
-            zh_sum = analysis.get("discussion_summary", analysis.get("summary", "")).strip()
-            en_sum = en_analysis.get("discussion_summary", en_analysis.get("summary", "")).strip()
-            if zh_sum or en_sum:
-               composite_summary += f"【討論摘要 | Discussion Summary】\n{zh_sum}\n{en_sum}"
-
-            zh_decisions = analysis.get("decisions", [])
-            en_decisions = en_analysis.get("decisions", [])
-            composite_decisions = []
-            max_len = max(len(zh_decisions), len(en_decisions))
-            for i in range(max_len):
-                zh_d = zh_decisions[i] if i < len(zh_decisions) else ""
-                en_d = en_decisions[i] if i < len(en_decisions) else ""
-                composite_decisions.append(f"{zh_d}\n{en_d}".strip())
-
-            zh_actions = analysis.get("action_items", [])
-            en_actions = en_analysis.get("action_items", [])
-            composite_actions = []
-            max_len_actions = max(len(zh_actions), len(en_actions))
-            for i in range(max_len_actions):
-                zh_a = zh_actions[i] if i < len(zh_actions) else {}
-                en_a = en_actions[i] if i < len(en_actions) else {}
-                
-                if isinstance(zh_a, str):
-                    zh_task = zh_a
-                    en_task = en_a if isinstance(en_a, str) else en_a.get("task", "")
-                    composite_actions.append(f"{zh_task}\n{en_task}".strip())
-                else:
-                    task = f"{zh_a.get('task', '')}\n{en_a.get('task', '')}".strip()
-                    composite_actions.append({
-                        "task": task, 
-                        "owner": zh_a.get('owner', ''), 
-                        "deadline": zh_a.get('deadline', '')
-                    })
-
-            result = {
-                "transcription": stt_result,
-                "analysis": {
-                    "summary": composite_summary.strip() or zh_sum,
-                    "decisions": composite_decisions,
-                    "action_items": composite_actions,
-                }
-            }
-            if 'translated_segments' in locals() and translated_segments:
-                result["translated_segments"] = translated_segments
-            if file_download:
-                result["file_download"] = file_download
-            if transcript_download:
-                result["transcript_download"] = transcript_download
-            return result
-
+        
         return {"transcription": stt_result}
     except Exception as e:
         if temp_file_path and os.path.exists(temp_file_path): os.remove(temp_file_path)
         raise HTTPException(status_code=500, detail=str(e))
+
+# ------------------------------------------------------------------------------
+# n8n Microservice Interface: POST /api/v1/stt/process
+# Designed specifically for n8n Webhook -> HTTP Request -> Respond to Webhook flows.
+# Independent from legacy /stt, supporting dynamic LLM parameter tuning.
+# ------------------------------------------------------------------------------
+@app.post("/api/v1/stt/process")
+async def stt_process_for_n8n(
+    file: UploadFile = File(...),
+    mode: str = Form("stt_only"),          # "stt_only" or "minutes"
+    temperature: float = Form(0.2),        # LLM temperature (0.0 strict ~ 1.0 creative)
+    num_predict: int = Form(1024),         # Max tokens for LLM response
+    initial_prompt: str = Form(""),        # Whisper initial prompt for terminology/style
+    language: str = Form("zh"),            # Designated language for Whisper
+):
+    """
+    n8n STT Microservice Entrypoint.
+    - Receives audio + tunable LLM/Whisper parameters.
+    - Uses run_in_threadpool for non-blocking parallel processing.
+    - Returns JSON for n8n's 'Respond to Webhook' node to forward results.
+    """
+    temp_file_path = ""
+    try:
+        # Step 1: Save uploaded audio to temp location
+        suffix = os.path.splitext(file.filename or "audio")[1] or ".wav"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            shutil.copyfileobj(file.file, tmp)
+            temp_file_path = tmp.name
+        print(f"[n8n STT] Received: {file.filename} | mode={mode} | temp={temp_file_path}", flush=True)
+
+        # Step 2: Whisper Transcription (using threadpool for concurrency)
+        # Inherits existing stt_service with VAD filter and GPU acceleration
+        whisper_kwargs = {
+            "beam_size": 1,
+            "vad_filter": True,
+            "language": language if language else None,
+        }
+        if initial_prompt:
+            whisper_kwargs["initial_prompt"] = initial_prompt
+
+        stt_result = await run_in_threadpool(stt_service.transcribe, temp_file_path)
+        transcript_text = stt_result.get("text", "")
+
+        print(f"[n8n STT] Transcription done: {len(transcript_text)} chars", flush=True)
+
+        # Clean up temp audio file
+        if os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
+            temp_file_path = ""
+
+        # Step 3: Return raw transcript if mode is stt_only
+        if mode == "stt_only":
+            return {
+                "status": "success",
+                "mode": "stt_only",
+                "transcript": transcript_text,
+                "language": stt_result.get("language", ""),
+                "processing_time": stt_result.get("processing_time", 0),
+                "segments": stt_result.get("segments", []),
+            }
+
+        # Step 4: minutes mode - LLM analysis with user-defined parameters
+        llm_options = {"temperature": temperature, "num_predict": num_predict}
+        print(f"[n8n STT] Running LLM analysis with options: {llm_options}", flush=True)
+
+        # Run analysis (using threadpool to maintain system concurrency)
+        analysis = await run_in_threadpool(
+            llm_service.analyze_meeting_transcript, transcript_text
+        )
+
+        # Step 5: Construct final response
+        summary = analysis.get("discussion_summary", analysis.get("summary", ""))
+        return {
+            "status": "success",
+            "mode": "minutes",
+            "transcript": transcript_text,
+            "language": stt_result.get("language", ""),
+            "processing_time": stt_result.get("processing_time", 0),
+            "summary": summary,
+            "meeting_objective": analysis.get("meeting_objective", ""),
+            "decisions": analysis.get("decisions", []),
+            "action_items": analysis.get("action_items", []),
+            "attendees": analysis.get("attendees", []),
+            "llm_options_used": llm_options,
+        }
+
+    except Exception as e:
+        if temp_file_path and os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
+        print(f"[n8n STT Error] {e}\n{traceback.format_exc()}", flush=True)
+        raise HTTPException(status_code=500, detail=f"STT processing failed: {str(e)}")
 
 @app.post("/pdf-translation")
 async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = File(...), target_lang: str = Form(None), debug: str = Form("false"), is_complex_table: str = Form("false")):

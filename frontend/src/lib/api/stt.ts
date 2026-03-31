@@ -1,46 +1,34 @@
 
-export interface STTResponse {
-    transcription: {
-        text: string;
-        segments?: any[];
-        language?: string;
-    };
-    analysis: {
-        summary: string;
-        decisions: string[];
-        action_items: string[];
-    };
-    llm_response?: string;
-    file_download?: {
-        filename: string;
-        content?: string;
-        content_base64?: string;
-        mime_type?: string;
-    };
-    /** Bilingual transcript Word document (base64 encoded) */
-    transcript_download?: {
-        filename: string;
-        content_base64?: string;
-        mime_type?: string;
-    };
-    /** Bilingual segments for the viewer */
-    translated_segments?: Array<{
-        start: number;
-        end: number;
-        original: string;
-        translated: string;
-    }>;
+/** n8n 微服務回傳格式（對應 POST /api/v1/stt/process） */
+
+/** N8N Microservice response format (corresponds to POST /api/v1/stt/process) */
+export interface N8nSTTResponse {
+    status: string;
+    mode: string;
+    transcript: string;
+    language?: string;
+    processing_time?: number;
+    summary?: string;
+    meeting_objective?: string;
+    decisions?: string[];
+    action_items?: any[];
+    attendees?: string[];
+    llm_options_used?: Record<string, number>;
 }
 
-export const analyzeMeetingAudio = async (file: File): Promise<STTResponse> => {
+export const analyzeMeetingAudio = async (file: File): Promise<N8nSTTResponse> => {
+    // ─── Route to n8n Microservice Webhook ─────────────────────────────────────
+    // n8n forwards the file to Python /api/v1/stt/process, 
+    // and the Respond to Webhook node returns the processed result.
+    const N8N_WEBHOOK_URL = "http://172.16.2.68/webhook/ff6bacb9-5b6e-486e-9929-5a735090b28d";
+
     const formData = new FormData();
     formData.append('file', file);
-    formData.append('mode', 'meeting');
+    // Note: mode/temperature/num_predict are pre-configured in the n8n HTTP Request node.
+    // The frontend only needs to send the file (client tunes params via n8n).
 
-    // DIRECT CALL to backend to bypass Next.js proxy/body-size issues
-    const BACKEND_URL = "http://172.16.2.68:8000";
     try {
-        const response = await fetch(`${BACKEND_URL}/stt`, {
+        const response = await fetch(N8N_WEBHOOK_URL, {
             method: 'POST',
             body: formData,
         });
@@ -52,7 +40,7 @@ export const analyzeMeetingAudio = async (file: File): Promise<STTResponse> => {
 
         return response.json();
     } catch (error) {
-        console.error("Direct backend call failed:", error);
+        console.error("n8n STT call failed:", error);
         throw error;
     }
 };
