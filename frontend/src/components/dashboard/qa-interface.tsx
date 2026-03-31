@@ -184,6 +184,11 @@ export function QAInterface() {
     // ── Voice Input ──────────────────────────────────────────────────────────
     const startRecording = async () => {
         try {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                toast.error("無法存取麥克風：請確認連線為 https (或 localhost)，且瀏覽器允許麥克風權限");
+                return;
+            }
+
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             const mediaRecorder = new MediaRecorder(stream);
             mediaRecorderRef.current = mediaRecorder;
