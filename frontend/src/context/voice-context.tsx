@@ -110,8 +110,22 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
             const data = await analyzeMeetingAudio(file);
             const recordId = Date.now().toString();
 
-            // n8n Microservice Version: Results are directly at the top level
-            // (No docx download or bilingual transcript URL management needed)
+            // n8n Microservice Version: Results are at the top level.
+            // Word documents are returned as base64 and converted to blob URLs for download.
+            const _base64ToUrl = (b64: string, mime: string) => {
+                const binary = window.atob(b64);
+                const bytes = new Uint8Array(binary.length);
+                for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+                return URL.createObjectURL(new Blob([bytes], { type: mime }));
+            };
+
+            const downloadUrl = data.file_download?.content_base64
+                ? _base64ToUrl(data.file_download.content_base64, data.file_download.mime_type)
+                : '';
+            const transcriptUrl = data.transcript_download?.content_base64
+                ? _base64ToUrl(data.transcript_download.content_base64, data.transcript_download.mime_type)
+                : '';
+
             const newRecord: ProcessedRecord = {
                 id: recordId,
                 fileName: file.name,
@@ -121,9 +135,9 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
                 summary: data.summary ?? '',
                 decisions: data.decisions ?? [],
                 actionItems: data.action_items ?? [],
-                downloadUrl: '',
-                transcriptUrl: '',
-                translatedSegments: [],
+                downloadUrl,
+                transcriptUrl,
+                translatedSegments: data.translated_segments ?? [],
             };
 
             setRecords(prev => [newRecord, ...prev]);

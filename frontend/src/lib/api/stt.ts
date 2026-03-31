@@ -11,7 +11,20 @@ export interface N8nSTTResponse {
     decisions?: string[];
     action_items?: any[];
     attendees?: string[];
+    translated_segments?: Array<{start: number; end: number; original: string; translated: string}>;
     llm_options_used?: Record<string, number>;
+    /** Bilingual meeting minutes Word document */
+    file_download?: {
+        filename: string;
+        content_base64: string;
+        mime_type: string;
+    };
+    /** Bilingual transcript Word document */
+    transcript_download?: {
+        filename: string;
+        content_base64: string;
+        mime_type: string;
+    };
 }
 
 export const analyzeMeetingAudio = async (file: File): Promise<N8nSTTResponse> => {
