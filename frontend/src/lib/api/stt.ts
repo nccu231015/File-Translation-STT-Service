@@ -1,6 +1,4 @@
 
-/** n8n 微服務回傳格式（對應 POST /api/v1/stt/process） */
-
 /** N8N Microservice response format (corresponds to POST /api/v1/stt/process) */
 export interface N8nSTTResponse {
     status: string;
@@ -18,14 +16,14 @@ export interface N8nSTTResponse {
 
 export const analyzeMeetingAudio = async (file: File): Promise<N8nSTTResponse> => {
     // ─── Route to n8n Microservice Webhook ─────────────────────────────────────
-    // n8n forwards the file to Python /api/v1/stt/process, 
+    // n8n forwards the file to Python /api/v1/stt/process,
     // and the Respond to Webhook node returns the processed result.
     const N8N_WEBHOOK_URL = "http://172.16.2.68:5678/webhook/ff6bacb9-5b6e-486e-9929-5a735090b28d";
 
     const formData = new FormData();
     formData.append('file', file);
     // Note: mode/temperature/num_predict are pre-configured in the n8n HTTP Request node.
-    // The frontend only needs to send the file (client tunes params via n8n).
+    // The frontend only sends the file — client tunes params via n8n directly.
 
     try {
         const response = await fetch(N8N_WEBHOOK_URL, {
@@ -33,12 +31,26 @@ export const analyzeMeetingAudio = async (file: File): Promise<N8nSTTResponse> =
             body: formData,
         });
 
+        // Read body as text first to avoid "Unexpected end of JSON" crash
+        const rawText = await response.text();
+
         if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`STT Processing failed: ${response.status} ${errorText}`);
+            throw new Error(`n8n STT failed [${response.status}]: ${rawText || '(empty response)'}`);
         }
 
-        return response.json();
+        // Guard against empty body (e.g. n8n workflow not active or misconfigured node)
+        if (!rawText || rawText.trim() === '') {
+            throw new Error(
+                'n8n returned an empty response. ' +
+                'Check: (1) Workflow is Active, (2) HTTP Request node "Input Data Field Name" is set to "file".'
+            );
+        }
+
+        try {
+            return JSON.parse(rawText) as N8nSTTResponse;
+        } catch {
+            throw new Error(`n8n response is not valid JSON: ${rawText.slice(0, 300)}`);
+        }
     } catch (error) {
         console.error("n8n STT call failed:", error);
         throw error;
@@ -50,6 +62,7 @@ export const transcribeAudio = async (file: File): Promise<{transcription: {text
     formData.append('file', file);
     formData.append('mode', 'stt_only');
 
+    // Direct call to backend for short assistant transcription (bypasses n8n for speed)
     const BACKEND_URL = "http://172.16.2.68:8000";
     try {
         const response = await fetch(`${BACKEND_URL}/stt`, {
