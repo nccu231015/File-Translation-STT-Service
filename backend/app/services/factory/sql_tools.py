@@ -121,25 +121,45 @@ class FactorySqlTools:
 
     def get_production_line_count(self) -> Dict[str, Any]:
         """
-        查詢各樓層共有多少條產線 (不分日期的固定基準數據)。
-        SELECT count([scx_value]) ct FROM [dbo].[Scx_base]
+        查詢各樓層共有多少條產線 (不分日期的固定基準數據。)
+        Scx_base 表欄位: scx_no=產線號, scx_value=詳細產線, lc=樓層
         """
-        query = """
-            SELECT [scx_name] AS [樓層], count([scx_value]) AS [產線數量]
-            FROM [dbo].[Scx_base]
-            GROUP BY [scx_name]
-            ORDER BY [scx_name]
-        """
-        result = self._execute_mssql_query(query)
-
         total_query = "SELECT count([scx_value]) AS [總產線數] FROM [dbo].[Scx_base]"
         total_result = self._execute_mssql_query(total_query)
         total = total_result[0].get("總產線數", 0) if total_result and "error" not in total_result[0] else 0
 
+        floor_query = """
+            SELECT [lc] AS [樓層], count([scx_value]) AS [產線數量]
+            FROM [dbo].[Scx_base]
+            GROUP BY [lc]
+            ORDER BY [lc]
+        """
+        breakdown = self._execute_mssql_query(floor_query)
+
         return {
             "status": "success",
             "total_lines": total,
-            "breakdown_by_floor": result
+            "breakdown_by_floor": breakdown
+        }
+
+    def get_production_line_location(self, line_no: str) -> Dict[str, Any]:
+        """
+        查詢特定產線號碼屬於哪個樓層。
+        Scx_base: scx_no=產線號, scx_value=詳細產線名稱, lc=樓層
+        """
+        safe_no = str(line_no).replace("'", "''")  # 防止 SQL injection
+        query = f"""
+            SELECT [scx_no] AS [產線號], [scx_value] AS [詳細產線], [lc] AS [樓層], [remark] AS [備註]
+            FROM [dbo].[Scx_base]
+            WHERE CAST([scx_no] AS VARCHAR) LIKE '%{safe_no}%'
+               OR [scx_value] LIKE '%{safe_no}%'
+            ORDER BY [lc], [scx_no]
+        """
+        result = self._execute_mssql_query(query)
+        return {
+            "status": "success",
+            "query_keyword": line_no,
+            "data": result
         }
 
     def get_workorder_quantity(self, target_date: str = None) -> Dict[str, Any]:
