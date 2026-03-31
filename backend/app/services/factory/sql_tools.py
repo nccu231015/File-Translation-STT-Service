@@ -23,7 +23,14 @@ def _sanitize(row: dict) -> dict:
         elif isinstance(v, (datetime.date, datetime.datetime)):
             clean[k] = v.isoformat()
         elif isinstance(v, bytes):
-            clean[k] = v.decode('utf-8', errors='replace')
+            # 先嘗試 UTF-8，失敗則用 CP950 (繁體中文 Big5)
+            try:
+                clean[k] = v.decode('utf-8')
+            except UnicodeDecodeError:
+                try:
+                    clean[k] = v.decode('cp950')
+                except Exception:
+                    clean[k] = v.decode('utf-8', errors='replace')
         else:
             clean[k] = v
     return clean
@@ -80,7 +87,8 @@ class FactorySqlTools:
                     password=MSSQL_CONFIG['password'],
                     database=MSSQL_CONFIG['database'],
                     as_dict=True,
-                    login_timeout=10
+                    login_timeout=10,
+                    charset='cp950'  # 繁體中文 Big5 編碼，防止中文亂碼
                 )
                 cursor = conn.cursor()
                 print(f"\n[MSSQL Execute]\n{query}\n", flush=True)
@@ -119,11 +127,30 @@ class FactorySqlTools:
             "active_models": [r.get("jz") for r in models_res if r.get("jz")]
         }
 
-    def get_production_line_count(self) -> Dict[str, Any]:
+    def get_production_line_count(self, floor: str = None) -> Dict[str, Any]:
         """
-        查詢各樓層共有多少條產線 (不分日期的固定基準數據。)
+        查詢各樓層共有多少條產線。
         Scx_base 表欄位: scx_no=產線號, scx_value=詳細產線, lc=樓層
+        - floor 為 None：回傳全廠依樓層分佈統計
+        - floor 有値（如 '1'）：只回傳該樓層的產線數
         """
+        if floor:
+            safe_floor = str(floor).replace("'", "''")
+            query = f"""
+                SELECT [lc] AS [樓層], count([scx_value]) AS [產線數量]
+                FROM [dbo].[Scx_base]
+                WHERE [lc] = '{safe_floor}'
+                GROUP BY [lc]
+            """
+            result = self._execute_mssql_query(query)
+            count = result[0].get("產線數量", 0) if result and "error" not in result[0] else 0
+            return {
+                "status": "success",
+                "queried_floor": floor,
+                "line_count": count,
+                "data": result
+            }
+
         total_query = "SELECT count([scx_value]) AS [總產線數] FROM [dbo].[Scx_base]"
         total_result = self._execute_mssql_query(total_query)
         total = total_result[0].get("總產線數", 0) if total_result and "error" not in total_result[0] else 0
@@ -135,7 +162,6 @@ class FactorySqlTools:
             ORDER BY [lc]
         """
         breakdown = self._execute_mssql_query(floor_query)
-
         return {
             "status": "success",
             "total_lines": total,

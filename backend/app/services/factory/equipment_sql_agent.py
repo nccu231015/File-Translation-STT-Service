@@ -105,10 +105,12 @@ class EquipmentSqlAgent:
                 "type": "function",
                 "function": {
                     "name": "get_production_line_count",
-                    "description": "查詢廠內【各樓層共有多少條產線】的固定基準數據（不依日期，查 Scx_base 資料表）。適用於回答：『工廠總共有幾條產線？』、『1F 這樓有幾條產線？』（注意：產線數 ≠ 設備數，產線是報工用的逻輯線别，設備是實體機台）。",
+                    "description": "查詢廠內產線數量（產線 ≠ 設備，產線是報工用的邏輯線別，設備是實體機台）。若問「某樓有幾條產線」，傳入 floor 參數；若問「全廠共幾條產線」或「各樓層分佈」，不傳 floor。",
                     "parameters": {
                         "type": "object",
-                        "properties": {}
+                        "properties": {
+                            "floor": {"type": "string", "description": "樓層編號，例如 '1'、'3'、'4'。不傳此參數則回傳全廠分佈。"}
+                        }
                     }
                 }
             },
