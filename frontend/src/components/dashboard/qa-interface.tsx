@@ -227,9 +227,15 @@ export function QAInterface() {
 
             mediaRecorder.start();
             setIsRecording(true);
-        } catch (error) {
+        } catch (error: any) {
             console.error(error);
-            toast.error("無法存取麥克風，請確認瀏覽器權限");
+            if (error.name === 'NotFoundError' || error.message?.includes('Requested device not found')) {
+                toast.error("找不到麥克風設備，請確認您的電腦是否有連接麥克風");
+            } else if (error.name === 'NotAllowedError' || error.name === 'SecurityError') {
+                toast.error("麥克風存取被拒絕，請在瀏覽器網址列左側解鎖麥克風權限");
+            } else {
+                toast.error(`無法存取麥克風: ${error.message || "發生未知錯誤"}`);
+            }
         }
     };
 
