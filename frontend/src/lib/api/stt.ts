@@ -20,7 +20,7 @@ export const analyzeMeetingAudio = async (file: File): Promise<N8nSTTResponse> =
     // ─── Route to n8n Microservice Webhook ─────────────────────────────────────
     // n8n forwards the file to Python /api/v1/stt/process, 
     // and the Respond to Webhook node returns the processed result.
-    const N8N_WEBHOOK_URL = "http://172.16.2.68/webhook/ff6bacb9-5b6e-486e-9929-5a735090b28d";
+    const N8N_WEBHOOK_URL = "http://172.16.2.68:5678/webhook/ff6bacb9-5b6e-486e-9929-5a735090b28d";
 
     const formData = new FormData();
     formData.append('file', file);

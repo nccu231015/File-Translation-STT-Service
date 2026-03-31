@@ -43,22 +43,31 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
     const [isProcessing, setIsProcessing] = useState(false);
     const [processingFilename, setProcessingFilename] = useState<string | null>(null);
 
-    const [records, setRecords] = useState<ProcessedRecord[]>(() => {
-        if (typeof window === 'undefined') return [];
+    // Always start with empty array to prevent SSR/CSR hydration mismatch (React #418).
+    // localStorage is only available in the browser, so we load it in useEffect after mount.
+    const [records, setRecords] = useState<ProcessedRecord[]>([]);
+    const [hydrated, setHydrated] = useState(false);
+
+    // ─── Load records from localStorage after first client-side mount ─────────
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
         const saved = localStorage.getItem(`meeting_records_${user?.username ?? 'guest'}`);
-        if (!saved) return [];
-        try {
-            const parsed = JSON.parse(saved);
-            return parsed.map((r: any) => ({
-                ...r,
-                processedAt: new Date(r.processedAt),
-                downloadUrl: undefined,    // blob URLs are session-only; restored from IndexedDB
-                transcriptUrl: undefined,  // restored from IndexedDB
-            }));
-        } catch {
-            return [];
+        if (saved) {
+            try {
+                const parsed = JSON.parse(saved);
+                setRecords(parsed.map((r: any) => ({
+                    ...r,
+                    processedAt: new Date(r.processedAt),
+                    downloadUrl: undefined,
+                    transcriptUrl: undefined,
+                })));
+            } catch {
+                // Corrupt data — silently reset
+            }
         }
-    });
+        setHydrated(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []); // Run once on mount only
 
     // ─── Persist metadata to localStorage on record changes ──────────────────────
     // useRef avoids race condition where storageKey change fires the save effect
@@ -67,10 +76,11 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
     useEffect(() => { storageKeyRef.current = storageKey; });
 
     useEffect(() => {
-        // Strip blob URLs before saving (session-only; binaries live in IndexedDB)
+        // Skip the initial empty render before hydration is complete
+        if (!hydrated) return;
         const serializable = records.map(r => ({ ...r, downloadUrl: undefined, transcriptUrl: undefined }));
         localStorage.setItem(storageKeyRef.current, JSON.stringify(serializable));
-    }, [records]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [records, hydrated]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // ─── Reload records when user switches ────────────────────────────────────────
     useEffect(() => {
