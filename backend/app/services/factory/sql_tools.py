@@ -517,7 +517,7 @@ class FactorySqlTools:
                 s.scx_no                                                AS [產線號],
                 s.scx_value                                             AS [產線名稱],
                 CASE WHEN r.line_key IS NOT NULL THEN 'RUNNING' ELSE 'STOPPED' END AS [稼動狀態],
-                CASE WHEN r.line_key IS NOT NULL THEN N'🟢 開工' ELSE N'🔴 停工' END AS [狀態燈],
+                CASE WHEN r.line_key IS NOT NULL THEN '開工'    ELSE '停工'    END AS [狀態燈],
                 ISNULL(r.actual_pro_sum, 0)                             AS [今日產量],
                 ISNULL(r.current_model, '')                             AS [生產機種],
                 {display_date}                                          AS [資料日期]
@@ -527,6 +527,11 @@ class FactorySqlTools:
             ORDER BY s.lc, s.scx_no
         """
         result = self._execute_mssql_query(query)
+
+        # Inject emoji into result rows (kept out of SQL to avoid cp950 encoding errors)
+        STATUS_ICON = {'RUNNING': '🟢 開工', 'STOPPED': '🔴 停工'}
+        for row in result:
+            row['狀態燈'] = STATUS_ICON.get(row.get('稼動狀態', 'STOPPED'), '🔴 停工')
 
         # Calculate per-floor summary
         floor_map: Dict[str, Dict[str, int]] = {}
@@ -592,7 +597,7 @@ class FactorySqlTools:
             SELECT
                 s.scx_no                                               AS [產線號],
                 s.scx_value                                            AS [產線名稱],
-                CASE WHEN r.line_key IS NOT NULL THEN N'🟢 開工' ELSE N'🔴 停工' END AS [狀態燈],
+                CASE WHEN r.line_key IS NOT NULL THEN '開工' ELSE '停工' END AS [狀態燈],
                 CASE WHEN r.line_key IS NOT NULL THEN 'RUNNING' ELSE 'STOPPED' END AS [稼動狀態],
                 ISNULL(r.jz, '')           AS [生產機種],
                 ISNULL(r.wo, '')           AS [工單號碼],
@@ -624,6 +629,11 @@ class FactorySqlTools:
 
         lines_result  = self._execute_mssql_query(query_lines)
         models_result = self._execute_mssql_query(query_models)
+
+        # Inject emoji (kept out of SQL to avoid cp950 encoding errors)
+        STATUS_ICON = {'RUNNING': '🟢 開工', 'STOPPED': '🔴 停工'}
+        for row in lines_result:
+            row['狀態燈'] = STATUS_ICON.get(row.get('稼動狀態', 'STOPPED'), '🔴 停工')
 
         running = sum(1 for r in lines_result if r.get('稼動狀態') == 'RUNNING')
         total   = len(lines_result)
@@ -664,10 +674,10 @@ class FactorySqlTools:
                 SUM(ACTUAL_PRO)               AS [今日實際產量],
                 ROUND(AVG(ACHIEVING_RATE), 4) AS [達成率],
                 CASE
-                    WHEN AVG(ACHIEVING_RATE) < 0.7  THEN N'🔴 嚴重落後 (<70%)'
-                    WHEN AVG(ACHIEVING_RATE) < 0.9  THEN N'🟡 輕微落後 (<90%)'
-                    ELSE                                  N'🟡 接近達標 (<100%)'
-                END                           AS [落後嚴重度],
+                    WHEN AVG(ACHIEVING_RATE) < 0.7  THEN '嚴重落後'
+                    WHEN AVG(ACHIEVING_RATE) < 0.9  THEN '輕微落後'
+                    ELSE                                  '接近達標'
+                END                           AS [落後嚴重度_raw],
                 {display_date}                AS [資料日期]
             FROM [dbo].[Daily_Status_Report]
             WHERE PRO_TIME = {date_cond}
@@ -678,6 +688,16 @@ class FactorySqlTools:
         """
         result = self._execute_mssql_query(query)
 
+        # Inject emoji (kept out of SQL to avoid cp950 encoding errors)
+        SEVERITY_ICON = {
+            '嚴重落後': '🔴 嚴重落後 (<70%)',
+            '輕微落後': '🟡 輕微落後 (<90%)',
+            '接近達標': '🟡 接近達標 (<100%)',
+        }
+        for row in result:
+            raw = row.pop('落後嚴重度_raw', '接近達標')
+            row['落後嚴重度'] = SEVERITY_ICON.get(raw, raw)
+
         return {
             "status": "success",
             "query_date": target_date or datetime.date.today().isoformat(),
@@ -685,7 +705,7 @@ class FactorySqlTools:
             "lagging_count": len(result),
             "metadata_warning": (
                 f"All listed work orders have ACHIEVING_RATE < {threshold} (below 100% target). "
-                "Sorted worst-first. 🔴 = critical (< 70%), 🟡 = lagging (90%-100%)."
+                "Sorted worst-first. Critical < 70%, Mild < 90%."
             ),
             "data": result
         }
@@ -885,10 +905,10 @@ class FactorySqlTools:
                 ROUND(AVG(ACHIEVING_RATE), 4) AS [平均達成率],
                 MAX(PRO_TIME)                 AS [最新更新日期],
                 CASE
-                    WHEN AVG(ACHIEVING_RATE) >= 1.0 THEN N'🟢 N – On track'
-                    WHEN AVG(ACHIEVING_RATE) >= 0.8 THEN N'🟡 Y – Mildly behind'
-                    ELSE                                  N'🔴 Y – Severely behind'
-                END                           AS [是否落後]
+                    WHEN AVG(ACHIEVING_RATE) >= 1.0 THEN 'On track'
+                    WHEN AVG(ACHIEVING_RATE) >= 0.8 THEN 'Mildly behind'
+                    ELSE                                 'Severely behind'
+                END                           AS [進度狀態_raw]
             FROM [dbo].[Daily_Status_Report]
             WHERE WORK_ORDER_NO = '{safe_wo}'
               AND [NO] IS NOT NULL
@@ -896,6 +916,16 @@ class FactorySqlTools:
             GROUP BY [NO], jz, WORK_ORDER_NO
         """
         result = self._execute_mssql_query(query)
+
+        # Inject emoji into result rows (kept out of SQL to avoid cp950 encoding errors)
+        STATUS_MAP = {
+            'On track':       '🟢 N – On track',
+            'Mildly behind':  '🟡 Y – Mildly behind',
+            'Severely behind':'🔴 Y – Severely behind',
+        }
+        for row in result:
+            raw = row.pop('進度狀態_raw', 'Severely behind')
+            row['是否落後'] = STATUS_MAP.get(raw, raw)
 
         # Derive overall verdict and recommendation
         is_behind = "UNKNOWN"
