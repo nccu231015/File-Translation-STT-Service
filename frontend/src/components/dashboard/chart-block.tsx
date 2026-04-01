@@ -145,6 +145,8 @@ export function ChartBlock({ config }: ChartBlockProps) {
                                 fill={ds.backgroundColor ?? colour(i)}
                                 radius={[4, 4, 0, 0]}
                                 maxBarSize={40}
+                                hide={(ds as any).hide}
+                                legendType={(ds as any).hideInLegend ? 'none' : 'rect'}
                             />
                         ))}
                         {lineDatasets.map((ds, i) => (
@@ -158,6 +160,7 @@ export function ChartBlock({ config }: ChartBlockProps) {
                                 dot={{ r: 3 }}
                                 activeDot={{ r: 5 }}
                                 connectNulls
+                                legendType={(ds as any).hideInLegend ? 'none' : 'line'}
                             />
                         ))}
                     </ComposedChart>

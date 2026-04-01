@@ -1126,7 +1126,8 @@ class FactorySqlTools:
         for i, model in enumerate(top_models):
             color = palette[i % len(palette)]
             lbl   = short_label(model)
-            # Bar: quantity (left Y-axis)
+            
+            # Bar: quantity (left Y-axis) - HIDE from legend to prevent redundancy
             datasets.append({
                 "type":            "bar",
                 "label":           f"{lbl} \u7522\u91cf",
@@ -1134,11 +1135,13 @@ class FactorySqlTools:
                 "yAxisID":         "y_quantity",
                 "backgroundColor": color.replace(",1)", ",0.30)"),
                 "borderColor":     color,
+                "hideInLegend":    True    # New: hide from bottom legend list
             })
-            # Line: defect rate (right Y-axis)
+            
+            # Line: defect rate (right Y-axis) - ONLY this shows in legend
             datasets.append({
                 "type":        "line",
-                "label":       f"{lbl} \u4e0d\u826f\u7387",
+                "label":       lbl,        # Simpler label
                 "data":        [model_map[model].get(p) for p in period_set],
                 "yAxisID":     "y_defect_rate",
                 "borderColor": color,

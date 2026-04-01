@@ -372,7 +372,8 @@ class SqlAgent:
 
 7. **機種不良率波動排行 (Q7)**：
    - 詢問「哪些機種不良率波動最大、本季與上季比對、M-o-M/Q-o-Q 波動」→ 調用 `get_defect_rate_fluctuation_data`。
-   - **圖表回覆規範**：回覆中必須提及「多線折線圖資料已就緒，請參考 chart_config（每條線代表一個機種）」。同時以 Markdown 表格呈現 fluctuation_ranking 排行。
+   - **重要規範**：除非使用者明確指定數量，否則**一律強制設定 `limit=5`**。
+   - **圖表回覆規範**：回覆中必須提及「圖表已就緒（柱狀代表各機種產量，折線代表不良率）。為保持介面簡潔，圖例僅顯示折線項」。同時以 Markdown 表格呈現排行榜。
 
 8. **明細紀錄與原因查詢**：
    - 詢問「不良紀錄明細、缺陷位置、Pareto」→ 調用 `get_line_defect_records` 或 `get_defect_pareto_analysis`。
