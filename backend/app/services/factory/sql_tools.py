@@ -730,10 +730,10 @@ class FactorySqlTools:
         include_chart: bool = False
     ) -> Dict[str, Any]:
         """
-        EQ-D: For a specific equipment, find its GDHM (Work Order), map it to MSSQL Daily_Status_Report
-        to get the model name, and calculate production output. 確保機種不重複。
+        EQ-D: Retrieve production output and unique model names for a specific equipment.
+        Mapping Logic: Bridge PG GDHM (Work Order) to MSSQL Daily_Status_Report WORK_ORDER_NO.
         """
-        # Step 1: 從 PostgreSQL 找出機台的 GDHM (從 EQUIPMENT_INFO_DICT)
+        # Step 1: Resolve equipment metadata (GDHM, TOPIC, EQ_CODE) from PostgreSQL INFO_DICT
         safe_kw = (equipment_name or equipment_code or "").replace("'", "''")
         match_q = f"""
             SELECT DISTINCT "EQUIPMENT_CODE", "EQUIPMENT_NAME", "GDHM", "TOPIC"
@@ -742,18 +742,18 @@ class FactorySqlTools:
         """
         matches = self._execute_postgres_query(match_q)
         if not matches:
-            return {"status": "error", "message": f"找不到設備：{safe_kw}"}
+            return {"status": "error", "message": f"Equipment not found: {safe_kw}"}
             
         eq_code = matches[0].get("EQUIPMENT_CODE")
         topic = matches[0].get("TOPIC")
         eq_name = matches[0].get("EQUIPMENT_NAME", eq_code)
         
-        # 收集這台機器掛載的所有不重複 GDHM
+        # Collect unique GDHMs (Work Orders) assigned to this equipment
         unique_gdhms = list(set([m.get("GDHM") for m in matches if m.get("GDHM")]))
         
-        # Step 2: 從 MSSQL 取出這些工單對應的機種名稱
+        # Step 2: Bridge to MSSQL Daily_Status_Report to retrieve actual Model Names
         model_mapping = {}
-        target_model = "未知機種"
+        target_model = "Unknown Model"
         if unique_gdhms:
             gdhm_in_clause = ",".join([f"'{g}'" for g in unique_gdhms])
             ms_query = f"""
@@ -767,17 +767,17 @@ class FactorySqlTools:
                 wo = row.get("WORK_ORDER_NO")
                 if wo:
                     model_mapping[wo] = row.get("MODEL_NAME", wo)
-                    target_model = model_mapping[wo]  # 至少保留一個機種名做代表
+                    target_model = model_mapping[wo]  # Keep one as a representative if needed
                     
-        # Step 3: 從 PostgreSQL 取出這半年該機台的總產量
+        # Step 3: Fetch total production metrics from PostgreSQL QTY table
         start_ymd = start_date.replace('-', '')
         end_ymd   = end_date.replace('-', '')
         
-        # QTY 表的 SBMC 可能是 TOPIC 也可能是 EQUIPMENT_CODE
+        # Cross-reference note: SBMC in QTY table might match either TOPIC or EQUIPMENT_CODE
         pg_qty_query = f"""
             SELECT
-                SUM(COALESCE("LPSL", 0)) AS "總良品",
-                SUM(COALESCE("BLSL", 0)) AS "總不良"
+                SUM(COALESCE("LPSL", 0)) AS "total_ok",
+                SUM(COALESCE("BLSL", 0)) AS "total_ng"
             FROM "public"."CIM_MQTT_OK_NG_QTY"
             WHERE "YMD" BETWEEN '{start_ymd}' AND '{end_ymd}'
               AND ("SBMC" = '{topic}' OR "SBMC" = '{eq_code}')
@@ -786,14 +786,14 @@ class FactorySqlTools:
         total_good = 0
         total_bad = 0
         if qty_res:
-            total_good = qty_res[0].get("總良品") or 0
-            total_bad = qty_res[0].get("總不良") or 0
+            total_good = qty_res[0].get("total_ok") or 0
+            total_bad = qty_res[0].get("total_ng") or 0
             
-        # 若都沒有產量，可能期間太短或是沒有進單
+        # Calculation: Final yield and accumulation
         total_qty = total_good + total_bad
         yield_rate = round((total_good / total_qty * 100), 2) if total_qty > 0 else 0
         
-        # 整理為乾淨的結果 (確保機種不重複)
+        # Prepare final clean results (ensure unique model names)
         unique_models = list(set(model_mapping.values())) if model_mapping else [target_model]
             
         return {
@@ -802,10 +802,10 @@ class FactorySqlTools:
             "period": f"{start_date} ~ {end_date}",
             "data": [
                 {
-                    "生產機種清單": ", ".join(unique_models),
-                    "這半年總產量": total_qty,
-                    "不良數": total_bad,
-                    "結算良率": f"{yield_rate}%"
+                    "Model List": ", ".join(unique_models),
+                    "Total Qty": total_qty,
+                    "NG Qty": total_bad,
+                    "Yield Rate": f"{yield_rate}%"
                 }
             ]
         }
