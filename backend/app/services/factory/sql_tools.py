@@ -464,9 +464,17 @@ class FactorySqlTools:
                     )::NUMERIC, 2)
                     ELSE NULL
                 END AS "良率(%)",
+                CASE
+                    WHEN COALESCE(SUM(q."RUN"), 0) + COALESCE(SUM(q."DOWN"), 0) > 0
+                    THEN ROUND((
+                        COALESCE(SUM(q."RUN"), 0)::FLOAT /
+                        (COALESCE(SUM(q."RUN"), 0) + COALESCE(SUM(q."DOWN"), 0)) * 100
+                    )::NUMERIC, 1)
+                    ELSE 0
+                END AS "稼動率(%)",
                 '{target_date}' AS "資料日期"
             FROM "public"."CIM_MQTT_OK_NG_QTY" q
-            LEFT JOIN "public"."EQUIPMENT_INFO_DICT" e ON e."TOPIC" = q."SBMC"
+            LEFT JOIN "public"."EQUIPMENT_INFO_DICT" e ON (e."TOPIC" = q."SBMC" OR e."EQUIPMENT_CODE" = q."SBMC")
             WHERE q."YMD" = '{target_ymd}'
             {floor_filter}
             GROUP BY e."EQUIP_INSTALL_POSITION", q."SBMC", e."EQUIPMENT_NAME"
@@ -515,7 +523,7 @@ class FactorySqlTools:
                 END AS "良率(%)",
                 '{target_date}' AS "資料日期"
             FROM "public"."CIM_MQTT_OK_NG_QTY" q
-            LEFT JOIN "public"."EQUIPMENT_INFO_DICT" e ON e."TOPIC" = q."SBMC"
+            LEFT JOIN "public"."EQUIPMENT_INFO_DICT" e ON (e."TOPIC" = q."SBMC" OR e."EQUIPMENT_CODE" = q."SBMC")
             WHERE q."YMD" = '{target_ymd}'
             GROUP BY e."EQUIP_INSTALL_POSITION", q."SBMC", e."EQUIPMENT_NAME"
             ORDER BY "樓層", "設備代碼"
