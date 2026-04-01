@@ -500,11 +500,23 @@ class FactorySqlTools:
             ORDER BY "樓層", "設備代碼"
         """
         rows = self._execute_postgres_query(query)
+        clean_rows = []
+        for r in rows:
+            rate = r.get('稼動率(%)')
+            y_rate = r.get('良率(%)')
+            clean_rows.append({
+                '樓層': r.get('樓層', '未知'),
+                '設備(代碼)': f"{r.get('設備名稱')} ({r.get('設備代碼')})",
+                '稼動率(%)': rate if rate is not None else '-',
+                '產出(良/不良)': f"{r.get('良品數量', 0)} / {r.get('不良數量', 0)}",
+                '良率(%)': y_rate if y_rate is not None else '-'
+            })
+            
         return {
             "status":     "success",
             "query_date": target_date,
             "floor":      floor or "全廠",
-            "data":       rows
+            "data":       clean_rows
         }
 
     # ══════════════════════════════════════════════════════════════════════════════
@@ -548,24 +560,26 @@ class FactorySqlTools:
             ORDER BY "樓層", "設備代碼"
         """
         rows = self._execute_postgres_query(query)
-        # Inject Python-side flag and icon
         below_count = 0
+        clean_rows = []
         for row in rows:
             rate = row.get('良率(%)')
             if rate is not None and float(rate) < threshold:
-                row['是否未達標'] = True
-                row['狀態燈'] = '🔴 未達標'
+                clean_rows.append({
+                    '樓層': row.get('樓層', '未知'),
+                    '設備(代碼)': f"{row.get('設備名稱')} ({row.get('設備代碼')})",
+                    '產出(良/不良)': f"{row.get('良品數量', 0)} / {row.get('不良數量', 0)}",
+                    '良率(%)': rate,
+                    '狀態燈': '🔴 未達標'
+                })
                 below_count += 1
-            else:
-                row['是否未達標'] = False
-                row['狀態燈'] = '🟢 達標'
+                
         return {
             "status":          "success",
             "query_date":      target_date,
             "threshold":       threshold,
-            "total_equipment": len(rows),
-            "below_count":     below_count,
-            "data":            rows
+            "total_failed":    below_count,
+            "data":            clean_rows
         }
 
     # ══════════════════════════════════════════════════════════════════════════════
@@ -670,16 +684,22 @@ class FactorySqlTools:
         }
         total_eq = len(daily_rows)
         running  = 0
+        clean_rows = []
         for row in daily_rows:
             code  = row.get('設備代碼', '')
             state = state_map.get(code, 'UNKNOWN')
             run   = float(row.get('RUN(分)') or 0)
             down  = float(row.get('DOWN(分)') or 0)
-            row['當前狀態'] = state
-            row['狀態燈']   = STATE_ICON.get(state, '❓ 未知')
-            row['稼動率(%)'] = round(run / (run + down) * 100, 1) if (run + down) > 0 else None
+            
             if state == 'RUN':
                 running += 1
+
+            rate = round(run / (run + down) * 100, 1) if (run + down) > 0 else '-'
+            clean_rows.append({
+                '設備(代碼)': f"{row.get('設備名稱')} ({code})",
+                '狀態燈': STATE_ICON.get(state, '❓ 未知'),
+                '稼動率(%)': rate
+            })
 
         return {
             "status":            "success",
@@ -689,7 +709,7 @@ class FactorySqlTools:
             "running_count":     running,
             "stopped_count":     total_eq - running,
             "floor_utilization": round(running / total_eq * 100, 1) if total_eq > 0 else 0,
-            "data":              daily_rows
+            "data":              clean_rows
         }
 
     # ══════════════════════════════════════════════════════════════════════════════
