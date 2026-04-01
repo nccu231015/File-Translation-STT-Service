@@ -104,89 +104,6 @@ class FactorySqlTools:
                 return [{"error": str(e)}]
         return []
 
-    def get_production_overview(self, target_date: str = None) -> Dict[str, Any]:
-        """
-        1. 今日多少條產線有開工?
-        2. 正在生產的工單號碼
-        3. 正在生產的機種?
-        """
-        date_cond = f"PRO_TIME='{target_date}'" if target_date else "PRO_TIME=CONVERT(date, GETDATE())"
-        
-        q_count = f"SELECT count(NO) kgcx FROM [dbo].[Daily_Status_Report] WHERE {date_cond}"
-        q_orders = f"SELECT distinct [WORK_ORDER_NO] FROM [dbo].[Daily_Status_Report] WHERE {date_cond}"
-        q_models = f"SELECT distinct jz FROM [dbo].[Daily_Status_Report] WHERE {date_cond}"
-        
-        count_res = self._execute_mssql_query(q_count)
-        orders_res = self._execute_mssql_query(q_orders)
-        models_res = self._execute_mssql_query(q_models)
-        
-        return {
-            "status": "success",
-            "working_lines_count": count_res[0].get("kgcx", 0) if count_res and "error" not in count_res[0] else 0,
-            "active_work_orders": [r.get("WORK_ORDER_NO") for r in orders_res if r.get("WORK_ORDER_NO")],
-            "active_models": [r.get("jz") for r in models_res if r.get("jz")]
-        }
-
-    def get_production_line_count(self, floor: str = None) -> Dict[str, Any]:
-        """
-        查詢各樓層共有多少條產線。
-        Scx_base 表欄位: scx_no=產線號, scx_value=詳細產線, lc=樓層
-        - floor 為 None：回傳全廠依樓層分佈統計
-        - floor 有値（如 '1'）：只回傳該樓層的產線數
-        """
-        if floor:
-            safe_floor = str(floor).replace("'", "''")
-            query = f"""
-                SELECT [lc] AS [樓層], count([scx_value]) AS [產線數量]
-                FROM [dbo].[Scx_base]
-                WHERE [lc] = '{safe_floor}'
-                GROUP BY [lc]
-            """
-            result = self._execute_mssql_query(query)
-            count = result[0].get("產線數量", 0) if result and "error" not in result[0] else 0
-            return {
-                "status": "success",
-                "queried_floor": floor,
-                "line_count": count,
-                "data": result
-            }
-
-        total_query = "SELECT count([scx_value]) AS [總產線數] FROM [dbo].[Scx_base]"
-        total_result = self._execute_mssql_query(total_query)
-        total = total_result[0].get("總產線數", 0) if total_result and "error" not in total_result[0] else 0
-
-        floor_query = """
-            SELECT [lc] AS [樓層], count([scx_value]) AS [產線數量]
-            FROM [dbo].[Scx_base]
-            GROUP BY [lc]
-            ORDER BY [lc]
-        """
-        breakdown = self._execute_mssql_query(floor_query)
-        return {
-            "status": "success",
-            "total_lines": total,
-            "breakdown_by_floor": breakdown
-        }
-
-    def get_production_line_location(self, line_no: str) -> Dict[str, Any]:
-        """
-        查詢特定產線號碼屬於哪個樓層。
-        Scx_base: scx_no=產線號, scx_value=詳細產線名稱, lc=樓層
-        """
-        safe_no = str(line_no).replace("'", "''")  # 防止 SQL injection
-        query = f"""
-            SELECT [scx_no] AS [產線號], [scx_value] AS [詳細產線], [lc] AS [樓層], [remark] AS [備註]
-            FROM [dbo].[Scx_base]
-            WHERE CAST([scx_no] AS VARCHAR) LIKE '%{safe_no}%'
-               OR [scx_value] LIKE '%{safe_no}%'
-            ORDER BY [lc], [scx_no]
-        """
-        result = self._execute_mssql_query(query)
-        return {
-            "status": "success",
-            "query_keyword": line_no,
-            "data": result
-        }
 
     def get_workorder_quantity(self, target_date: str = None) -> Dict[str, Any]:
         """
@@ -567,6 +484,602 @@ class FactorySqlTools:
         query = _get_query_3_downtime_stats(start_date, end_date)
         return {"status": "success", "start_date": start_date, "end_date": end_date, "data": self._execute_postgres_query(query)}
 
+
+    # ──────────────────────────────────────────────────────────────────────────────
+    # Q1: Real-time operation status for each floor / line
+    # Utilization = running lines / total lines  (RUN / [RUN + DOWN])
+    # "Running" = line exists in Daily_Status_Report for today
+    # "Stopped" = line in Scx_base but NOT in Daily_Status_Report today
+    # ──────────────────────────────────────────────────────────────────────────────
+    def get_line_operation_status(self, floor: str = None, target_date: str = None) -> Dict[str, Any]:
+        """
+        Q1: Real-time utilization status per floor / line with GREEN / RED indicators.
+        Joins Scx_base (full line master) with Daily_Status_Report (today's running lines).
+        Returns per-line status and per-floor summary statistics.
+        """
+        # Build date filter and a safe display string for the 資料日期 column
+        date_cond    = f"'{target_date}'" if target_date else "CONVERT(date, GETDATE())"
+        display_date = f"'{target_date}'" if target_date else "CONVERT(VARCHAR(10), GETDATE(), 120)"
+        floor_filter = f"AND s.lc = '{str(floor).replace(chr(39), chr(39)*2)}'" if floor else ""
+
+        query = f"""
+            WITH running AS (
+                -- Lines that have reported production today
+                SELECT CAST([NO] AS VARCHAR(50)) AS line_key,
+                       SUM(ACTUAL_PRO)            AS actual_pro_sum,
+                       MAX(jz)                    AS current_model
+                FROM [dbo].[Daily_Status_Report]
+                WHERE PRO_TIME = {date_cond} AND [NO] IS NOT NULL
+                GROUP BY [NO]
+            )
+            SELECT
+                s.lc                                                    AS [樓層],
+                s.scx_no                                                AS [產線號],
+                s.scx_value                                             AS [產線名稱],
+                CASE WHEN r.line_key IS NOT NULL THEN 'RUNNING' ELSE 'STOPPED' END AS [稼動狀態],
+                CASE WHEN r.line_key IS NOT NULL THEN N'🟢 開工' ELSE N'🔴 停工' END AS [狀態燈],
+                ISNULL(r.actual_pro_sum, 0)                             AS [今日產量],
+                ISNULL(r.current_model, '')                             AS [生產機種],
+                {display_date}                                          AS [資料日期]
+            FROM [dbo].[Scx_base] s
+            LEFT JOIN running r ON CAST(s.scx_no AS VARCHAR(50)) = r.line_key
+            WHERE 1=1 {floor_filter}
+            ORDER BY s.lc, s.scx_no
+        """
+        result = self._execute_mssql_query(query)
+
+        # Calculate per-floor summary
+        floor_map: Dict[str, Dict[str, int]] = {}
+        for row in result:
+            lc = str(row.get('樓層', 'N/A'))
+            floor_map.setdefault(lc, {'total': 0, 'running': 0})
+            floor_map[lc]['total'] += 1
+            if row.get('稼動狀態') == 'RUNNING':
+                floor_map[lc]['running'] += 1
+
+        floor_summary = [
+            {
+                '樓層': lc,
+                '產線總數': v['total'],
+                '開工中': v['running'],
+                '停工中': v['total'] - v['running'],
+                '稼動率(%)': round(v['running'] / v['total'] * 100, 1) if v['total'] > 0 else 0
+            }
+            for lc, v in sorted(floor_map.items())
+        ]
+
+        total = sum(v['total'] for v in floor_map.values())
+        running_total = sum(v['running'] for v in floor_map.values())
+
+        return {
+            "status": "success",
+            "queried_floor": floor or "ALL",
+            "query_date": target_date or datetime.date.today().isoformat(),
+            "overall_summary": {
+                "total_lines": total,
+                "running_lines": running_total,
+                "stopped_lines": total - running_total,
+                "utilization_rate_pct": round(running_total / total * 100, 1) if total > 0 else 0
+            },
+            "floor_summary": floor_summary,   # per-floor breakdown table
+            "line_detail": result              # per-line detail table with green/red
+        }
+
+    # ──────────────────────────────────────────────────────────────────────────────
+    # Q2: Active lines and current models on a specific floor
+    # ──────────────────────────────────────────────────────────────────────────────
+    def get_floor_active_lines(self, floor: str, target_date: str = None) -> Dict[str, Any]:
+        """
+        Q2: For a specific floor, return:
+          (a) Line status table (running/stopped) with current model and work order.
+          (b) Model table showing which models are being produced and on which lines.
+        """
+        date_cond    = f"'{target_date}'" if target_date else "CONVERT(date, GETDATE())"
+        display_date = f"'{target_date}'" if target_date else "CONVERT(VARCHAR(10), GETDATE(), 120)"
+        safe_floor   = str(floor).replace("'", "''")
+
+        # Table A: per-line status on this floor
+        query_lines = f"""
+            WITH running AS (
+                SELECT CAST([NO] AS VARCHAR(50)) AS line_key,
+                       MAX(jz)                   AS jz,
+                       MAX(WORK_ORDER_NO)         AS wo,
+                       SUM(ACTUAL_PRO)            AS actual_sum
+                FROM [dbo].[Daily_Status_Report]
+                WHERE PRO_TIME = {date_cond} AND [NO] IS NOT NULL
+                GROUP BY [NO]
+            )
+            SELECT
+                s.scx_no                                               AS [產線號],
+                s.scx_value                                            AS [產線名稱],
+                CASE WHEN r.line_key IS NOT NULL THEN N'🟢 開工' ELSE N'🔴 停工' END AS [狀態燈],
+                CASE WHEN r.line_key IS NOT NULL THEN 'RUNNING' ELSE 'STOPPED' END AS [稼動狀態],
+                ISNULL(r.jz, '')           AS [生產機種],
+                ISNULL(r.wo, '')           AS [工單號碼],
+                ISNULL(r.actual_sum, 0)    AS [今日實際產量],
+                {display_date}             AS [資料日期]
+            FROM [dbo].[Scx_base] s
+            LEFT JOIN running r ON CAST(s.scx_no AS VARCHAR(50)) = r.line_key
+            WHERE s.lc = '{safe_floor}'
+            ORDER BY s.scx_no
+        """
+
+        # Table B: model × line mapping (only active lines)
+        query_models = f"""
+            SELECT
+                d.jz                          AS [機種],
+                CAST(d.[NO] AS VARCHAR(50))   AS [產線號],
+                d.WORK_ORDER_NO               AS [工單號碼],
+                SUM(d.ACTUAL_PRO)             AS [今日實際產量],
+                {display_date}                AS [資料日期]
+            FROM [dbo].[Daily_Status_Report] d
+            INNER JOIN [dbo].[Scx_base] s
+                ON CAST(s.scx_no AS VARCHAR(50)) = CAST(d.[NO] AS VARCHAR(50))
+            WHERE d.PRO_TIME = {date_cond}
+              AND s.lc = '{safe_floor}'
+              AND d.[NO] IS NOT NULL
+            GROUP BY d.jz, d.[NO], d.WORK_ORDER_NO
+            ORDER BY d.jz, d.[NO]
+        """
+
+        lines_result  = self._execute_mssql_query(query_lines)
+        models_result = self._execute_mssql_query(query_models)
+
+        running = sum(1 for r in lines_result if r.get('稼動狀態') == 'RUNNING')
+        total   = len(lines_result)
+
+        return {
+            "status": "success",
+            "floor": floor,
+            "query_date": target_date or datetime.date.today().isoformat(),
+            "running_count": running,
+            "total_lines": total,
+            "utilization_rate_pct": round(running / total * 100, 1) if total > 0 else 0,
+            "line_status_table": lines_result,     # Table with green/red per line
+            "active_model_table": models_result    # Table: line → model mapping
+        }
+
+    # ──────────────────────────────────────────────────────────────────────────────
+    # Q3: Work orders lagging behind schedule (ACHIEVING_RATE < threshold)
+    # Based on: SELECT jz, ACHIEVING_RATE FROM Daily_Status_Report GROUP BY ...
+    # ──────────────────────────────────────────────────────────────────────────────
+    def get_lagging_workorders(
+        self, target_date: str = None, threshold: float = 1.0, limit: int = 50
+    ) -> Dict[str, Any]:
+        """
+        Q3: Identify work orders falling behind schedule on each production line.
+        Filters for ACHIEVING_RATE < threshold (default 1.0 = 100% target).
+        Returns: work order, production line, model, achieving rate, severity.
+        Sorted worst-first (ascending ACHIEVING_RATE).
+        """
+        date_cond    = f"'{target_date}'" if target_date else "CONVERT(date, GETDATE())"
+        display_date = f"'{target_date}'" if target_date else "CONVERT(VARCHAR(10), GETDATE(), 120)"
+
+        query = f"""
+            SELECT TOP {limit}
+                [NO]                          AS [產線],
+                jz                            AS [機種],
+                WORK_ORDER_NO                 AS [工單號碼],
+                SUM(WORK_ORDER_NUM)           AS [工單目標數],
+                SUM(ACTUAL_PRO)               AS [今日實際產量],
+                ROUND(AVG(ACHIEVING_RATE), 4) AS [達成率],
+                CASE
+                    WHEN AVG(ACHIEVING_RATE) < 0.7  THEN N'🔴 嚴重落後 (<70%)'
+                    WHEN AVG(ACHIEVING_RATE) < 0.9  THEN N'🟡 輕微落後 (<90%)'
+                    ELSE                                  N'🟡 接近達標 (<100%)'
+                END                           AS [落後嚴重度],
+                {display_date}                AS [資料日期]
+            FROM [dbo].[Daily_Status_Report]
+            WHERE PRO_TIME = {date_cond}
+              AND [NO] IS NOT NULL
+              AND ACHIEVING_RATE < {threshold}
+            GROUP BY [NO], jz, WORK_ORDER_NO
+            ORDER BY AVG(ACHIEVING_RATE) ASC
+        """
+        result = self._execute_mssql_query(query)
+
+        return {
+            "status": "success",
+            "query_date": target_date or datetime.date.today().isoformat(),
+            "threshold_achieving_rate": threshold,
+            "lagging_count": len(result),
+            "metadata_warning": (
+                f"All listed work orders have ACHIEVING_RATE < {threshold} (below 100% target). "
+                "Sorted worst-first. 🔴 = critical (< 70%), 🟡 = lagging (90%-100%)."
+            ),
+            "data": result
+        }
+
+    # ──────────────────────────────────────────────────────────────────────────────
+    # Q4: Production lines with high defect rates today / recent N days
+    # ──────────────────────────────────────────────────────────────────────────────
+    def get_high_defect_lines(
+        self, target_date: str = None, lookback_days: int = 1, limit: int = 15
+    ) -> Dict[str, Any]:
+        """
+        Q4: Rank production lines by defect rate (BAD_PRO_RATE / ACTUAL_PRO).
+        lookback_days=1: today only.  lookback_days>1: rolling N-day window.
+        Returns top-N lines sorted by defect rate descending.
+        """
+        if not target_date:
+            target_date = datetime.date.today().isoformat()
+
+        if lookback_days > 1:
+            time_cond = (
+                f"PRO_TIME >= DATEADD(day, -{lookback_days - 1}, '{target_date}') "
+                f"AND PRO_TIME <= '{target_date}'"
+            )
+        else:
+            time_cond = f"PRO_TIME = '{target_date}'"
+
+        query = f"""
+            SELECT TOP {limit}
+                [NO]                    AS [產線],
+                jz                      AS [機種],
+                SUM(ACTUAL_PRO)         AS [總產量],
+                SUM(BAD_PRO_RATE)       AS [總不良數],
+                CASE
+                    WHEN SUM(ACTUAL_PRO) = 0 THEN 0
+                    ELSE ROUND(
+                            CAST(SUM(BAD_PRO_RATE) AS FLOAT) / SUM(ACTUAL_PRO) * 100, 2)
+                END                     AS [不良率百分比],
+                '{target_date}'         AS [資料日期]
+            FROM [dbo].[Daily_Status_Report]
+            WHERE {time_cond}
+              AND [NO] IS NOT NULL
+              AND BAD_PRO_RATE > 0
+            GROUP BY [NO], jz
+            ORDER BY [不良率百分比] DESC
+        """
+        result = self._execute_mssql_query(query)
+
+        return {
+            "status": "success",
+            "query_date": target_date,
+            "lookback_days": lookback_days,
+            "limit": limit,
+            "metadata_warning": (
+                f"Lines sorted by defect rate (highest first). Top {limit} shown. "
+                "High defect rate lines may require immediate process review."
+            ),
+            "data": result
+        }
+
+    # ──────────────────────────────────────────────────────────────────────────────
+    # Q5: Production quantity + defect rate time-series with chart config
+    # Supports: daily / weekly / monthly / quarterly / yearly granularity
+    # ──────────────────────────────────────────────────────────────────────────────
+    def get_production_trend_data(
+        self,
+        start_date: str,
+        end_date: str,
+        line_no: str = None,
+        model: str = None,
+        granularity: str = 'monthly'
+    ) -> Dict[str, Any]:
+        """
+        Q5: Time-series trend of production quantity and defect rate.
+        Returns:
+          - 'data':         raw rows for table display
+          - 'chart_config': Recharts / Chart.js compatible JSON
+                            (Bar = quantity, Line = defect rate, dual Y-axis)
+        granularity options: 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'yearly'
+        """
+        # Build optional column filters
+        extra_filters = []
+        if line_no:
+            extra_filters.append(f"CAST([NO] AS VARCHAR(50)) = '{str(line_no).replace(chr(39), chr(39)*2)}'")
+        if model:
+            extra_filters.append(f"jz = '{str(model).replace(chr(39), chr(39)*2)}'")
+        extra_where = ("AND " + " AND ".join(extra_filters)) if extra_filters else ""
+
+        # Map granularity to SQL time-label expression
+        granularity_map = {
+            'daily':     "CONVERT(VARCHAR(10), PRO_TIME, 120)",
+            'weekly':    (
+                "CAST(YEAR(PRO_TIME) AS VARCHAR) + '-W' + "
+                "RIGHT('0' + CAST(DATEPART(WEEK, PRO_TIME) AS VARCHAR), 2)"
+            ),
+            'monthly':   "CONVERT(VARCHAR(7), PRO_TIME, 120)",
+            'quarterly': (
+                "CAST(YEAR(PRO_TIME) AS VARCHAR) + '-Q' + "
+                "CAST(DATEPART(QUARTER, PRO_TIME) AS VARCHAR)"
+            ),
+            'yearly':    "CAST(YEAR(PRO_TIME) AS VARCHAR)",
+        }
+        time_expr = granularity_map.get(granularity, granularity_map['monthly'])
+
+        # Use CTE so GROUP BY can reference the label expression safely
+        query = f"""
+            WITH base AS (
+                SELECT
+                    {time_expr}   AS period_label,
+                    ACTUAL_PRO,
+                    BAD_PRO_RATE
+                FROM [dbo].[Daily_Status_Report]
+                WHERE PRO_TIME BETWEEN '{start_date}' AND '{end_date}'
+                  AND [NO] IS NOT NULL
+                  {extra_where}
+            )
+            SELECT
+                period_label          AS [時間標籤],
+                SUM(ACTUAL_PRO)       AS [總產量],
+                SUM(BAD_PRO_RATE)     AS [總不良數],
+                ROUND(
+                    CAST(SUM(BAD_PRO_RATE) AS FLOAT) / NULLIF(SUM(ACTUAL_PRO), 0) * 100,
+                    4
+                )                     AS [不良率百分比]
+            FROM base
+            GROUP BY period_label
+            ORDER BY period_label
+        """
+        result = self._execute_mssql_query(query)
+
+        # Build chart-ready config (Recharts dual-axis: Bar + Line)
+        labels    = [r.get('時間標籤', '')     for r in result]
+        bar_data  = [r.get('總產量', 0)        for r in result]
+        line_data = [r.get('不良率百分比', 0)  for r in result]
+
+        chart_config = {
+            "chart_type": "bar_line_combo",
+            "title": f"Production Trend ({granularity})"
+                     + (f" | Line {line_no}" if line_no else "")
+                     + (f" | Model {model}"   if model   else ""),
+            "labels": labels,
+            "datasets": [
+                {
+                    "type":            "bar",
+                    "label":           "總產量 (units)",
+                    "data":            bar_data,
+                    "yAxisID":         "y_quantity",
+                    "backgroundColor": "rgba(54, 162, 235, 0.6)",
+                    "borderColor":     "rgba(54, 162, 235, 1)",
+                },
+                {
+                    "type":        "line",
+                    "label":       "不良率 (%)",
+                    "data":        line_data,
+                    "yAxisID":     "y_defect_rate",
+                    "borderColor": "rgba(255, 99, 132, 1)",
+                    "fill":        False,
+                    "tension":     0.3,
+                }
+            ],
+            "yAxes": {
+                "y_quantity":    {"label": "產量 (units)", "position": "left"},
+                "y_defect_rate": {"label": "不良率 (%)",   "position": "right"}
+            }
+        }
+
+        return {
+            "status":      "success",
+            "start_date":  start_date,
+            "end_date":    end_date,
+            "granularity": granularity,
+            "line_no":     line_no,
+            "model":       model,
+            "data":        result,          # table rows for LLM text response
+            "chart_config": chart_config    # JSON for frontend chart rendering
+        }
+
+    # ──────────────────────────────────────────────────────────────────────────────
+    # Q6: Check if a specific work order is behind schedule (Y / N)
+    # ──────────────────────────────────────────────────────────────────────────────
+    def get_workorder_progress_check(
+        self, work_order_no: str, target_date: str = None
+    ) -> Dict[str, Any]:
+        """
+        Q6: Check a single work order's progress.
+        Returns Y/N behind-schedule flag with severity and production recommendations.
+        """
+        date_filter = f"AND PRO_TIME = '{target_date}'" if target_date else ""
+        safe_wo     = str(work_order_no).replace("'", "''")
+
+        query = f"""
+            SELECT
+                [NO]                          AS [產線],
+                jz                            AS [機種],
+                WORK_ORDER_NO                 AS [工單號碼],
+                SUM(WORK_ORDER_NUM)           AS [工單目標數],
+                SUM(ACTUAL_PRO)               AS [累積實際產量],
+                ROUND(AVG(ACHIEVING_RATE), 4) AS [平均達成率],
+                MAX(PRO_TIME)                 AS [最新更新日期],
+                CASE
+                    WHEN AVG(ACHIEVING_RATE) >= 1.0 THEN N'🟢 N – On track'
+                    WHEN AVG(ACHIEVING_RATE) >= 0.8 THEN N'🟡 Y – Mildly behind'
+                    ELSE                                  N'🔴 Y – Severely behind'
+                END                           AS [是否落後]
+            FROM [dbo].[Daily_Status_Report]
+            WHERE WORK_ORDER_NO = '{safe_wo}'
+              AND [NO] IS NOT NULL
+              {date_filter}
+            GROUP BY [NO], jz, WORK_ORDER_NO
+        """
+        result = self._execute_mssql_query(query)
+
+        # Derive overall verdict and recommendation
+        is_behind = "UNKNOWN"
+        recommendation = "No data found for this work order. Please verify the work order number."
+
+        if result and "error" not in result[0]:
+            avg_rate = float(result[0].get('平均達成率') or 0)
+            if avg_rate >= 1.0:
+                is_behind = "N"
+                recommendation = (
+                    "Work order is on track (achieving rate ≥ 100%). "
+                    "No corrective action required."
+                )
+            elif avg_rate >= 0.8:
+                is_behind = "Y (Mild)"
+                recommendation = (
+                    f"Achieving rate is {round(avg_rate * 100, 1)}% — slightly below target. "
+                    "Recommended actions: (1) Review shift productivity, "
+                    "(2) Consider limited overtime to recover output gap."
+                )
+            else:
+                is_behind = "Y (Severe)"
+                recommendation = (
+                    f"Achieving rate is only {round(avg_rate * 100, 1)}% — significantly below target. "
+                    "Immediate actions recommended: "
+                    "(1) Identify root cause (material shortage / equipment fault / manpower gap), "
+                    "(2) Reallocate personnel or raw materials, "
+                    "(3) Evaluate splitting the order to parallel production lines, "
+                    "(4) Escalate to production manager for expedite decision."
+                )
+
+        return {
+            "status":              "success",
+            "work_order_no":       work_order_no,
+            "is_behind_schedule":  is_behind,
+            "recommendation":      recommendation,
+            "data":                result
+        }
+
+    # ──────────────────────────────────────────────────────────────────────────────
+    # Q7: Models with largest defect rate fluctuation across periods
+    # Supports: monthly / quarterly / yearly
+    # ──────────────────────────────────────────────────────────────────────────────
+    def get_defect_rate_fluctuation_data(
+        self,
+        end_date: str = None,
+        granularity: str = 'quarterly',
+        periods: int = 4,
+        limit: int = 10
+    ) -> Dict[str, Any]:
+        """
+        Q7: Rank models by defect rate fluctuation (MAX − MIN across time periods).
+        Returns:
+          - 'fluctuation_ranking': sorted by volatility descending (table)
+          - 'trend_data':          raw time-series rows per model
+          - 'chart_config':        multi-line chart JSON (one line per model)
+        """
+        if not end_date:
+            end_date = datetime.date.today().isoformat()
+
+        # Determine look-back window and time label SQL
+        days_per_period = {'monthly': 30, 'quarterly': 90, 'yearly': 365}
+        days            = days_per_period.get(granularity, 90) * periods
+        start_date      = (
+            datetime.date.fromisoformat(end_date) - datetime.timedelta(days=days)
+        ).isoformat()
+
+        granularity_map = {
+            'monthly':   "CONVERT(VARCHAR(7), PRO_TIME, 120)",
+            'quarterly': (
+                "CAST(YEAR(PRO_TIME) AS VARCHAR) + '-Q' + "
+                "CAST(DATEPART(QUARTER, PRO_TIME) AS VARCHAR)"
+            ),
+            'yearly':    "CAST(YEAR(PRO_TIME) AS VARCHAR)",
+        }
+        time_expr = granularity_map.get(granularity, granularity_map['quarterly'])
+
+        # Step 1: time-series defect rate per model
+        query_trend = f"""
+            WITH base AS (
+                SELECT
+                    jz,
+                    {time_expr} AS period_label,
+                    ACTUAL_PRO,
+                    BAD_PRO_RATE
+                FROM [dbo].[Daily_Status_Report]
+                WHERE PRO_TIME BETWEEN '{start_date}' AND '{end_date}'
+                  AND [NO] IS NOT NULL
+                  AND jz IS NOT NULL
+            ),
+            agg AS (
+                SELECT
+                    jz             AS [機種],
+                    period_label   AS [時間標籤],
+                    SUM(ACTUAL_PRO)  AS [總產量],
+                    SUM(BAD_PRO_RATE) AS [總不良數],
+                    ROUND(
+                        CAST(SUM(BAD_PRO_RATE) AS FLOAT) /
+                        NULLIF(SUM(ACTUAL_PRO), 0) * 100, 4
+                    ) AS [不良率百分比]
+                FROM base
+                GROUP BY jz, period_label
+            )
+            SELECT * FROM agg ORDER BY [機種], [時間標籤]
+        """
+
+        # Step 2: fluctuation ranking (MAX − MIN per model)
+        query_fluctuation = f"""
+            WITH base AS (
+                SELECT
+                    jz,
+                    {time_expr} AS period_label,
+                    ROUND(
+                        CAST(SUM(BAD_PRO_RATE) AS FLOAT) /
+                        NULLIF(SUM(ACTUAL_PRO), 0) * 100, 4
+                    ) AS defect_rate_pct
+                FROM [dbo].[Daily_Status_Report]
+                WHERE PRO_TIME BETWEEN '{start_date}' AND '{end_date}'
+                  AND [NO] IS NOT NULL
+                  AND jz IS NOT NULL
+                GROUP BY jz, {time_expr}
+            )
+            SELECT TOP {limit}
+                jz                                              AS [機種],
+                MIN(defect_rate_pct)                            AS [最低不良率(%)],
+                MAX(defect_rate_pct)                            AS [最高不良率(%)],
+                ROUND(MAX(defect_rate_pct) - MIN(defect_rate_pct), 4) AS [波動幅度(百分點)],
+                COUNT(DISTINCT period_label)                    AS [統計期數]
+            FROM base
+            GROUP BY jz
+            ORDER BY [波動幅度(百分點)] DESC
+        """
+
+        trend_result       = self._execute_mssql_query(query_trend)
+        fluctuation_result = self._execute_mssql_query(query_fluctuation)
+
+        # Build multi-line chart config (one line per model)
+        model_map: Dict[str, Dict[str, float]] = {}
+        period_set: List[str] = []
+        for row in trend_result:
+            m = str(row.get('機種', ''))
+            p = str(row.get('時間標籤', ''))
+            rate = float(row.get('不良率百分比') or 0)
+            model_map.setdefault(m, {})[p] = rate
+            if p not in period_set:
+                period_set.append(p)
+        period_set.sort()
+
+        palette = [
+            'rgba(255,99,132,1)',   'rgba(54,162,235,1)',
+            'rgba(255,206,86,1)',   'rgba(75,192,192,1)',
+            'rgba(153,102,255,1)',  'rgba(255,159,64,1)',
+            'rgba(199,199,199,1)',  'rgba(83,102,255,1)',
+            'rgba(255,130,100,1)', 'rgba(0,200,150,1)',
+        ]
+        datasets = [
+            {
+                "type":        "line",
+                "label":       model,
+                "data":        [period_data.get(p) for p in period_set],
+                "borderColor": palette[i % len(palette)],
+                "fill":        False,
+                "tension":     0.3,
+            }
+            for i, (model, period_data) in enumerate(list(model_map.items())[:limit])
+        ]
+
+        chart_config = {
+            "chart_type": "multi_line",
+            "title":      f"Defect Rate Fluctuation by Model ({granularity})",
+            "labels":     period_set,
+            "datasets":   datasets,
+            "yAxis":      {"label": "不良率 (%)"}
+        }
+
+        return {
+            "status":               "success",
+            "start_date":           start_date,
+            "end_date":             end_date,
+            "granularity":          granularity,
+            "fluctuation_ranking":  fluctuation_result,   # table: model → volatility
+            "trend_data":           trend_result,          # raw time-series
+            "chart_config":         chart_config           # JSON for frontend chart
+        }
 
     def _execute_postgres_query(self, query: str) -> List[Dict[str, Any]]:
         try:

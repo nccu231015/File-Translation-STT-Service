@@ -19,51 +19,174 @@ class SqlAgent:
         這可以提供給相容 OpenAI Tool Calling 的模型使用。
         """
         return [
+            # ── Q1: Real-time floor / line utilization status ─────────────────────
             {
                 "type": "function",
                 "function": {
-                    "name": "get_production_overview",
-                    "description": "取得日期的產線開工總覽：包含開工線數(kgcx)、正在生產的工單號碼(distinct)、機種(distinct)。",
+                    "name": "get_line_operation_status",
+                    "description": (
+                        "【稼動狀態】查詢各樓層/所有產線的即時開工/停工狀態，呈現綠燈(開工)/紅燈(停工)，"
+                        "並統計每樓層的稼動率 (RUN / [RUN+DOWN])。"
+                        "適用於：『目前各樓層產線稼動狀態？』、『全廠有幾條產線開工？』。"
+                        "若使用者指定樓層，傳入 floor；否則回傳全廠分層匯總。"
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "target_date": {"type": "string", "description": "查詢日期，例如 '2026-03-17'。"}
+                            "floor": {"type": "string", "description": "樓層編號，例如 '3'。不傳則回傳全廠。"},
+                            "target_date": {"type": "string", "description": "查詢日期，例如 '2026-04-01'。預設今天。"}
                         }
                     }
                 }
             },
+
+            # ── Q2: Active lines + models for a specific floor ────────────────────
             {
                 "type": "function",
                 "function": {
-                    "name": "get_production_line_count",
-                    "description": "查詢廠內產線數量。若使用者問「某樓有幾條產線」，傳入 floor 參數；若問「全廠共幾條產線」或「各樓層分佈」，不傳 floor。",
+                    "name": "get_floor_active_lines",
+                    "description": (
+                        "【指定樓層】查詢該樓層各條產線的開工/停工狀態，以及目前正在生產的機種與工單號碼。"
+                        "回傳兩張表：(1) 產線狀態表（含綠/紅燈）；(2) 開工機種表。"
+                        "適用於：『3 樓目前有幾條產線開工？』、『3 樓在生產什麼機種？』。"
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "floor": {"type": "string", "description": "樓層編號，例如 '1'、'3'、'4'。剪不傳此參數則回傳全廠分佈。"}
-                        }
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_production_line_location",
-                    "description": "查詢【特定產線號碼】屬於哪個樓層。適用於回答：『產線 136 在哪樓？』、『201 產線在哪裡？』等以產線號碼查詢對應樓層的問題。",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "line_no": {"type": "string", "description": "產線號碼，例如 '136'、'201'。"}
+                            "floor": {"type": "string", "description": "樓層編號，例如 '3'。必填。"},
+                            "target_date": {"type": "string", "description": "查詢日期，例如 '2026-04-01'。預設今天。"}
                         },
-                        "required": ["line_no"]
+                        "required": ["floor"]
                     }
                 }
             },
+
+            # ── Q3: Work orders lagging behind schedule ───────────────────────────
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_lagging_workorders",
+                    "description": (
+                        "【工單落後】找出今日達成率低於目標的所有工單，標示落後嚴重度（🔴嚴重/<70%、🟡輕微/<90%）。"
+                        "含對應產線號、機種、目標數量、實際產量，按達成率由低到高排序（最差的排前面）。"
+                        "適用於：『哪些工單進度落後？』、『落後的工單在哪些產線？』。"
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "target_date": {"type": "string", "description": "查詢日期，預設今天。"},
+                            "threshold": {"type": "number", "description": "落後判斷門檻，預設 1.0 (100%)。"},
+                            "limit": {"type": "integer", "description": "最多回傳幾筆，預設 50。"}
+                        }
+                    }
+                }
+            },
+
+            # ── Q4: Production lines with high defect rates ───────────────────────
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_high_defect_lines",
+                    "description": (
+                        "【高不良率產線】找出今日（或近 N 天）不良比例最高的產線，"
+                        "計算公式：不良率 = 總不良數 / 總產量，由高到低排序。"
+                        "適用於：『哪些產線不良比例特別高？』、『今天不良率前幾名的產線是？』。"
+                        "若需比對歷史平均，請改用 get_defect_rate_anomaly_report。"
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "target_date": {"type": "string", "description": "基準日期，預設今天。"},
+                            "lookback_days": {"type": "integer", "description": "回溯天數，1=只看今天，7=近7天滾動，預設 1。"},
+                            "limit": {"type": "integer", "description": "顯示筆數，預設 15。"}
+                        }
+                    }
+                }
+            },
+
+            # ── Q5: Production quantity + defect rate trend with chart ─────────────
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_production_trend_data",
+                    "description": (
+                        "【產量 & 不良率趨勢圖】查詢指定時間範圍內某條產線或某機種的產量與不良率時序資料，"
+                        "同時回傳可直接渲染的圖表設定 (chart_config)：Bar Chart 呈現產量、Line Chart 呈現不良率，雙 Y 軸。"
+                        "適用於：月對月(M-o-M)、年對年(Y-o-Y)、季對季(Q-o-Q)、某時間區間中每日/每週趨勢比對。"
+                        "granularity 參數：daily(每日) | weekly(每週) | monthly(每月) | quarterly(每季) | yearly(每年)。"
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "start_date": {"type": "string", "description": "查詢起始日期，例如 '2025-01-01'。"},
+                            "end_date":   {"type": "string", "description": "查詢結束日期，例如 '2026-04-01'。"},
+                            "line_no":    {"type": "string", "description": "產線號碼，例如 '136'。選填。"},
+                            "model":      {"type": "string", "description": "機種名稱，例如 'M3820'。選填。"},
+                            "granularity": {
+                                "type": "string",
+                                "enum": ["daily", "weekly", "monthly", "quarterly", "yearly"],
+                                "description": "時間粒度。預設 monthly。"
+                            }
+                        },
+                        "required": ["start_date", "end_date"]
+                    }
+                }
+            },
+
+            # ── Q6: Single work order progress check (Y / N) ──────────────────────
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_workorder_progress_check",
+                    "description": (
+                        "【單一工單進度確認】輸入工單號碼，回傳該工單是否落後（Y/N），"
+                        "附帶嚴重度（🟢正常/🟡輕微落後/🔴嚴重落後）以及具體的生產改善建議。"
+                        "適用於：『工單 N511-2512150027 進度落後嗎？』。"
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "work_order_no": {"type": "string", "description": "工單號碼，例如 'N511-2512150027'。必填。"},
+                            "target_date":   {"type": "string", "description": "查詢日期，不填則查所有日期的累積資料。"}
+                        },
+                        "required": ["work_order_no"]
+                    }
+                }
+            },
+
+            # ── Q7: Defect rate fluctuation ranking with multi-line chart ──────────
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_defect_rate_fluctuation_data",
+                    "description": (
+                        "【不良率波動排行 & 圖表】分析各機種在指定期間的不良率最高/最低值與波動幅度，"
+                        "排行波動最大的機種，並回傳可直接渲染的多線折線圖 (chart_config)，每條線代表一個機種。"
+                        "適用於：『哪些機種不良率波動最大？』、'M-o-M/Q-o-Q/Y-o-Y 不良率比對'。"
+                        "granularity：monthly(月對月) | quarterly(季對季) | yearly(年對年)。"
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "end_date":    {"type": "string", "description": "分析截止日，預設今天。"},
+                            "granularity": {
+                                "type": "string",
+                                "enum": ["monthly", "quarterly", "yearly"],
+                                "description": "時間粒度：monthly | quarterly | yearly。預設 quarterly。"
+                            },
+                            "periods":  {"type": "integer", "description": "要回溯幾個週期，例如 4 季，預設 4。"},
+                            "limit":    {"type": "integer", "description": "最多顯示幾個機種，預設 10。"}
+                        }
+                    }
+                }
+            },
+
+            # ── Work order quantity daily snapshot ────────────────────────────────
             {
                 "type": "function",
                 "function": {
                     "name": "get_workorder_quantity",
-                    "description": "獲獲工單的『目標生產數量』(WORK_ORDER_NUM) 與 『現在實際生產數量』(ACTUAL_PRO)。",
+                    "description": "查詢當日所有工單的『目標生產數量』(WORK_ORDER_NUM) 與『實際累積生產數量』(ACTUAL_PRO) 對比。適用於：『今日各工單目標與實際各是多少？』。",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -72,18 +195,23 @@ class SqlAgent:
                     }
                 }
             },
+
+            # ── KPI ranking: achieving rate / downtime (NOT for lagging/abnormal) ──
             {
                 "type": "function",
                 "function": {
                     "name": "get_kpi_ranking",
-                    "description": "獲取各種 KPI 指標的機台/機種排行 (如: 達成率、不良率、停機時間)。支援跨日聚合。",
+                    "description": (
+                        "獲取達成率排行 (top_achieving/unachieved) 或停機時間排行 (downtime)。"
+                        "注意：工單落後請改用 get_lagging_workorders；高不良率排行請改用 get_high_defect_lines。"
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "kpi_type": {
                                 "type": "string",
-                                "enum": ["top_achieving", "lagging", "abnormal", "downtime", "unachieved"],
-                                "description": "KPI 類型：top_achieving (達標前10), lagging (落後前10), abnormal (不良率高), downtime (停機長), unachieved (未達標)"
+                                "enum": ["top_achieving", "downtime", "unachieved"],
+                                "description": "KPI 類型：top_achieving (達標排行), downtime (停機時間排行), unachieved (未達標排行)"
                             },
                             "target_date": {"type": "string", "description": "基準日期，預設為今天。"},
                             "lookback_days": {"type": "integer", "description": "回溯天數。若問『這周』請傳入 7，預設為 1 (單日)。"},
@@ -93,11 +221,13 @@ class SqlAgent:
                     }
                 }
             },
+
+            # ── Defect detail records ─────────────────────────────────────────────
             {
                 "type": "function",
                 "function": {
                     "name": "get_line_defect_records",
-                    "description": "查詢【產線/樓層-不良數明細】。用於回答：2026-03-06 的不良數是多少？有哪些紀錄？",
+                    "description": "查詢【產線/樓層-不良數明細】。用於回答：某日的不良數明細是多少？有哪些紀錄？",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -106,11 +236,13 @@ class SqlAgent:
                     }
                 }
             },
+
+            # ── Downtime detail records ───────────────────────────────────────────
             {
                 "type": "function",
                 "function": {
                     "name": "get_line_downtime_records",
-                    "description": "查詢【產線/樓層-停機時間明細】。用於回答：2026-03-06 的停機時間、工單與備註紀錄。",
+                    "description": "查詢【產線/樓層-停機時間明細】。用於回答：某日的停機時間、工單與備註紀錄。",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -119,6 +251,8 @@ class SqlAgent:
                     }
                 }
             },
+
+            # ── Defect Pareto analysis for a specific work order ──────────────────
             {
                 "type": "function",
                 "function": {
@@ -135,47 +269,52 @@ class SqlAgent:
                 }
             },
 
+            # ── Cross-day defect count anomaly comparison ─────────────────────────
             {
                 "type": "function",
                 "function": {
                     "name": "get_defect_anomaly_report",
-                    "description": "跨日不良異常分析：一次比對產線今日的不良數與過去 N 天的平均不良數，判斷是否發生異常飆高。",
+                    "description": "跨日不良異常分析：比對產線今日的不良數與過去 N 天的平均不良數，判斷是否發生異常飆高。",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "target_date": {"type": "string", "description": "目前的查詢日期，例如 '2026-03-24'。"},
                             "lookback_days": {"type": "integer", "description": "要回溯計算平均的天數，預設為 30。"},
-                            "limit": {"type": "integer", "description": "要輸出的排行榜筆數或產線數量，例如『前5台』傳入 5。預設為10。"}
+                            "limit": {"type": "integer", "description": "要輸出的排行榜筆數，預設為10。"}
                         }
                     }
                 }
             },
+
+            # ── Cross-day defect RATE anomaly comparison ──────────────────────────
             {
                 "type": "function",
                 "function": {
                     "name": "get_defect_rate_anomaly_report",
-                    "description": "跨日『不良率』異常分析：跨表彙整總產出與不良數，一次比對產線今日的不良「率」與過去 N 天的平均不良「率」。適用於需要考慮總產量基準的情境。",
+                    "description": "跨日『不良率』異常分析：比對產線今日不良率與過去 N 天的平均不良率。適用於需要考慮總產量基準的情境。",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "target_date": {"type": "string", "description": "目前的查詢日期，例如 '2026-03-24'。"},
                             "lookback_days": {"type": "integer", "description": "要回溯計算平均的天數，預設為 7 或 30。"},
-                            "limit": {"type": "integer", "description": "要輸出的排行榜筆數或產線數量，例如『前5台』傳入 5。預設為10。"}
+                            "limit": {"type": "integer", "description": "要輸出的排行榜筆數，預設為10。"}
                         }
                     }
                 }
             },
+
+            # ── Multi-day downtime trend analysis ────────────────────────────────
             {
                 "type": "function",
                 "function": {
                     "name": "get_downtime_trend_report",
-                    "description": "跨日『停機趨勢』分析：自動回溯過去 N 天，彙整各類別、責任單位的總停機時間與累積占比百分點。適合回答：『上週設備故障趨勢為何？』、『過去七天哪一類停機最久？』。",
+                    "description": "跨日『停機趨勢』分析：自動回溯過去 N 天，彙整各類別、責任單位的總停機時間與累積占比百分點。適合回答：『上週設備故障趨勢為何？』。",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "target_date": {"type": "string", "description": "目前的查詢日期，例如 '2026-03-24'。"},
                             "lookback_days": {"type": "integer", "description": "要回溯統計的天數，預設為 7。"},
-                            "limit": {"type": "integer", "description": "要輸出的筆數，例如『前3類』傳入 3。預設為10。"}
+                            "limit": {"type": "integer", "description": "要輸出的筆數，預設為10。"}
                         }
                     }
                 }
@@ -198,39 +337,68 @@ class SqlAgent:
 {current_date_info}
 
 數據源提示：
-- [Daily_Status_Report]：開工總覽、產量、績效排行與工單報表細節。
+- [Daily_Status_Report]：開工總覽、產量、績效排行與工單報表細節。欄位包含：NO(產線), jz(機種), WORK_ORDER_NO(工單), ACTUAL_PRO(實際產量), WORK_ORDER_NUM(目標數), ACHIEVING_RATE(達成率), BAD_PRO_RATE(不良數)。
+- [Scx_base]：全廠產線主檔 (scx_no=產線號, scx_value=產線名稱, lc=樓層)。判斷停工必須以此表為基準。
 - [blpjl_new_copy1]：詳細的不良項目與異常碼統計。
 - [tjsjjl_new_copy1]：專業停機紀錄統計表。
 
-規範：
-1. **明細紀錄與原因查詢**：
-   - 詢問「不良紀錄明細、缺陷位置、Pareto」，請調用 `get_line_defect_records` 或 `get_defect_pareto_analysis`。
-   - 詢問「停機紀錄明細、具體停機時間」，請調用 `get_line_downtime_records`。
-2. **趨勢分析、月/週報表與異常對比 (高階分析)**：
-   - 詢問「今天產線不良『數量』是否異常？」，調用 `get_defect_anomaly_report`。
-   - 詢問「今天產線不良『率』是否異常？」或「對比最近7天的日均不良率」，必須調用 `get_defect_rate_anomaly_report`。
-   - 詢問「上週設備故障趨勢」、「分析過去n天停機狀況」，**必須調用 `get_downtime_trend_report`** 以取得多日聚合數據。
-3. **KPI 指標與即時排行 (基礎統計)**：
-   - 詢問「工廠總共有幾條產線、每層樓有多少條產線、根據樓層統計產線數」，**必須**調用 `get_production_line_count`。
-   - 詢問「產線 X 在哪裡、產線 136 在幾樓、XX 產線在哪個樓層」等以產線號查位置，**必須**調用 `get_production_line_location`。
-   - 詢問「正在生產的工單清單、哪些機種開工、今日開工概況」，**必須**調用 `get_production_overview`。
-   - 詢問「工單生產數量、目標數與實際數統計」，才調用 `get_workorder_quantity`。
-   - 詢問「停機時間異常、誰停機最久、停機時間排行」，必須調用 `get_kpi_ranking(kpi_type='downtime')`。
-   - 詢問「異常比例排行、誰不良最嚴重」，必須調用 `get_kpi_ranking(kpi_type='abnormal')`。
-4. **查無資料處理機制 (極重要)**：如果工具回傳的結果為空 (例如 `data` 陣列長度為 0)、無數據或無法計算，**嚴格禁止在回覆中暴露後端變數結構 (例如：絕對不能說「data 為空陣列」或「伺服器回傳空值」)**。
-   - **專業回覆規範**：遇到無資料時，請婉轉且專業地回答：「目前系統中查無今日的相關異常或停機數據。這可能代表：1. 現場尚未完成即時報工、2. 目前運行表現極佳，並無發生此類異常、3. 請確認查詢的日期或工單範圍是否正確。」
-5. **KPI 數據與排名解讀的嚴格標準 (極重要)**：
-   - **達成率 (ACHIEVING_RATE)**：工廠的預設標準為 `1.0` (100%) 為完全達標。不可自行定義低門檻 (如 0.5)。
-   - **不良率 (REJECT_RATE)**：小數比例，回報時請轉化為百分比。
-   - **排名數量幻覺防禦**：當工具回傳「TOP 10」排名數據時 (長度為 10)，**絕對禁止**在回覆中宣稱「全廠/今日共計只有 10 條活線」。必須正確表述為「以下為表現最差/最優的 10 條產線」。
-   - **日期精準度**：請務必對齊使用者詢問的「時間點」。若使用者詢問「昨日」，回覆文案必須明確說是「昨日的達成率」，嚴禁一律套用「今日/今天」的模板字眼。
-6. **嚴格禁止憑對話記憶回答產線數據 (防幻覺最高指導)**：永遠不要從先前的對話紀錄推導或記憶某條產線「有無產出」、「有無不良」。只要使用者問「XX產線今日有產出嗎」、「目前有多少產線報工」，**必須、立刻、絕對要調用 SQL 工具向資料庫拉取最新數據**。若未去資料庫調用工具，不准給出具體數量結論。
-7. **絕對禁止暴露系統內部邏輯與程式術語 (極重要)**：
-   - 永遠不要在回覆中向使用者展現思考過程。
-   - **嚴禁使用任何程式、變數或資料庫相關的字眼**。例如，絕對不可以說出「根據資料庫查詢結果」、「回傳的 data 陣列」、「line_count 為」、「欄位顯示」、「系統回傳的參數」、「工具執行結果」等字句。
-   - 請完全以「資深工廠主管或專家的口吻」與使用者對話。正確示範：「目前 1 樓共有 15 條產線。」；錯誤示範：「根據查詢回傳的 line_count 結果顯示有 15 條。」
-8. **禁止虛構**：資料源已鎖定，絕對不要自行撰寫 SQL 語句、函數代碼 or 編造數據門檻。
-9. **回答風格**：有數據時，以 Markdown 表格呈現並提供專業解說。無數據時，務必使用上述的「專業回覆規範」。
+工具路由規範：
+
+1. **即時稼動狀態 (Q1)**：
+   - 詢問「各樓層/全廠產線稼動狀態、開工/停工、稼動率」→ 必定調用 `get_line_operation_status`。
+   - 回覆時，依據 floor_summary 呈現各樓層匯總表，再依 line_detail 呈現逐條產線的🟢/🔴狀態。
+
+2. **指定樓層產線數量與機種 (Q2)**：
+   - 詢問「X 樓目前開工幾條、X 樓在生產什麼機種、X 樓的工單狀況」→ 必定調用 `get_floor_active_lines(floor=X)`。
+   - 回覆時，使用 line_status_table（產線狀態表）與 active_model_table（機種表）分別呈現兩張 Markdown 表格。
+
+3. **工單進度落後 (Q3)**：
+   - 詢問「哪些工單落後、哪些產線進度有問題、落後工單清單」→ 調用 `get_lagging_workorders`。
+   - 回覆時，對🔴嚴重落後的工單加紅色亮點標示，依達成率由低至高呈現。
+
+4. **高不良率產線 (Q4)**：
+   - 詢問「哪些產線不良比例高、不良率排行、異常比例」→ 優先調用 `get_high_defect_lines`。
+   - 若使用者需要「與歷史比較的異常偏差」→ 再調用 `get_defect_rate_anomaly_report`。
+
+5. **產量與不良率趨勢圖 (Q5)**：
+   - 詢問「某機種/某產線的月對月、季對季、年對年、每日/每週/某時間區間的產量與不良率趨勢」→ 調用 `get_production_trend_data`。
+   - granularity 對應：月對月=monthly、季對季=quarterly、年對年=yearly、每日=daily、每週=weekly。
+   - **圖表回覆規範**：回覆中必須提及「圖表資料已就緒，請參考隨附的 chart_config（Bar=產量, Line=不良率, 雙 Y 軸）」。同時以 Markdown 表格呈現 data 欄位的時序數據。
+
+6. **單一工單進度確認 (Q6)**：
+   - 使用者給出工單號碼，詢問「這張工單有沒有落後」→ 調用 `get_workorder_progress_check`。
+   - 回覆必須包含：(a) Y/N 答案 (b) 嚴重度燈號 (c) 具體的生產改善建議（直接從 recommendation 欄位呈現）。
+
+7. **機種不良率波動排行 (Q7)**：
+   - 詢問「哪些機種不良率波動最大、本季與上季比對、M-o-M/Q-o-Q 波動」→ 調用 `get_defect_rate_fluctuation_data`。
+   - **圖表回覆規範**：回覆中必須提及「多線折線圖資料已就緒，請參考 chart_config（每條線代表一個機種）」。同時以 Markdown 表格呈現 fluctuation_ranking 排行。
+
+8. **明細紀錄與原因查詢**：
+   - 詢問「不良紀錄明細、缺陷位置、Pareto」→ 調用 `get_line_defect_records` 或 `get_defect_pareto_analysis`。
+   - 詢問「停機紀錄明細、具體停機時間」→ 調用 `get_line_downtime_records`。
+
+9. **跨日趨勢對比與異常分析（高階）**：
+   - 詢問「今天產線不良數量是否異常？」→ 調用 `get_defect_anomaly_report`。
+   - 詢問「今天不良率是否高於近 7 天平均？」→ 調用 `get_defect_rate_anomaly_report`。
+   - 詢問「上週停機趨勢、哪類停機最久」→ 調用 `get_downtime_trend_report`。
+
+10. **KPI 指標與即時排行（基礎統計）**：
+    - 詢問「各工單目標與實際各是多少」→ 調用 `get_workorder_quantity`。
+    - 詢問「達成率排行、停機時間排行」→ 調用 `get_kpi_ranking`。
+
+11. **查無資料處理（極重要）**：如果工具回傳 data 為空，**嚴禁暴露後端變數或說「data 為空陣列」**。
+    請婉轉回答：「目前系統中查無今日相關數據。可能原因：1. 現場尚未完成即時報工；2. 請確認查詢日期或工單範圍是否正確。」
+
+12. **防幻覺最高指令**：
+    - **嚴禁憑對話記憶回答具體數值**，必須即時調用工具向資料庫查詢。
+    - 當工具回傳 TOP N 排行時，絕對不可宣稱「全廠只有 N 條產線/N 個工單」。
+    - 達成率標準：`1.0 = 100%` 為完全達標，不可自行降低門檻。
+
+13. **回覆風格**：
+    - 有數據時：以 Markdown 表格呈現，適當加入🟢🔴🟡燈號，提供專業解說。
+    - 有圖表時：說明「圖表設定已隨資料回傳（chart_config 欄位），前端可直接用 Recharts 或 Chart.js 渲染」。
+    - **嚴禁**在回覆中出現「data 陣列」、「回傳結果」、「欄位顯示」、「系統參數」等技術術語。
+    - 以「資深工廠主管的口吻」對話，正確範例：「目前 3 樓共有 12 條產線，其中 9 條開工、3 條停工，稼動率為 75%。」
 """
         messages = [{"role": "system", "content": system_prompt}]
         if history:
