@@ -216,10 +216,18 @@ class LLMService:
                         if isinstance(result, dict) and "chart_config" in result:
                             collected_chart_config = result["chart_config"]
                         
-                        # Append tool output to messages
+                        # Build a lightweight copy for LLM synthesis
+                        # Strip chart_config + raw time-series to prevent context overflow
+                        HEAVY_KEYS = {"chart_config", "trend_data"}
+                        slim_result = (
+                            {k: v for k, v in result.items() if k not in HEAVY_KEYS}
+                            if isinstance(result, dict) else result
+                        )
+
+                        # Append slimmed tool output to messages
                         messages.append({
                             "role": "tool",
-                            "content": json.dumps(result, ensure_ascii=False),
+                            "content": json.dumps(slim_result, ensure_ascii=False),
                         })
                     except Exception as te:
                         print(f"[LLM Tool Execute Error] {te}")
