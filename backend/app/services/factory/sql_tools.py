@@ -1112,11 +1112,28 @@ class FactorySqlTools:
         granularity_zh = {'monthly': '\u6708\u5c0d\u6708', 'quarterly': '\u5b63\u5c0d\u5b63', 'yearly': '\u5e74\u5c0d\u5e74'}
         title_zh = f"\u5404\u6a5f\u7a2e\u4e0d\u826f\u7387\u6ce2\u52d5\u5c0d\u6bd4\uff08{granularity_zh.get(granularity, granularity)}\uff09"
 
-        datasets = [
+        # Build period-level total quantity (one bar per period, summed across all models)
+        period_qty: Dict[str, float] = {}
+        for row in trend_result:
+            p    = str(row.get('時間標籤', ''))
+            qty  = float(row.get('總產量') or 0)
+            period_qty[p] = period_qty.get(p, 0) + qty
+
+        bar_dataset = {
+            "type":            "bar",
+            "label":           "總產量 (units)",
+            "data":            [period_qty.get(p, 0) for p in period_set],
+            "yAxisID":         "y_quantity",
+            "backgroundColor": "rgba(99,102,241,0.35)",
+            "borderColor":     "rgba(99,102,241,0.9)",
+        }
+
+        line_datasets = [
             {
                 "type":        "line",
                 "label":       short_label(model),
                 "data":        [model_map[model].get(p) for p in period_set],
+                "yAxisID":     "y_defect_rate",
                 "borderColor": palette[i % len(palette)],
                 "fill":        False,
                 "tension":     0.3,
@@ -1125,11 +1142,14 @@ class FactorySqlTools:
         ]
 
         chart_config = {
-            "chart_type": "multi_line",
+            "chart_type": "bar_line_combo",
             "title":      title_zh,
             "labels":     period_set,
-            "datasets":   datasets,
-            "yAxis":      {"label": "不良率 (%)"}
+            "datasets":   [bar_dataset] + line_datasets,
+            "yAxes": {
+                "y_quantity":    {"label": "總產量 (units)", "position": "left"},
+                "y_defect_rate": {"label": "不良率 (%)",    "position": "right"},
+            }
         }
 
         return {
