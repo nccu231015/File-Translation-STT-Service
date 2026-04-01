@@ -730,138 +730,84 @@ class FactorySqlTools:
         include_chart: bool = False
     ) -> Dict[str, Any]:
         """
-        EQ-D: For a specific equipment (by code or name keyword), retrieve
-        per-model production qty and defect rate trend across time.
-        Cross-DB: PG to get work orders → MSSQL for jz + defect data.
-        Returns bar_line_combo chart_config.
+        EQ-D: For a specific equipment, find its GDHM (Work Order), map it to MSSQL Daily_Status_Report
+        to get the model name, and calculate production output. 確保機種不重複。
         """
-        # Step 1: Resolve equipment_code from name if needed
-        if not equipment_code and equipment_name:
-            safe_kw = equipment_name.replace("'", "''")
-            match_q = f"""
-                SELECT "EQUIPMENT_CODE", "EQUIPMENT_NAME"
-                FROM "public"."EQUIPMENT_INFO_DICT"
-                WHERE "EQUIPMENT_NAME" ILIKE '%{safe_kw}%'
-                ORDER BY "EQUIPMENT_NAME" LIMIT 1
+        # Step 1: 從 PostgreSQL 找出機台的 GDHM (從 EQUIPMENT_INFO_DICT)
+        safe_kw = (equipment_name or equipment_code or "").replace("'", "''")
+        match_q = f"""
+            SELECT DISTINCT "EQUIPMENT_CODE", "EQUIPMENT_NAME", "GDHM", "TOPIC"
+            FROM "public"."EQUIPMENT_INFO_DICT"
+            WHERE "EQUIPMENT_NAME" ILIKE '%{safe_kw}%' OR "EQUIPMENT_CODE" ILIKE '%{safe_kw}%'
+        """
+        matches = self._execute_postgres_query(match_q)
+        if not matches:
+            return {"status": "error", "message": f"找不到設備：{safe_kw}"}
+            
+        eq_name = matches[0].get("EQUIPMENT_NAME", equipment_name)
+        topic = matches[0].get("TOPIC")
+        
+        # 收集這台機器掛載的所有不重複 GDHM
+        unique_gdhms = list(set([m.get("GDHM") for m in matches if m.get("GDHM")]))
+        
+        # Step 2: 從 MSSQL 取出這些工單對應的機種名稱
+        model_mapping = {}
+        target_model = "未知機種"
+        if unique_gdhms:
+            gdhm_in_clause = ",".join([f"'{g}'" for g in unique_gdhms])
+            ms_query = f"""
+                SELECT [WORK_ORDER_NO], MAX(COALESCE([PART_NO], [ITEM_NO], [MODEL_NAME], [PRODUCT_NAME], [WORK_ORDER_NO])) as MODEL_NAME
+                FROM [dbo].[Daily_Status_Report]
+                WHERE [WORK_ORDER_NO] IN ({gdhm_in_clause})
+                GROUP BY [WORK_ORDER_NO]
             """
-            matches = self._execute_postgres_query(match_q)
-            if not matches:
-                return {"status": "error", "message": f"找不到設備：{equipment_name}"}
-            equipment_code = matches[0].get('EQUIPMENT_CODE') or matches[0].get('EQUIPMENT_CODE')
-            resolved_name  = matches[0].get('EQUIPMENT_NAME', equipment_name)
-        else:
-            resolved_name = equipment_code
-
-        # Step 2: Query Model Production directly from CIM_MQTT_OK_NG_QTY in PG
+            ms_res = self._execute_mssql_query(ms_query)
+            for row in ms_res:
+                wo = row.get("WORK_ORDER_NO")
+                if wo:
+                    model_mapping[wo] = row.get("MODEL_NAME", wo)
+                    target_model = model_mapping[wo]  # 至少保留一個機種名做代表
+                    
+        # Step 3: 從 PostgreSQL 取出這半年該機台 (TOPIC) 的總產量
         start_ymd = start_date.replace('-', '')
         end_ymd   = end_date.replace('-', '')
-
-        granularity_map = {
-            'daily':     "TO_CHAR(TO_DATE(\"YMD\", 'YYYYMMDD'), 'YYYY-MM-DD')",
-            'weekly':    "TO_CHAR(TO_DATE(\"YMD\", 'YYYYMMDD'), 'IYYY-\"W\"IW')",
-            'monthly':   "TO_CHAR(TO_DATE(\"YMD\", 'YYYYMMDD'), 'YYYY-MM')",
-            'quarterly': "TO_CHAR(TO_DATE(\"YMD\", 'YYYYMMDD'), 'YYYY-\"Q\"Q')",
-            'yearly':    "TO_CHAR(TO_DATE(\"YMD\", 'YYYYMMDD'), 'YYYY')",
-        }
-        time_expr    = granularity_map.get(granularity, granularity_map['monthly'])
-        granularity_zh = {'daily':'每日','weekly':'每週','monthly':'月對月',
-                          'quarterly':'季對季','yearly':'年對年'}
-
-        safe_code = equipment_code.replace("'", "''")
         
-        pg_query = f"""
+        pg_qty_query = f"""
             SELECT
-                "MODEL" AS "機種",
-                {time_expr} AS "時間標籤",
-                SUM(COALESCE("LPSL", 0) + COALESCE("BLSL", 0)) AS "總產量",
-                SUM(COALESCE("BLSL", 0)) AS "總不良數",
-                ROUND(
-                    CASE 
-                        WHEN SUM(COALESCE("LPSL", 0) + COALESCE("BLSL", 0)) > 0 
-                        THEN (SUM(COALESCE("BLSL", 0)))::NUMERIC / SUM(COALESCE("LPSL", 0) + COALESCE("BLSL", 0)) * 100 
-                        ELSE 0 
-                    END, 2
-                ) AS "不良率百分比",
-                '{start_date} ~ {end_date}' AS "資料區間"
+                SUM(COALESCE("LPSL", 0)) AS "總良品",
+                SUM(COALESCE("BLSL", 0)) AS "總不良"
             FROM "public"."CIM_MQTT_OK_NG_QTY"
             WHERE "YMD" BETWEEN '{start_ymd}' AND '{end_ymd}'
-              AND "SBMC" = '{safe_code}'
-              AND "MODEL" IS NOT NULL
-              AND "MODEL" != ''
-            GROUP BY "MODEL", {time_expr}
-            ORDER BY "MODEL", {time_expr}
+              AND "SBMC" = '{topic}'
         """
-        trend_rows = self._execute_postgres_query(pg_query)
-
-        # Build chart only if explicitly requested
-        if include_chart and trend_rows:
-            model_qty_map:  Dict[str, Dict[str, float]] = {}
-            model_rate_map: Dict[str, Dict[str, float]] = {}
-            period_set: List[str] = []
-            for row in trend_rows:
-                m = str(row.get('機種', ''))
-                p = str(row.get('時間標籤', ''))
-                model_qty_map.setdefault(m,  {})[p] = float(row.get('總產量')     or 0)
-                model_rate_map.setdefault(m, {})[p] = float(row.get('不良率百分比') or 0)
-                if p not in period_set:
-                    period_set.append(p)
-            period_set.sort()
-
-            palette = [
-                'rgba(255,99,132,1)',  'rgba(54,162,235,1)',
-                'rgba(255,206,86,1)', 'rgba(75,192,192,1)',
-                'rgba(153,102,255,1)','rgba(255,159,64,1)',
-                'rgba(199,199,199,1)','rgba(83,102,255,1)',
-            ]
-            def _short(name: str) -> str:
-                return name if len(name) <= 14 else name[:13] + '\u2026'
-
-            datasets: List[Dict] = []
-            for i, model in enumerate(sorted(model_qty_map.keys())):
-                color = palette[i % len(palette)]
-                lbl   = _short(model)
-                datasets.append({
-                    "type":            "bar",
-                    "label":           f"{lbl} 產量",
-                    "data":            [model_qty_map[model].get(p, 0) for p in period_set],
-                    "yAxisID":         "y_quantity",
-                    "backgroundColor": color.replace(',1)', ',0.30)'),
-                    "borderColor":     color,
-                    "hideInLegend":    True,
-                })
-                datasets.append({
-                    "type":        "line",
-                    "label":       lbl,
-                    "data":        [model_rate_map[model].get(p) for p in period_set],
-                    "yAxisID":     "y_defect_rate",
-                    "borderColor": color,
-                    "fill":        False,
-                    "tension":     0.3,
-                })
-
-            chart_config = {
-                "chart_type": "bar_line_combo",
-                "title":      f"設備 {resolved_name} – 各機種產量與不良率（{granularity_zh.get(granularity, granularity)}）",
-                "labels":     period_set,
-                "datasets":   datasets,
-                "yAxes": {
-                    "y_quantity":    {"label": "各機種產量 (units)", "position": "left"},
-                    "y_defect_rate": {"label": "不良率 (%)",         "position": "right"},
-                }
-            }
-        else:
-            chart_config = None
-
+        qty_res = self._execute_postgres_query(pg_qty_query)
+        total_good = 0
+        total_bad = 0
+        if qty_res:
+            total_good = qty_res[0].get("總良品") or 0
+            total_bad = qty_res[0].get("總不良") or 0
+            
+        # 若都沒有產量，可能期間太短或是沒有進單
+        total_qty = total_good + total_bad
+        yield_rate = round((total_good / total_qty * 100), 2) if total_qty > 0 else 0
+        
+        # 整理為乾淨的結果 (確保機種不重複)
+        unique_models = list(set(model_mapping.values())) if model_mapping else [target_model]
+            
         return {
-            "status":          "success",
-            "equipment_code":  equipment_code,
-            "equipment_name":  resolved_name,
-            "start_date":      start_date,
-            "end_date":        end_date,
-            "granularity":     granularity_zh.get(granularity, granularity),
-            "trend_data":      trend_rows,
-            "chart_config":    chart_config,
+            "status": "success",
+            "equipment_name": eq_name,
+            "period": f"{start_date} ~ {end_date}",
+            "data": [
+                {
+                    "生產機種清單": ", ".join(unique_models),
+                    "這半年總產量": total_qty,
+                    "不良數": total_bad,
+                    "結算良率": f"{yield_rate}%"
+                }
+            ]
         }
+
 
 
     # ──────────────────────────────────────────────────────────────────────────────
