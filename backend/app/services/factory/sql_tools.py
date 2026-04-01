@@ -495,16 +495,16 @@ class FactorySqlTools:
                 GROUP BY "SBMC"
             )
             SELECT
-                COALESCE(e."EQUIP_INSTALL_POSITION", 'N/A') AS "樓層",
-                t."SBMC"                                     AS "設備代碼",
-                COALESCE(e."EQUIPMENT_NAME", t."SBMC")       AS "設備名稱",
-                t."RUN"                                      AS "RUN(分)",
-                t."DOWN"                                     AS "DOWN(分)",
-                t."IDEL"                                     AS "IDEL(分)",
-                t."SHUTDOWN"                                 AS "SHUTDOWN(分)",
+                COALESCE(e."EQUIP_INSTALL_POSITION", 'N/A')  AS "樓層",
+                q."SBMC"                                     AS "設備代碼",
+                COALESCE(e."EQUIPMENT_NAME", q."SBMC")       AS "設備名稱",
+                COALESCE(t."RUN", 0)                         AS "RUN(分)",
+                COALESCE(t."DOWN", 0)                        AS "DOWN(分)",
+                COALESCE(t."IDEL", 0)                        AS "IDEL(分)",
+                COALESCE(t."SHUTDOWN", 0)                    AS "SHUTDOWN(分)",
                 CASE
-                    WHEN (t."RUN" + t."DOWN") > 0
-                    THEN ROUND(t."RUN"::FLOAT / (t."RUN" + t."DOWN") * 100, 1)
+                    WHEN (COALESCE(t."RUN", 0) + COALESCE(t."DOWN", 0)) > 0
+                    THEN ROUND(COALESCE(t."RUN", 0)::FLOAT / (COALESCE(t."RUN", 0) + COALESCE(t."DOWN", 0)) * 100, 1)
                     ELSE 0
                 END AS "稼動率(%)",
                 COALESCE(SUM(q."LPSL"), 0)                   AS "良品數量",
@@ -518,14 +518,13 @@ class FactorySqlTools:
                     ELSE NULL
                 END AS "良率(%)",
                 '{target_date}' AS "資料日期"
-            FROM times t
-            LEFT JOIN "public"."EQUIPMENT_INFO_DICT" e ON e."EQUIPMENT_CODE" = t."SBMC"
-            LEFT JOIN "public"."CIM_MQTT_OK_NG_QTY" q
-                   ON q."SBMC" = t."SBMC" AND q."YMD" = '{target_ymd}'
-            WHERE 1=1
+            FROM "public"."CIM_MQTT_OK_NG_QTY" q
+            LEFT JOIN "public"."EQUIPMENT_INFO_DICT" e ON (e."TOPIC" = q."SBMC" OR e."EQUIPMENT_CODE" = q."SBMC")
+            LEFT JOIN times t ON t."SBMC" = q."SBMC"
+            WHERE q."YMD" = '{target_ymd}'
             {floor_filter}
             GROUP BY
-                e."EQUIP_INSTALL_POSITION", t."SBMC", e."EQUIPMENT_NAME",
+                e."EQUIP_INSTALL_POSITION", q."SBMC", e."EQUIPMENT_NAME",
                 t."RUN", t."DOWN", t."IDEL", t."SHUTDOWN"
             ORDER BY "樓層", "設備代碼"
         """
@@ -662,22 +661,21 @@ class FactorySqlTools:
                 GROUP BY "SBMC"
             )
             SELECT
-                t."SBMC"                               AS "設備代碼",
-                COALESCE(e."EQUIPMENT_NAME", t."SBMC") AS "設備名稱",
-                t."RUN"                                AS "RUN(分)",
-                t."DOWN"                               AS "DOWN(分)",
-                t."IDEL"                               AS "IDEL(分)",
-                t."SHUTDOWN"                           AS "SHUTDOWN(分)",
+                q."SBMC"                               AS "設備代碼",
+                COALESCE(e."EQUIPMENT_NAME", q."SBMC") AS "設備名稱",
+                COALESCE(t."RUN", 0)                   AS "RUN(分)",
+                COALESCE(t."DOWN", 0)                  AS "DOWN(分)",
+                COALESCE(t."IDEL", 0)                  AS "IDEL(分)",
+                COALESCE(t."SHUTDOWN", 0)              AS "SHUTDOWN(分)",
                 COALESCE(SUM(q."LPSL"), 0)             AS "良品數量",
                 COALESCE(SUM(q."BLSL"), 0)             AS "不良數量",
                 '{target_date}'                        AS "資料日期"
-            FROM times t
-            LEFT JOIN "public"."EQUIPMENT_INFO_DICT" e ON e."EQUIPMENT_CODE" = t."SBMC"
-            LEFT JOIN "public"."CIM_MQTT_OK_NG_QTY" q
-                   ON q."SBMC" = t."SBMC" AND q."YMD" = '{target_ymd}'
+            FROM (SELECT "SBMC", SUM("LPSL") AS "LPSL", SUM("BLSL") AS "BLSL" FROM "public"."CIM_MQTT_OK_NG_QTY" WHERE "YMD" = '{target_ymd}' GROUP BY "SBMC") q
+            LEFT JOIN "public"."EQUIPMENT_INFO_DICT" e ON (e."TOPIC" = q."SBMC" OR e."EQUIPMENT_CODE" = q."SBMC")
+            LEFT JOIN times t ON t."SBMC" = q."SBMC"
             WHERE e."EQUIP_INSTALL_POSITION" = '{safe_floor}'
             GROUP BY
-                t."SBMC", e."EQUIPMENT_NAME",
+                q."SBMC", e."EQUIPMENT_NAME",
                 t."RUN", t."DOWN", t."IDEL", t."SHUTDOWN"
             ORDER BY "設備名稱", "設備代碼"
         """
