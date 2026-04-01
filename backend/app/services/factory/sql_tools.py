@@ -588,6 +588,7 @@ class FactorySqlTools:
         if not target_date:
             target_date = datetime.date.today().isoformat()
         target_ymd  = target_date.replace('-', '')
+        safe_floor  = floor.replace("'", "''") if floor else ''
         query_daily = f"""
             WITH daily_qty AS (
                 SELECT "SBMC", SUM("LPSL") AS "LPSL", SUM("BLSL") AS "BLSL"
