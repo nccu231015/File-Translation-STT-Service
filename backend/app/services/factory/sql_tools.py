@@ -1073,7 +1073,7 @@ class FactorySqlTools:
         trend_result       = self._execute_mssql_query(query_trend)
         fluctuation_result = self._execute_mssql_query(query_fluctuation)
 
-        # Build multi-line chart config (one line per model)
+        # Step A: build per-model time-series lookup from trend data
         model_map: Dict[str, Dict[str, float]] = {}
         period_set: List[str] = []
         for row in trend_result:
@@ -1085,6 +1085,23 @@ class FactorySqlTools:
                 period_set.append(p)
         period_set.sort()
 
+        # Step B: build fluctuation ranking map from SQL result
+        fluctuation_map: Dict[str, float] = {}
+        for row in fluctuation_result:
+            m = str(row.get('機種', ''))
+            fluctuation_map[m] = float(row.get('波動幅度(百分點)') or 0)
+
+        # Step C: sort by fluctuation desc, take top N for chart
+        top_models = sorted(
+            [m for m in model_map.keys() if m in fluctuation_map],
+            key=lambda m: fluctuation_map.get(m, 0),
+            reverse=True
+        )[:limit]
+
+        # Truncate long model names for legend readability (max 14 chars)
+        def short_label(name: str) -> str:
+            return name if len(name) <= 14 else name[:13] + '\u2026'
+
         palette = [
             'rgba(255,99,132,1)',   'rgba(54,162,235,1)',
             'rgba(255,206,86,1)',   'rgba(75,192,192,1)',
@@ -1092,21 +1109,24 @@ class FactorySqlTools:
             'rgba(199,199,199,1)',  'rgba(83,102,255,1)',
             'rgba(255,130,100,1)', 'rgba(0,200,150,1)',
         ]
+        granularity_zh = {'monthly': '\u6708\u5c0d\u6708', 'quarterly': '\u5b63\u5c0d\u5b63', 'yearly': '\u5e74\u5c0d\u5e74'}
+        title_zh = f"\u5404\u6a5f\u7a2e\u4e0d\u826f\u7387\u6ce2\u52d5\u5c0d\u6bd4\uff08{granularity_zh.get(granularity, granularity)}\uff09"
+
         datasets = [
             {
                 "type":        "line",
-                "label":       model,
-                "data":        [period_data.get(p) for p in period_set],
+                "label":       short_label(model),
+                "data":        [model_map[model].get(p) for p in period_set],
                 "borderColor": palette[i % len(palette)],
                 "fill":        False,
                 "tension":     0.3,
             }
-            for i, (model, period_data) in enumerate(list(model_map.items())[:limit])
+            for i, model in enumerate(top_models)
         ]
 
         chart_config = {
             "chart_type": "multi_line",
-            "title":      f"Defect Rate Fluctuation by Model ({granularity})",
+            "title":      title_zh,
             "labels":     period_set,
             "datasets":   datasets,
             "yAxis":      {"label": "不良率 (%)"}
