@@ -3,10 +3,18 @@
  *
  * Client-side API utility for Factory Smart Q&A.
  * DIRECT CALL to backend to bypass Next.js proxy timeout issues (60s limit).
- * Mirrors the pattern used by lib/api/stt.ts and translation.ts.
+ *
+ * ─── API Contract (stable, backend-agnostic) ───────────────────────────────
+ * POST /factory-chat  →  FactoryResponse
+ *   { response: string, session_id: string, chart_config?: ChartConfig }
+ *
+ * When the backend migrates to n8n, only `getBackendUrl()` needs to change.
+ * The ChartConfig schema is the same whether emitted by Python or n8n.
+ * ────────────────────────────────────────────────────────────────────────────
  */
 
 // Helper to determine the backend URL dynamically (direct port 8000 bypass)
+// ⚠️  n8n migration: replace the return values below with your n8n webhook URL
 const getBackendUrl = () => {
     if (typeof window !== 'undefined') {
         return `http://${window.location.hostname}:8000`;
@@ -14,9 +22,37 @@ const getBackendUrl = () => {
     return "http://172.16.2.68:8000";
 };
 
+// ── Chart config types (Recharts-compatible) ─────────────────────────────────
+
+export interface ChartDataset {
+    type: 'bar' | 'line';
+    label: string;
+    data: (number | null)[];
+    yAxisID?: string;       // 'y_quantity' | 'y_defect_rate'
+    backgroundColor?: string;
+    borderColor?: string;
+    borderWidth?: number;
+    fill?: boolean;
+    tension?: number;       // line smoothing 0–1
+}
+
+export interface YAxisConfig {
+    label: string;
+    position: 'left' | 'right';
+}
+
+export interface ChartConfig {
+    chart_type: 'bar_line_combo' | 'multi_line';
+    title: string;
+    labels: string[];       // X-axis labels (time periods)
+    datasets: ChartDataset[];
+    yAxes?: Record<string, YAxisConfig>; // only for bar_line_combo
+}
+
 export interface FactoryResponse {
     response: string;
     session_id: string;
+    chart_config?: ChartConfig;  // optional – present only for Q5 / Q7 queries
 }
 
 export interface SessionSummary {

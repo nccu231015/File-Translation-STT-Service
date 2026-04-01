@@ -15,14 +15,16 @@ import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     askFactory, listFactorySessions, getFactorySession, deleteFactorySession,
-    SessionSummary
+    SessionSummary, ChartConfig
 } from '@/lib/api/factory';
+import { ChartBlock } from '@/components/dashboard/chart-block';
 
 interface Message {
     id: string;
     role: 'user' | 'assistant';
     content: string;
-    timestamp: Date | null; // 改為可為空，避免 Hydration 衝突
+    timestamp: Date | null;
+    chart_config?: ChartConfig;  // optional – present only for Q5 / Q7 responses
 }
 
 export function QAInterface() {
@@ -83,11 +85,12 @@ export function QAInterface() {
             timestamp: new Date(),
         }]);
 
-        // 2. 初始化快速問題
+        // 2. 初始化快速問題（對應 Q1-Q4 產線分析）
         setQuickQuestions([
-            `今日 (${today}) 產線開工與工單狀況？`,
-            '分析目前正在生產業績最好與最差的機種',
-            '哪些設備現在處於停機 (DOWN) 狀態？',
+            `今日 (${today}) 各樓層產線稼動狀態？`,
+            '目前哪些工單進度落後？依嚴重度排行',
+            '今日哪些產線不良比例特別高？',
+            '上週停機趨勢分析',
         ]);
         
         // 3. 恢復輸入框文字（切換分頁後不遺失）
@@ -284,6 +287,7 @@ export function QAInterface() {
                 id: `ai-${Date.now()}`,
                 role: 'assistant',
                 content: data.response,
+                chart_config: data.chart_config,   // carry chart data if present
                 timestamp: new Date(),
             };
             setMessages(prev => [...prev, aiMsg]);
@@ -445,6 +449,10 @@ export function QAInterface() {
                                             <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>
                                                 {msg.content}
                                             </ReactMarkdown>
+                                            {/* Render chart if backend returned chart_config (Q5 / Q7) */}
+                                            {msg.chart_config && (
+                                                <ChartBlock config={msg.chart_config} />
+                                            )}
                                         </div>
                                     ) : (
                                         <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
