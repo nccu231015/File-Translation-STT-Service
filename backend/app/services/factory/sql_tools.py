@@ -701,7 +701,8 @@ class FactorySqlTools:
         end_date: str,
         equipment_code: str = None,
         equipment_name: str = None,
-        granularity: str = 'monthly'
+        granularity: str = 'monthly',
+        include_chart: bool = False
     ) -> Dict[str, Any]:
         """
         EQ-D: For a specific equipment (by code or name keyword), retrieve
@@ -795,61 +796,64 @@ class FactorySqlTools:
         """
         trend_rows = self._execute_mssql_query(mssql_query)
 
-        # Build chart: per-model bar(qty) + line(defect) paired datasets
-        model_qty_map:  Dict[str, Dict[str, float]] = {}
-        model_rate_map: Dict[str, Dict[str, float]] = {}
-        period_set: List[str] = []
-        for row in trend_rows:
-            m = str(row.get('機種', ''))
-            p = str(row.get('時間標籤', ''))
-            model_qty_map.setdefault(m,  {})[p] = float(row.get('總產量')     or 0)
-            model_rate_map.setdefault(m, {})[p] = float(row.get('不良率百分比') or 0)
-            if p not in period_set:
-                period_set.append(p)
-        period_set.sort()
+        # Build chart only if explicitly requested
+        if include_chart and trend_rows:
+            model_qty_map:  Dict[str, Dict[str, float]] = {}
+            model_rate_map: Dict[str, Dict[str, float]] = {}
+            period_set: List[str] = []
+            for row in trend_rows:
+                m = str(row.get('機種', ''))
+                p = str(row.get('時間標籤', ''))
+                model_qty_map.setdefault(m,  {})[p] = float(row.get('總產量')     or 0)
+                model_rate_map.setdefault(m, {})[p] = float(row.get('不良率百分比') or 0)
+                if p not in period_set:
+                    period_set.append(p)
+            period_set.sort()
 
-        palette = [
-            'rgba(255,99,132,1)',  'rgba(54,162,235,1)',
-            'rgba(255,206,86,1)', 'rgba(75,192,192,1)',
-            'rgba(153,102,255,1)','rgba(255,159,64,1)',
-            'rgba(199,199,199,1)','rgba(83,102,255,1)',
-        ]
-        def _short(name: str) -> str:
-            return name if len(name) <= 14 else name[:13] + '\u2026'
+            palette = [
+                'rgba(255,99,132,1)',  'rgba(54,162,235,1)',
+                'rgba(255,206,86,1)', 'rgba(75,192,192,1)',
+                'rgba(153,102,255,1)','rgba(255,159,64,1)',
+                'rgba(199,199,199,1)','rgba(83,102,255,1)',
+            ]
+            def _short(name: str) -> str:
+                return name if len(name) <= 14 else name[:13] + '\u2026'
 
-        datasets: List[Dict] = []
-        for i, model in enumerate(sorted(model_qty_map.keys())):
-            color = palette[i % len(palette)]
-            lbl   = _short(model)
-            datasets.append({
-                "type":            "bar",
-                "label":           f"{lbl} 產量",
-                "data":            [model_qty_map[model].get(p, 0) for p in period_set],
-                "yAxisID":         "y_quantity",
-                "backgroundColor": color.replace(',1)', ',0.30)'),
-                "borderColor":     color,
-                "hideInLegend":    True,
-            })
-            datasets.append({
-                "type":        "line",
-                "label":       lbl,
-                "data":        [model_rate_map[model].get(p) for p in period_set],
-                "yAxisID":     "y_defect_rate",
-                "borderColor": color,
-                "fill":        False,
-                "tension":     0.3,
-            })
+            datasets: List[Dict] = []
+            for i, model in enumerate(sorted(model_qty_map.keys())):
+                color = palette[i % len(palette)]
+                lbl   = _short(model)
+                datasets.append({
+                    "type":            "bar",
+                    "label":           f"{lbl} 產量",
+                    "data":            [model_qty_map[model].get(p, 0) for p in period_set],
+                    "yAxisID":         "y_quantity",
+                    "backgroundColor": color.replace(',1)', ',0.30)'),
+                    "borderColor":     color,
+                    "hideInLegend":    True,
+                })
+                datasets.append({
+                    "type":        "line",
+                    "label":       lbl,
+                    "data":        [model_rate_map[model].get(p) for p in period_set],
+                    "yAxisID":     "y_defect_rate",
+                    "borderColor": color,
+                    "fill":        False,
+                    "tension":     0.3,
+                })
 
-        chart_config = {
-            "chart_type": "bar_line_combo",
-            "title":      f"設備 {resolved_name} – 各機種產量與不良率（{granularity_zh.get(granularity, granularity)}）",
-            "labels":     period_set,
-            "datasets":   datasets,
-            "yAxes": {
-                "y_quantity":    {"label": "各機種產量 (units)", "position": "left"},
-                "y_defect_rate": {"label": "不良率 (%)",         "position": "right"},
+            chart_config = {
+                "chart_type": "bar_line_combo",
+                "title":      f"設備 {resolved_name} – 各機種產量與不良率（{granularity_zh.get(granularity, granularity)}）",
+                "labels":     period_set,
+                "datasets":   datasets,
+                "yAxes": {
+                    "y_quantity":    {"label": "各機種產量 (units)", "position": "left"},
+                    "y_defect_rate": {"label": "不良率 (%)",         "position": "right"},
+                }
             }
-        }
+        else:
+            chart_config = None
 
         return {
             "status":          "success",

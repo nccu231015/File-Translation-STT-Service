@@ -102,7 +102,7 @@ class EquipmentSqlAgent:
                         "[設備] 查詢特定設備在時間區間內生產了哪些機種，以及各機種的"
                         "產量與不良率趨勢。可用設備代碼（如 '94135B'）或設備名稱關鍵字"
                         "（如 '成型機A'）指定設備。"
-                        "回傳 bar_line_combo 圖表（Bar=產量, Line=不良率）與詳細資料表。"
+                        "可選回傳 bar_line_combo 圖表（透過 include_chart 參數控制）。"
                     ),
                     "parameters": {
                         "type": "object",
@@ -130,6 +130,10 @@ class EquipmentSqlAgent:
                                     "'monthly'（月對月）、'quarterly'（季對季）、'yearly'（年對年）。"
                                     "預設 'monthly'。"
                                 )
+                            },
+                            "include_chart": {
+                                "type": "boolean",
+                                "description": "是否需要畫圖/產生圖表配置？單純詢問「生產了哪些機種」設為 false。除非使用者明確詢問「不良比例、走勢」或要求「畫圖/產生圖表」，才設為 true。"
                             }
                         },
                         "required": ["start_date", "end_date"]
