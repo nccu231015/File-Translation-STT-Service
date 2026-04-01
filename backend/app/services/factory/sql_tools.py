@@ -1112,43 +1112,48 @@ class FactorySqlTools:
         granularity_zh = {'monthly': '\u6708\u5c0d\u6708', 'quarterly': '\u5b63\u5c0d\u5b63', 'yearly': '\u5e74\u5c0d\u5e74'}
         title_zh = f"\u5404\u6a5f\u7a2e\u4e0d\u826f\u7387\u6ce2\u52d5\u5c0d\u6bd4\uff08{granularity_zh.get(granularity, granularity)}\uff09"
 
-        # Build period-level total quantity (one bar per period, summed across all models)
-        period_qty: Dict[str, float] = {}
+        # Step D: build per-model quantity map
+        qty_map: Dict[str, Dict[str, float]] = {}
         for row in trend_result:
-            p    = str(row.get('時間標籤', ''))
-            qty  = float(row.get('總產量') or 0)
-            period_qty[p] = period_qty.get(p, 0) + qty
+            m   = str(row.get('\u6a5f\u7a2e', ''))
+            p   = str(row.get('\u6642\u9593\u6a19\u7c64', ''))
+            qty = float(row.get('\u7e3d\u7522\u91cf') or 0)
+            qty_map.setdefault(m, {})[p] = qty
 
-        bar_dataset = {
-            "type":            "bar",
-            "label":           "總產量 (units)",
-            "data":            [period_qty.get(p, 0) for p in period_set],
-            "yAxisID":         "y_quantity",
-            "backgroundColor": "rgba(99,102,241,0.35)",
-            "borderColor":     "rgba(99,102,241,0.9)",
-        }
-
-        line_datasets = [
-            {
+        # Step E: build paired bar (qty) + line (defect rate) datasets per model
+        # Same colour shared between bar and line of the same model for visual clarity
+        datasets: List[Dict] = []
+        for i, model in enumerate(top_models):
+            color = palette[i % len(palette)]
+            lbl   = short_label(model)
+            # Bar: quantity (left Y-axis)
+            datasets.append({
+                "type":            "bar",
+                "label":           f"{lbl} \u7522\u91cf",
+                "data":            [qty_map.get(model, {}).get(p, 0) for p in period_set],
+                "yAxisID":         "y_quantity",
+                "backgroundColor": color.replace(",1)", ",0.30)"),
+                "borderColor":     color,
+            })
+            # Line: defect rate (right Y-axis)
+            datasets.append({
                 "type":        "line",
-                "label":       short_label(model),
+                "label":       f"{lbl} \u4e0d\u826f\u7387",
                 "data":        [model_map[model].get(p) for p in period_set],
                 "yAxisID":     "y_defect_rate",
-                "borderColor": palette[i % len(palette)],
+                "borderColor": color,
                 "fill":        False,
                 "tension":     0.3,
-            }
-            for i, model in enumerate(top_models)
-        ]
+            })
 
         chart_config = {
             "chart_type": "bar_line_combo",
             "title":      title_zh,
             "labels":     period_set,
-            "datasets":   [bar_dataset] + line_datasets,
+            "datasets":   datasets,
             "yAxes": {
-                "y_quantity":    {"label": "總產量 (units)", "position": "left"},
-                "y_defect_rate": {"label": "不良率 (%)",    "position": "right"},
+                "y_quantity":    {"label": "\u5404\u6a5f\u7a2e\u7522\u91cf (units)", "position": "left"},
+                "y_defect_rate": {"label": "\u4e0d\u826f\u7387 (%)",         "position": "right"},
             }
         }
 

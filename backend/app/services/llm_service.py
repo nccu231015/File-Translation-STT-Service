@@ -241,17 +241,39 @@ class LLMService:
                 original_question = next(
                     (m["content"] for m in reversed(messages) if m["role"] == "user"), ""
                 )
-                
+
                 # Build lean synthesis prompt (no tool history)
                 synthesis_messages = [
                     {
                         "role": "system",
                         "content": (
                             "你是一位簡潔、專業的製造業數據分析師，服務的公司位於台灣。"
-                            "不論任何情況，一律必須使用《繁體中文》回答，絕對不允許使用英文、簡體中文。"
-                            "請直接根据提供的數据作答，不要廢話。"
+                            "《強制規定》：無論數據中是否包含英文，你的回覆必須全程使用繁體中文。"
+                            "絕對禁止輸出任何英文句子或段落。數字、代號除外。"
                         )
                     },
+                    # Few-shot: demonstrate correct Traditional Chinese response format
+                    {
+                        "role": "user",
+                        "content": (
+                            "使用者問題：目前哪些產線不良率最高？\n"
+                            "\n查詢到的數據如下：\n"
+                            "{\"status\":\"success\",\"data\":[{\"產線\":\"F2\",\"不良率百分比\":1.85},{\"產線\":\"T1\",\"不良率百分比\":0.76}]}\n"
+                            "\n請用《繁體中文》回答。"
+                        )
+                    },
+                    {
+                        "role": "assistant",
+                        "content": (
+                            "根據今日查詢結果，不良率最高的產線如下：\n\n"
+                            "| 產線 | 不良率 (%) |\n"
+                            "|------|----------|\n"
+                            "| F2 | 1.85 |\n"
+                            "| T1 | 0.76 |\n\n"
+                            "F2 產線的不良率顯著高於其他產線，建議優先調查其製程異常原因。"
+                        )
+                    },
+                    # Actual synthesis request
                     {
                         "role": "user",
                         "content": f"""使用者問題：{original_question}
@@ -259,10 +281,10 @@ class LLMService:
 查詢到的數據如下：
 {tool_results_text}
 
-請用《繁體中文》回答以上問題。規範：
-1. **數据一致性鐵律**：輸出的表格項數必須與數据源中的數組長度絕對對齊。
-2. **排行與數据表格化**：排行或數値必須優先使用 Markdown 表格呈現。
-3. **專業數据解說**：在表格下方提供一段專業文字解說。不得用英文。"""
+《重要》請使用《繁體中文》回答，不得出現英文段落。規範：
+1. **數據表格化**：排行或數値必須優先使用 Markdown 表格呈現。
+2. **數據一致性**：輸出的表格項數必須與數據源中的筆數對齊。
+3. **專業解說**：在表格下方提供一段繁體中文的專業文字解說。"""
                     }
                 ]
                 
