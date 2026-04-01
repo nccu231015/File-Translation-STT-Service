@@ -773,14 +773,14 @@ class FactorySqlTools:
         start_ymd = start_date.replace('-', '')
         end_ymd   = end_date.replace('-', '')
         
-        # Cross-reference note: SBMC in QTY table might match either TOPIC or EQUIPMENT_CODE
+        # Mapping Note: SBMC in QTY table corresponds directly to TOPIC in Info Dict.
         pg_qty_query = f"""
             SELECT
                 SUM(COALESCE("LPSL", 0)) AS "total_ok",
                 SUM(COALESCE("BLSL", 0)) AS "total_ng"
             FROM "public"."CIM_MQTT_OK_NG_QTY"
             WHERE "YMD" BETWEEN '{start_ymd}' AND '{end_ymd}'
-              AND ("SBMC" = '{topic}' OR "SBMC" = '{eq_code}')
+              AND "SBMC" = '{topic}'
         """
         qty_res = self._execute_postgres_query(pg_qty_query)
         total_good = 0
