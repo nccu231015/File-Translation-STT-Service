@@ -558,7 +558,7 @@ class FactorySqlTools:
 
         return {
             "status": "success",
-            "queried_floor": floor or "ALL",
+            "queried_floor": floor or "全廠",
             "query_date": target_date or datetime.date.today().isoformat(),
             "overall_summary": {
                 "total_lines": total,
@@ -566,8 +566,8 @@ class FactorySqlTools:
                 "stopped_lines": total - running_total,
                 "utilization_rate_pct": round(running_total / total * 100, 1) if total > 0 else 0
             },
-            "floor_summary": floor_summary,   # per-floor breakdown table
-            "line_detail": result              # per-line detail table with green/red
+            "floor_summary": floor_summary,
+            "line_detail": result if floor else [] # Only send line-by-line detail if a specific floor is selected.
         }
 
     # ──────────────────────────────────────────────────────────────────────────────
