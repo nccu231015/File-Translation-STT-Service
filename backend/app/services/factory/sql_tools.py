@@ -985,7 +985,7 @@ class FactorySqlTools:
         end_date: str = None,
         granularity: str = 'quarterly',
         periods: int = 4,
-        limit: int = 10
+        limit: int = 5
     ) -> Dict[str, Any]:
         """
         Q7: Rank models by defect rate fluctuation (MAX − MIN across time periods).
