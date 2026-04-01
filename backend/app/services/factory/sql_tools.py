@@ -503,13 +503,13 @@ class FactorySqlTools:
         clean_rows = []
         for r in rows:
             rate = r.get('稼動率(%)')
-            y_rate = r.get('良率(%)')
+            # 只有當稼動率 > 0 時才顯示數字，否則一律顯示 '-' 以便一眼看出開工機台
+            disp_rate = f"{rate}%" if (rate and float(rate) > 0) else "-"
+            
             clean_rows.append({
                 '樓層': r.get('樓層', '未知'),
-                '設備(代碼)': f"{r.get('設備名稱')} ({r.get('設備代碼')})",
-                '稼動率(%)': rate if rate is not None else '-',
-                '產出(良/不良)': f"{r.get('良品數量', 0)} / {r.get('不良數量', 0)}",
-                '良率(%)': y_rate if y_rate is not None else '-'
+                '設備 (代碼)': f"{r.get('設備名稱')} ({r.get('設備代碼')})",
+                '稼動率': disp_rate
             })
             
         return {
