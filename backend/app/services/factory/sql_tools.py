@@ -466,7 +466,7 @@ class FactorySqlTools:
                 END AS "良率(%)",
                 '{target_date}' AS "資料日期"
             FROM "public"."CIM_MQTT_OK_NG_QTY" q
-            LEFT JOIN "public"."EQUIPMENT_INFO_DICT" e ON e."EQUIPMENT_CODE" = q."SBMC"
+            LEFT JOIN "public"."EQUIPMENT_INFO_DICT" e ON e."TOPIC" = q."SBMC"
             WHERE q."YMD" = '{target_ymd}'
             {floor_filter}
             GROUP BY e."EQUIP_INSTALL_POSITION", q."SBMC", e."EQUIPMENT_NAME"
@@ -515,28 +515,30 @@ class FactorySqlTools:
                 END AS "良率(%)",
                 '{target_date}' AS "資料日期"
             FROM "public"."CIM_MQTT_OK_NG_QTY" q
-            LEFT JOIN "public"."EQUIPMENT_INFO_DICT" e ON e."EQUIPMENT_CODE" = q."SBMC"
+            LEFT JOIN "public"."EQUIPMENT_INFO_DICT" e ON e."TOPIC" = q."SBMC"
             WHERE q."YMD" = '{target_ymd}'
             GROUP BY e."EQUIP_INSTALL_POSITION", q."SBMC", e."EQUIPMENT_NAME"
-            HAVING
-                COALESCE(SUM(q."LPSL"), 0) + COALESCE(SUM(q."BLSL"), 0) > 0
-                AND ROUND((
-                    COALESCE(SUM(q."LPSL"), 0)::FLOAT /
-                    (COALESCE(SUM(q."LPSL"), 0) + COALESCE(SUM(q."BLSL"), 0)) * 100
-                )::NUMERIC, 2) < {threshold}
-            ORDER BY "良率(%)" ASC
+            ORDER BY "樓層", "設備代碼"
         """
         rows = self._execute_postgres_query(query)
-        # Inject Python-side flag and icon (keep out of SQL for portability)
+        # Inject Python-side flag and icon
+        below_count = 0
         for row in rows:
             rate = row.get('良率(%)')
-            row['是否未達標'] = True
-            row['狀態燈'] = '🔴 未達標' if (rate is not None and float(rate) < threshold) else '🟢 達標'
+            if rate is not None and float(rate) < threshold:
+                row['是否未達標'] = True
+                row['狀態燈'] = '🔴 未達標'
+                below_count += 1
+            else:
+                row['是否未達標'] = False
+                row['狀態燈'] = '🟢 達標'
         return {
-            "status":     "success",
-            "query_date": target_date,
-            "threshold":  threshold,
-            "data":       rows
+            "status":          "success",
+            "query_date":      target_date,
+            "threshold":       threshold,
+            "total_equipment": len(rows),
+            "below_count":     below_count,
+            "data":            rows
         }
 
     # ══════════════════════════════════════════════════════════════════════════════
@@ -574,7 +576,7 @@ class FactorySqlTools:
                 COALESCE(SUM_BLSL.total_blsl, 0)             AS "不良數量",
                 '{target_date}'                              AS "資料日期"
             FROM "public"."CIM_MQTT_OK_NG_QTY" q
-            LEFT JOIN "public"."EQUIPMENT_INFO_DICT" e ON e."EQUIPMENT_CODE" = q."SBMC"
+            LEFT JOIN "public"."EQUIPMENT_INFO_DICT" e ON e."TOPIC" = q."SBMC"
             LEFT JOIN (
                 SELECT "SBMC", SUM("LPSL") AS total_lpsl
                 FROM   "public"."CIM_MQTT_OK_NG_QTY"
@@ -589,7 +591,7 @@ class FactorySqlTools:
             ) SUM_BLSL ON SUM_BLSL."SBMC" = q."SBMC"
             WHERE q."YMD" = '{target_ymd}'
               AND e."EQUIP_INSTALL_POSITION" = '{safe_floor}'
-            ORDER BY "設備類型", "設備代碼"
+            ORDER BY "設備名稱", "設備代碼"
         """
 
         # Current state query: latest signal code per device
