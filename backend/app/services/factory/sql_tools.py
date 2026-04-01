@@ -1554,9 +1554,12 @@ class FactorySqlTools:
             conn = psycopg2.connect(host=POSTGRES_CONFIG['host'], port=POSTGRES_CONFIG['port'],
                                     user=POSTGRES_CONFIG['user'], password=POSTGRES_CONFIG['password'], dbname=POSTGRES_CONFIG['database'])
             cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            print(f"\n[PG Execute]\n{query}\n", flush=True)
             cursor.execute(query)
             result = cursor.fetchall()
             conn.close()
+            print(f"[PG Result] {len(result)} rows", flush=True)
             return [_sanitize(dict(row)) for row in result]
-        except Exception:
-            return []
+        except Exception as e:
+            print(f"[PG ERROR] {e}\nQuery was:\n{query}", flush=True)
+            return [{"error": str(e)}]
