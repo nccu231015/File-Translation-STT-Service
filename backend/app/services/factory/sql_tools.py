@@ -725,11 +725,13 @@ class FactorySqlTools:
             target_date = datetime.date.today().isoformat()
 
         if lookback_days > 1:
+            display_date_val = f"CONVERT(VARCHAR, DATEADD(day, -{lookback_days - 1}, '{target_date}'), 120) + ' ~ ' + '{target_date}'"
             time_cond = (
                 f"PRO_TIME >= DATEADD(day, -{lookback_days - 1}, '{target_date}') "
                 f"AND PRO_TIME <= '{target_date}'"
             )
         else:
+            display_date_val = f"'{target_date}'"
             time_cond = f"PRO_TIME = '{target_date}'"
 
         query = f"""
@@ -743,7 +745,7 @@ class FactorySqlTools:
                     ELSE ROUND(
                             CAST(SUM(BAD_PRO_RATE) AS FLOAT) / SUM(ACTUAL_PRO) * 100, 2)
                 END                     AS [不良率百分比],
-                '{target_date}'         AS [資料日期]
+                {display_date_val}      AS [資料日期]
             FROM [dbo].[Daily_Status_Report]
             WHERE {time_cond}
               AND [NO] IS NOT NULL
@@ -753,9 +755,18 @@ class FactorySqlTools:
         """
         result = self._execute_mssql_query(query)
 
+        # Build range string for JSON return metadata
+        range_label = target_date
+        if lookback_days > 1:
+            try:
+                start_dt = datetime.datetime.strptime(target_date, '%Y-%m-%d') - datetime.timedelta(days=lookback_days-1)
+                range_label = f"{start_dt.date().isoformat()} ~ {target_date}"
+            except:
+                pass
+
         return {
             "status": "success",
-            "query_date": target_date,
+            "query_range": range_label,
             "lookback_days": lookback_days,
             "limit": limit,
             "metadata_warning": (
