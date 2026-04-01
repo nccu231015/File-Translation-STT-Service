@@ -4,174 +4,196 @@ import datetime
 
 class EquipmentSqlAgent:
     """
-    負責處理「設備檢索」上下文的 PostgreSQL 工具調用，將自然語言轉為特定設備分析。
+    負責處理「設備檢索」上下文的工具調用，將自然語言轉為 4 種設備分析功能：
+      EQ-A: 各樓層設備即時稼動狀態
+      EQ-B: 良率未達標設備（紅色標記）
+      EQ-C: 指定樓層設備稼動燈號與稼動率
+      EQ-D: 特定設備生產機種不良率趨勢（Bar+Line）
     """
-    
+
     def __init__(self, llm_service):
-        self.llm = llm_service
+        self.llm   = llm_service
         self.tools = FactorySqlTools()
-        
+
     def _get_tool_schemas(self) -> List[Dict[str, Any]]:
-        """
-        給 LLM 理解我們有哪些可用的工具 (設備專區)。
-        這可以提供給相容 OpenAI Tool Calling 的模型使用。
-        """
         return [
+            # ── EQ-A ─────────────────────────────────────────────────────────────
             {
                 "type": "function",
                 "function": {
-                    "name": "get_active_equipment",
-                    "description": "[設備檢索] 獲取當前有哪些設備正在跨線支援或正在稼動。可指定日期。",
+                    "name": "get_equipment_operation_status",
+                    "description": (
+                        "[設備] 查詢各樓層設備的即時稼動狀態。"
+                        "按樓層與設備類型分組，呈現良品數、不良數、良率、資料日期。"
+                        "可選擇指定樓層（如 '3F'）或查全廠。"
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "target_date": {"type": "string", "description": "查詢的日期字串，格式為 YYYY-MM-DD，若無提供可略。"}
+                            "floor": {
+                                "type": "string",
+                                "description": "樓層，例如 '1F'、'3F'、'4F'。不傳則查全廠。"
+                            },
+                            "target_date": {
+                                "type": "string",
+                                "description": "查詢日期，格式 YYYY-MM-DD。不傳則用今天。"
+                            }
                         }
                     }
                 }
             },
+            # ── EQ-B ─────────────────────────────────────────────────────────────
             {
                 "type": "function",
                 "function": {
-                    "name": "get_equipment_location",
-                    "description": "[設備檢索] 根據設備名稱關鍵字搜尋設備的安裝位置/樓層。適用於『成型機在哪裡』、『XX機裝在哪』等位置查詢問題。",
+                    "name": "get_underperforming_equipment",
+                    "description": (
+                        "[設備] 找出良率未達標的設備（預設門檻：80%）。"
+                        "良率 = 良品數 / (良品數 + 不良數) × 100。"
+                        "回傳達標狀態燈號（🔴未達標），含資料日期。"
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "keyword": {"type": "string", "description": "設備名稱關鍵字，例如 '成型機'、'真空泵'、'SMT' 等。"}
-                        },
-                        "required": ["keyword"]
+                            "target_date": {
+                                "type": "string",
+                                "description": "查詢日期，格式 YYYY-MM-DD。不傳則用今天。"
+                            },
+                            "threshold": {
+                                "type": "number",
+                                "description": "良率門檻（百分比），預設 80.0。"
+                            }
+                        }
                     }
                 }
             },
+            # ── EQ-C ─────────────────────────────────────────────────────────────
             {
                 "type": "function",
                 "function": {
-                    "name": "get_equipment_by_floor",
-                    "description": "[設備檢索] 根據安裝地點樓層獲取設備配置資料，例如查詢 1F 有哪些成型機。如果是 SMT，樓層為 '3F'。",
+                    "name": "get_floor_equipment_status",
+                    "description": (
+                        "[設備] 查詢指定樓層的設備總數與稼動狀態。"
+                        "按設備類型分組，顯示即時狀態燈號（🟢稼動中/🔴停機/🟡閒置/⚫關機）"
+                        "與稼動率 = RUN / (RUN + DOWN)。"
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "floor": {"type": "string", "description": "樓層名稱，例如 '1F', '3F', '4F' 等。"}
+                            "floor": {
+                                "type": "string",
+                                "description": "必填。樓層，例如 '1F'、'3F'、'4F'。"
+                            },
+                            "target_date": {
+                                "type": "string",
+                                "description": "查詢日期，格式 YYYY-MM-DD。不傳則用今天。"
+                            }
                         },
                         "required": ["floor"]
                     }
                 }
             },
+            # ── EQ-D ─────────────────────────────────────────────────────────────
             {
                 "type": "function",
                 "function": {
-                    "name": "get_equipment_production_status",
-                    "description": "[設備檢索] 獲取指定日期的所有生產設備的總結運行狀況，包含 RUN、DOWN 時間以及良率、進度等。【注意：此工具不含工單號碼，若需查工單號碼或生產機種，請改用 get_equipment_downtime_stats】",
+                    "name": "get_equipment_model_production_trend",
+                    "description": (
+                        "[設備] 查詢特定設備在時間區間內生產了哪些機種，以及各機種的"
+                        "產量與不良率趨勢。可用設備代碼（如 '94135B'）或設備名稱關鍵字"
+                        "（如 '成型機A'）指定設備。"
+                        "回傳 bar_line_combo 圖表（Bar=產量, Line=不良率）與詳細資料表。"
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "target_date": {"type": "string", "description": "查詢的日期字串，格式為 YYYY-MM-DD。若無提供可用今天。"}
-                        }
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_equipment_failure_trend",
-                    "description": "[設備檢索] 設備故障趨勢，依據時間範圍抓取各設備的故障次數與代碼，可用來分析「哪台設備故障最多次」或「某段時間的故障分布」。",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "start_date": {"type": "string", "description": "查詢的開始日期字串，包含這一天，格式為 YYYY-MM-DD。"},
-                            "end_date": {"type": "string", "description": "查詢的結束日期字串，包含這一天，格式為 YYYY-MM-DD。"}
+                            "start_date": {
+                                "type": "string",
+                                "description": "查詢開始日期，格式 YYYY-MM-DD。"
+                            },
+                            "end_date": {
+                                "type": "string",
+                                "description": "查詢結束日期，格式 YYYY-MM-DD。"
+                            },
+                            "equipment_code": {
+                                "type": "string",
+                                "description": "設備代碼（SBMC/TOPIC），例如 '94135B'。與 equipment_name 擇一。"
+                            },
+                            "equipment_name": {
+                                "type": "string",
+                                "description": "設備名稱關鍵字，例如 '成型機A'。系統會模糊比對。與 equipment_code 擇一。"
+                            },
+                            "granularity": {
+                                "type": "string",
+                                "description": (
+                                    "時間粒度：'daily'（每日）、'weekly'（每週）、"
+                                    "'monthly'（月對月）、'quarterly'（季對季）、'yearly'（年對年）。"
+                                    "預設 'monthly'。"
+                                )
+                            }
                         },
                         "required": ["start_date", "end_date"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_equipment_downtime_stats",
-                    "description": "[設備檢索] 設備深入停機時間統計，包含 RUN/IDEL/DOWN/SHUTDOWN 各項具體數値、故障次數、良率、標準產能，以及【工單號碼 (WORK_ORDER_NO)】與生產機種資訊。若用戶需要查詢工單號碼、昨天/今天正在生產的機種，必須使用此工具。",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "start_date": {"type": "string", "description": "查詢的開始日期字串，包含這一天，格式為 YYYY-MM-DD。"},
-                            "end_date": {"type": "string", "description": "查詢的結束日期字串，包含這一天，格式為 YYYY-MM-DD。"}
-                        },
-                        "required": ["start_date", "end_date"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_production_line_count",
-                    "description": "查詢廠內產線數量（產線 ≠ 設備，產線是報工用的邏輯線別，設備是實體機台）。若問「某樓有幾條產線」，傳入 floor 參數；若問「全廠共幾條產線」或「各樓層分佈」，不傳 floor。",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "floor": {"type": "string", "description": "樓層編號，例如 '1'、'3'、'4'。不傳此參數則回傳全廠分佈。"}
-                        }
                     }
                 }
             },
         ]
 
-    async def execute_task(self, question: str) -> str:
+    async def execute_task(self, question: str) -> Dict[str, Any]:
         """Alias for compatibility with router agent."""
         return await self.chat(question)
 
-    async def chat(self, question: str, history: List[Dict[str, str]] = None) -> str:
-        """
-        支援上下文記憶的聊天接口。
-        """
+    async def chat(self, question: str, history: List[Dict[str, str]] = None) -> Dict[str, Any]:
+        """支援上下文記憶的聊天接口，回傳與 SqlAgent 格式一致的 dict。"""
         current_date_info = f"目前的系統日期是 {datetime.date.today().isoformat()}。"
-        
+
         system_prompt = f"""你是一個專業的製造業數據分析專家，負責處理「全一電子」的**設備專用數據**。
-你的任務是根據使用者的問題，調用 PostgreSQL 工具來獲取即時設備數據，並給出詳細、專業且易懂的分析回覆。
+你的任務是根據使用者的問題，調用資料庫工具來獲取即時設備數據，並給出詳細、專業且易懂的分析回覆。
 
 {current_date_info}
 
-數據源提示：
-此模式為【設備檢索】模式，資料庫聚焦在機台底層（如 SMT、成型機）的 MQTT 收集訊號，以及設備靜態配置。
+【數據源說明】
+此模式為【設備檢索】模式，資料來自設備 MQTT 信號（PostgreSQL）及生產記錄（MSSQL）。
 
-規範：
-1. **設備查詢調用**：
-   - 詢問「XX設備/機台在哪裡」、「安裝位置」，調用 `get_equipment_location`（用設備名稱關鍵字模糊搜尋）。
-   - 詢問設備配置、樓層機台（例：「1F 有哪些設備？」），調用 `get_equipment_by_floor`。
-   - 詢問「工廠總共有幾條產線、各樓有幾條產線」（產線 ≠ 設備，產線是報工用的逻輯線别），調用 `get_production_line_count`。
-   - 詢問設備一般生產狀態、稼動狀態、良率、進度，調用 `get_equipment_production_status`（注意：不含工單號碼）。
-   - 詢問設備故障趨勢，調用 `get_equipment_failure_trend`。
-   - 詢問設備深入停機各項時間統計 (RUN/IDEL/DOWN)、原因、**工單號碼、生產機種**，調用 `get_equipment_downtime_stats`。
-   - 當用戶詢問『當前有哪些設備正在跨線支援/稼動』，調用 `get_active_equipment`。
-   
-2. **查無資料處理機制 (極重要)**：如果工具回傳的結果為空 (例如 `data` 陣列長度為 0)，**嚴格禁止暴露出程式語言、變數名稱及任何後端結構**。
-   - 絕對禁止回覆「data 為空陣列」、「系統回傳空值」等工程字眼。
-   - 請婉轉地回答：「目前設備系統中查無相關數據。可能該樓層或指定時間區間內機台尚未回傳訊號，或無故障停機紀錄。」
+【工具調用規範】
+1. 詢問「各樓層設備稼動狀態、生產數、不良數」→ 調用 `get_equipment_operation_status`
+   - 全廠：不傳 floor；指定樓層：傳入 floor（如 '3F'）
+   - 必須含資料日期
 
-3. **絕對禁止暴露系統內部邏輯與程式術語 (極重要)**：
-   - 永遠不要在回覆中向使用者展現思考過程。
-   - **嚴禁使用任何程式、變數或資料庫相關的字眼**。例如，絕對不可以說出「根據資料庫查詢結果」、「回傳的 data 陣列」、「line_count 為」、「欄位顯示」、「工具取得之數據」、「系統回傳的參數」等字句。
-   - 請完全以「資深工廠主管或專家的口吻」與使用者直接報告內容。
+2. 詢問「哪些設備達成率/良率未達標、低於80%、未達標」→ 調用 `get_underperforming_equipment`
+   - threshold 預設 80.0（即良率 < 80% 標記為紅色）
+   - 回覆需包含 🔴/🟢 燈號說明
 
-4. **嚴格禁止憑對話記憶回答產線數據 (防幻覺最高指導)**：只要使用者提及特定的機台狀態或數據，**必須、立刻調用 SQL 工具向資料庫拉取最新數據**。若未去資料庫調用工具，不准給出具體數量結論。
+3. 詢問「某樓層設備有幾台在稼動、設備稼動率、開工/停工狀態」→ 調用 `get_floor_equipment_status`
+   - floor 為必填（如 '3F'）
+   - 回覆需包含總台數、稼動台數、停機台數、稼動率
 
-5. **回答風格**：有數據時，以 Markdown 表格呈現並重點解說亮點（例如佔比最高的停機原因），並且使用親切口吻。請使用繁體中文。
+4. 詢問「某設備今天/這段時間生產了哪些機種、機種的不良率走勢、設備生產趨勢」→ 調用 `get_equipment_model_production_trend`
+   - equipment_code 或 equipment_name 擇一提供
+   - 時間範圍：今天 = start_date=end_date=今天；近30天 = 往前30天；本季/半年依此計算
+   - granularity 對應：月對月=monthly、季對季=quarterly、每日=daily、每週=weekly、年對年=yearly
+
+【回覆格式規範】
+- **全程使用繁體中文**，絕對禁止輸出英文句子
+- 有數據時優先使用 **Markdown 表格**呈現
+- 燈號說明：🟢=稼動/達標，🔴=停機/未達標，🟡=閒置，⚫=關機
+- 圖表（EQ-D）回覆需提及「柱狀圖代表各機種產量（左軸），折線代表不良率（右軸）」
+- 禁止暴露程式術語（如 data 陣列、SQL 欄位名稱等）
+- 查無資料時，婉轉說明：「目前設備系統尚未回傳相關數據，可能機台尚未開機或該日無生產記錄。」
 """
         messages = [{"role": "system", "content": system_prompt}]
         if history:
             for h in history[-10:]:
                 messages.append({"role": h["role"], "content": h["content"]})
-        
         messages.append({"role": "user", "content": question})
 
         try:
-            # 參數名稱 tool_executor_obj 必須與 llm_service.py 定義一致
-            response = await self.llm.chat_with_tools(
+            result = await self.llm.chat_with_tools(
                 messages=messages,
                 tools=self._get_tool_schemas(),
                 tool_executor_obj=self.tools
             )
-            return self.llm.s2tw.convert(response)
+            response_text = self.llm.s2tw.convert(result["response"])
+            return {"response": response_text, "chart_config": result.get("chart_config")}
         except Exception as e:
             print(f"[Equipment SQL Agent Error] {e}")
-            return f"抱歉，在查詢資料庫時發生錯誤：{str(e)}"
+            return {"response": f"抱歉，在查詢設備資料庫時發生錯誤：{str(e)}", "chart_config": None}

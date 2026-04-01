@@ -6,11 +6,7 @@ from .db_config import MSSQL_CONFIG, POSTGRES_CONFIG
 from decimal import Decimal
 import datetime
 
-from .sql_pg_queries import (
-    _get_query_1_production_status,
-    _get_query_2_failure_trend,
-    _get_query_3_downtime_stats
-)
+import re
 
 def _sanitize(row: dict) -> dict:
     """
@@ -434,55 +430,406 @@ class FactorySqlTools:
         )
         return {"status": "success", "target_date": target_date, "lookback_days": lookback_days, "limit": limit, "metadata_warning": warning_msg, "data": result}
         
-    def get_active_equipment(self, target_date: str = None) -> Dict[str, Any]:
-        """ PostgreSQL 查詢: 當前稼動設備。 """
-        if target_date:
-            # YMD 欄位格式為 'YYYYMMDD'（8位數字），移除 ISO 格式中的連字符
-            date_compact = target_date.replace("-", "")
-            date_val = f"'{date_compact}'"
-        else:
-            date_val = "TO_CHAR(CURRENT_DATE, 'YYYYMMDD')"
-        query = f"SELECT distinct \"TOPIC\" FROM \"public\".\"CIM_MQTTCOLLECT\" WHERE \"YMD\"={date_val} AND CAST(\"CODEVALUE\" AS NUMERIC)>0"
-        return {"status": "success", "date_queried": date_val, "data": self._execute_postgres_query(query)}
-
-    def get_equipment_location(self, keyword: str) -> Dict[str, Any]:
+    # ══════════════════════════════════════════════════════════════════════════════
+    # EQ-A: Real-time equipment operation status (all floors or specific floor)
+    # Req 1: table by floor × device-type, with good/bad qty + date
+    # ══════════════════════════════════════════════════════════════════════════════
+    def get_equipment_operation_status(
+        self,
+        floor: str = None,
+        target_date: str = None
+    ) -> Dict[str, Any]:
         """
-        PostgreSQL 查詢: 根據設備名稱關鍵字模糊搜尋設備的安裝位置 (樓層)。
-        例如：輸入 '成型機' 可找到所有成型機及其所在樓層。
+        EQ-A: Real-time equipment operation status grouped by floor + device type.
+        Returns: good qty, bad qty, yield rate, collection date.
+        Source: CIM_MQTT_OK_NG_QTY (daily aggregated) + EQUIPMENT_INFO_DICT.
         """
-        safe_keyword = keyword.replace("'", "''")  # 防止 SQL Injection
-        query = f"""
-            SELECT "EQUIP_ID", "EQUIP_NAME", "EQUIP_INSTALL_POSITION", "EQUIP_TYPE"
-            FROM "public"."EQUIPMENT_INFO_DICT"
-            WHERE "EQUIP_NAME" ILIKE '%{safe_keyword}%'
-               OR "EQUIP_TYPE" ILIKE '%{safe_keyword}%'
-            ORDER BY "EQUIP_INSTALL_POSITION", "EQUIP_NAME"
-        """
-        result = self._execute_postgres_query(query)
-        return {"status": "success", "keyword": keyword, "data": result}
-
-    def get_equipment_by_floor(self, floor: str) -> Dict[str, Any]:
-        """ PostgreSQL 查詢: 根據安裝地點樓層獲取設備配置資料 """
-        query = f"SELECT * FROM \"public\".\"EQUIPMENT_INFO_DICT\" WHERE \"EQUIP_INSTALL_POSITION\"='{floor}'"
-        return {"status": "success", "floor": floor, "data": self._execute_postgres_query(query)}
-        
-    def get_equipment_production_status(self, target_date: str = None) -> Dict[str, Any]:
-        """ PostgreSQL 查詢: 依據日期抓取生產設備的運行狀況、總結良率等等 """
-        import datetime
         if not target_date:
             target_date = datetime.date.today().isoformat()
-        query = _get_query_1_production_status(target_date)
-        return {"status": "success", "target_date": target_date, "data": self._execute_postgres_query(query)}
+        target_ymd = target_date.replace('-', '')
+        floor_filter = f'AND e."EQUIP_INSTALL_POSITION" = \'{floor.replace(chr(39), chr(39)*2)}\'' if floor else ''
 
-    def get_equipment_failure_trend(self, start_date: str, end_date: str) -> Dict[str, Any]:
-        """ PostgreSQL 查詢: 故障趨勢，依據時間範圍抓取各設備的故障次數與代碼 """
-        query = _get_query_2_failure_trend(start_date, end_date)
-        return {"status": "success", "start_date": start_date, "end_date": end_date, "data": self._execute_postgres_query(query)}
+        query = f"""
+            SELECT
+                COALESCE(e."EQUIP_INSTALL_POSITION", 'N/A') AS "樓層",
+                COALESCE(e."EQUIP_TYPE",             'N/A') AS "設備類型",
+                q."SBMC"                                     AS "設備代碼",
+                COALESCE(e."EQUIPMENT_NAME", q."SBMC")       AS "設備名稱",
+                COALESCE(SUM(q."LPSL"), 0)                   AS "良品數量",
+                COALESCE(SUM(q."BLSL"), 0)                   AS "不良數量",
+                CASE
+                    WHEN COALESCE(SUM(q."LPSL"), 0) + COALESCE(SUM(q."BLSL"), 0) > 0
+                    THEN ROUND((
+                        COALESCE(SUM(q."LPSL"), 0)::FLOAT /
+                        (COALESCE(SUM(q."LPSL"), 0) + COALESCE(SUM(q."BLSL"), 0)) * 100
+                    )::NUMERIC, 2)
+                    ELSE NULL
+                END AS "良率(%)",
+                '{target_date}' AS "資料日期"
+            FROM "public"."CIM_MQTT_OK_NG_QTY" q
+            LEFT JOIN "public"."EQUIPMENT_INFO_DICT" e ON e."EQUIPMENT_CODE" = q."SBMC"
+            WHERE q."YMD" = '{target_ymd}'
+            {floor_filter}
+            GROUP BY e."EQUIP_INSTALL_POSITION", e."EQUIP_TYPE", q."SBMC", e."EQUIPMENT_NAME"
+            ORDER BY "樓層", "設備類型", "設備代碼"
+        """
+        rows = self._execute_postgres_query(query)
+        return {
+            "status":      "success",
+            "query_date":  target_date,
+            "floor":       floor or "全廠",
+            "data":        rows
+        }
 
-    def get_equipment_downtime_stats(self, start_date: str, end_date: str) -> Dict[str, Any]:
-        """ PostgreSQL 查詢: 停機時間深入統計 (RUN, IDEL, DOWN, SHUTDOWN, 故障次數, 產量) 等等 """
-        query = _get_query_3_downtime_stats(start_date, end_date)
-        return {"status": "success", "start_date": start_date, "end_date": end_date, "data": self._execute_postgres_query(query)}
+    # ══════════════════════════════════════════════════════════════════════════════
+    # EQ-B: Underperforming equipment (yield rate < threshold)
+    # Req 2: table with red highlight flag for yield < 80%
+    # ══════════════════════════════════════════════════════════════════════════════
+    def get_underperforming_equipment(
+        self,
+        target_date: str = None,
+        threshold: float = 80.0
+    ) -> Dict[str, Any]:
+        """
+        EQ-B: Find equipment with yield rate (良率) below threshold (default 80%).
+        良率 = LPSL / (LPSL + BLSL) * 100.
+        Returns: all equipment, flagging below-threshold with below_threshold=True.
+        """
+        if not target_date:
+            target_date = datetime.date.today().isoformat()
+        target_ymd = target_date.replace('-', '')
+
+        query = f"""
+            SELECT
+                COALESCE(e."EQUIP_INSTALL_POSITION", 'N/A') AS "樓層",
+                COALESCE(e."EQUIP_TYPE",             'N/A') AS "設備類型",
+                q."SBMC"                                     AS "設備代碼",
+                COALESCE(e."EQUIPMENT_NAME", q."SBMC")       AS "設備名稱",
+                COALESCE(SUM(q."LPSL"), 0)                   AS "良品數量",
+                COALESCE(SUM(q."BLSL"), 0)                   AS "不良數量",
+                CASE
+                    WHEN COALESCE(SUM(q."LPSL"), 0) + COALESCE(SUM(q."BLSL"), 0) > 0
+                    THEN ROUND((
+                        COALESCE(SUM(q."LPSL"), 0)::FLOAT /
+                        (COALESCE(SUM(q."LPSL"), 0) + COALESCE(SUM(q."BLSL"), 0)) * 100
+                    )::NUMERIC, 2)
+                    ELSE NULL
+                END AS "良率(%)",
+                '{target_date}' AS "資料日期"
+            FROM "public"."CIM_MQTT_OK_NG_QTY" q
+            LEFT JOIN "public"."EQUIPMENT_INFO_DICT" e ON e."EQUIPMENT_CODE" = q."SBMC"
+            WHERE q."YMD" = '{target_ymd}'
+            GROUP BY e."EQUIP_INSTALL_POSITION", e."EQUIP_TYPE", q."SBMC", e."EQUIPMENT_NAME"
+            HAVING
+                COALESCE(SUM(q."LPSL"), 0) + COALESCE(SUM(q."BLSL"), 0) > 0
+                AND ROUND((
+                    COALESCE(SUM(q."LPSL"), 0)::FLOAT /
+                    (COALESCE(SUM(q."LPSL"), 0) + COALESCE(SUM(q."BLSL"), 0)) * 100
+                )::NUMERIC, 2) < {threshold}
+            ORDER BY "良率(%)" ASC
+        """
+        rows = self._execute_postgres_query(query)
+        # Inject Python-side flag and icon (keep out of SQL for portability)
+        for row in rows:
+            rate = row.get('良率(%)')
+            row['是否未達標'] = True
+            row['狀態燈'] = '🔴 未達標' if (rate is not None and float(rate) < threshold) else '🟢 達標'
+        return {
+            "status":     "success",
+            "query_date": target_date,
+            "threshold":  threshold,
+            "data":       rows
+        }
+
+    # ══════════════════════════════════════════════════════════════════════════════
+    # EQ-C: Floor equipment status with current state (green/red) + utilization rate
+    # Req 3: grouped by device type, 稼動率 = RUN/(RUN+DOWN)
+    # ══════════════════════════════════════════════════════════════════════════════
+    def get_floor_equipment_status(
+        self,
+        floor: str,
+        target_date: str = None
+    ) -> Dict[str, Any]:
+        """
+        EQ-C: For a specific floor, show each equipment's:
+          - Device type (EQUIP_TYPE), name, code
+          - Daily RUN / DOWN / IDEL / SHUTDOWN minutes
+          - 稼動率 = RUN / (RUN + DOWN)
+          - Current real-time STATE (RUN / DOWN / IDEL / SHUTDOWN)
+          - Green / Red light indicator
+        """
+        if not target_date:
+            target_date = datetime.date.today().isoformat()
+        target_ymd  = target_date.replace('-', '')
+        safe_floor  = floor.replace("'", "''")
+
+        # Daily aggregated times (minutes) from the pre-aggregated daily table
+        query_daily = f"""
+            SELECT
+                q."SBMC"                                     AS "設備代碼",
+                COALESCE(e."EQUIPMENT_NAME", q."SBMC")       AS "設備名稱",
+                COALESCE(e."EQUIP_TYPE",     'N/A')          AS "設備類型",
+                COALESCE(q."RUN",  0)                        AS "RUN(分)",
+                COALESCE(q."DOWN", 0)                        AS "DOWN(分)",
+                COALESCE(q."IDEL", 0)                        AS "IDEL(分)",
+                COALESCE(q."SHUTDOWN", 0)                    AS "SHUTDOWN(分)",
+                COALESCE(SUM_LPSL.total_lpsl, 0)             AS "良品數量",
+                COALESCE(SUM_BLSL.total_blsl, 0)             AS "不良數量",
+                '{target_date}'                              AS "資料日期"
+            FROM "public"."CIM_MQTT_OK_NG_QTY" q
+            LEFT JOIN "public"."EQUIPMENT_INFO_DICT" e ON e."EQUIPMENT_CODE" = q."SBMC"
+            LEFT JOIN (
+                SELECT "SBMC", SUM("LPSL") AS total_lpsl
+                FROM   "public"."CIM_MQTT_OK_NG_QTY"
+                WHERE  "YMD" = '{target_ymd}'
+                GROUP BY "SBMC"
+            ) SUM_LPSL ON SUM_LPSL."SBMC" = q."SBMC"
+            LEFT JOIN (
+                SELECT "SBMC", SUM("BLSL") AS total_blsl
+                FROM   "public"."CIM_MQTT_OK_NG_QTY"
+                WHERE  "YMD" = '{target_ymd}'
+                GROUP BY "SBMC"
+            ) SUM_BLSL ON SUM_BLSL."SBMC" = q."SBMC"
+            WHERE q."YMD" = '{target_ymd}'
+              AND e."EQUIP_INSTALL_POSITION" = '{safe_floor}'
+            ORDER BY "設備類型", "設備代碼"
+        """
+
+        # Current state query: latest signal code per device
+        query_state = f"""
+            SELECT
+                sub."TOPIC" AS "設備代碼",
+                CASE
+                    WHEN sub."CODE" IN ('A003')                              THEN 'RUN'
+                    WHEN sub."CODE" IN ('A001','A006','A007','A008','A009') THEN 'DOWN'
+                    WHEN sub."CODE" IN ('A002','A011','A012','A013','A014') THEN 'IDEL'
+                    WHEN sub."CODE" IN ('A004','A010')                      THEN 'SHUTDOWN'
+                    ELSE 'UNKNOWN'
+                END AS "當前狀態"
+            FROM (
+                SELECT "TOPIC", "CODE",
+                       ROW_NUMBER() OVER (
+                           PARTITION BY "TOPIC"
+                           ORDER BY "DATETIMES" DESC
+                       ) AS rn
+                FROM "public"."CIM_MQTTCOLLECT"
+                WHERE "DATEHOUR" LIKE '{target_ymd}%'
+                  AND "CODE" IN (
+                      'A001','A002','A003','A004',
+                      'A006','A007','A008','A009',
+                      'A010','A011','A012','A013','A014'
+                  )
+            ) sub
+            WHERE sub.rn = 1
+        """
+
+        daily_rows  = self._execute_postgres_query(query_daily)
+        state_rows  = self._execute_postgres_query(query_state)
+        state_map   = {r['設備代碼']: r['當前狀態'] for r in state_rows}
+
+        STATE_ICON = {
+            'RUN':      '🟢 稼動中',
+            'DOWN':     '🔴 停機',
+            'IDEL':     '🟡 閒置',
+            'SHUTDOWN': '⚫ 關機',
+            'UNKNOWN':  '❓ 未知',
+        }
+        total_eq = len(daily_rows)
+        running  = 0
+        for row in daily_rows:
+            code  = row.get('設備代碼', '')
+            state = state_map.get(code, 'UNKNOWN')
+            run   = float(row.get('RUN(分)') or 0)
+            down  = float(row.get('DOWN(分)') or 0)
+            row['當前狀態'] = state
+            row['狀態燈']   = STATE_ICON.get(state, '❓ 未知')
+            row['稼動率(%)'] = round(run / (run + down) * 100, 1) if (run + down) > 0 else None
+            if state == 'RUN':
+                running += 1
+
+        return {
+            "status":            "success",
+            "floor":             floor,
+            "query_date":        target_date,
+            "total_equipment":   total_eq,
+            "running_count":     running,
+            "stopped_count":     total_eq - running,
+            "floor_utilization": round(running / total_eq * 100, 1) if total_eq > 0 else 0,
+            "data":              daily_rows
+        }
+
+    # ══════════════════════════════════════════════════════════════════════════════
+    # EQ-D: Equipment model production trend (cross-DB PG→MSSQL)
+    # Req 4: bar(qty) + line(defect rate) chart per machine type for one equipment
+    # ══════════════════════════════════════════════════════════════════════════════
+    def get_equipment_model_production_trend(
+        self,
+        start_date: str,
+        end_date: str,
+        equipment_code: str = None,
+        equipment_name: str = None,
+        granularity: str = 'monthly'
+    ) -> Dict[str, Any]:
+        """
+        EQ-D: For a specific equipment (by code or name keyword), retrieve
+        per-model production qty and defect rate trend across time.
+        Cross-DB: PG to get work orders → MSSQL for jz + defect data.
+        Returns bar_line_combo chart_config.
+        """
+        # Step 1: Resolve equipment_code from name if needed
+        if not equipment_code and equipment_name:
+            safe_kw = equipment_name.replace("'", "''")
+            match_q = f"""
+                SELECT "EQUIPMENT_CODE", "EQUIPMENT_NAME"
+                FROM "public"."EQUIPMENT_INFO_DICT"
+                WHERE "EQUIPMENT_NAME" ILIKE '%{safe_kw}%'
+                   OR "EQUIP_NAME"     ILIKE '%{safe_kw}%'
+                ORDER BY "EQUIPMENT_NAME" LIMIT 1
+            """
+            matches = self._execute_postgres_query(match_q)
+            if not matches:
+                return {"status": "error", "message": f"找不到設備：{equipment_name}"}
+            equipment_code = matches[0].get('EQUIPMENT_CODE') or matches[0].get('EQUIPMENT_CODE')
+            resolved_name  = matches[0].get('EQUIPMENT_NAME', equipment_name)
+        else:
+            resolved_name = equipment_code
+
+        # Step 2: PG – extract equipment line number from name, get WORK_ORDER_NOs
+        equip_info_q = f"""
+            SELECT "EQUIPMENT_NAME"
+            FROM "public"."EQUIPMENT_INFO_DICT"
+            WHERE "EQUIPMENT_CODE" = '{equipment_code.replace(chr(39), chr(39)*2)}'
+            LIMIT 1
+        """
+        info_rows    = self._execute_postgres_query(equip_info_q)
+        if not info_rows:
+            return {"status": "error", "message": f"設備代碼 {equipment_code} 查無資料"}
+
+        equip_full_name = info_rows[0].get('EQUIPMENT_NAME', '')
+        num_match       = re.search(r'\d+', equip_full_name)
+        line_no         = num_match.group() if num_match else None
+
+        if line_no:
+            start_ymd = start_date.replace('-', '')
+            end_ymd   = end_date.replace('-', '')
+            wo_query = f"""
+                SELECT DISTINCT "WORK_ORDER_NO"
+                FROM "public"."CIM_WORK_GD_NUM_GLW"
+                WHERE "NO" = '{line_no}'
+                  AND TO_CHAR("PRO_TIME", 'YYYYMMDD') BETWEEN '{start_ymd}' AND '{end_ymd}'
+            """
+            wo_rows = self._execute_postgres_query(wo_query)
+        else:
+            wo_rows = []
+
+        wo_list = [str(r.get('WORK_ORDER_NO', '')) for r in wo_rows if r.get('WORK_ORDER_NO')]
+
+        # Step 3: MSSQL – get model production data
+        granularity_map = {
+            'daily':     "CONVERT(VARCHAR(10), PRO_TIME, 120)",
+            'weekly':    "CONCAT(YEAR(PRO_TIME), '-W', RIGHT('0'+CAST(DATEPART(wk,PRO_TIME) AS VARCHAR),2))",
+            'monthly':   "CONVERT(VARCHAR(7),  PRO_TIME, 120)",
+            'quarterly': "CONCAT(YEAR(PRO_TIME), '-Q', DATEPART(QUARTER, PRO_TIME))",
+            'yearly':    "CAST(YEAR(PRO_TIME) AS VARCHAR)",
+        }
+        time_expr    = granularity_map.get(granularity, granularity_map['monthly'])
+        granularity_zh = {'daily':'每日','weekly':'每週','monthly':'月對月',
+                          'quarterly':'季對季','yearly':'年對年'}
+
+        if wo_list:
+            wo_in = "', '".join(wo for wo in wo_list if wo)
+            mssql_filter = f"AND WORK_ORDER_NO IN ('{wo_in}')"
+        else:
+            # Fallback: query by date range only (if no work order mapping found)
+            mssql_filter = ""
+
+        mssql_query = f"""
+            SELECT
+                jz                               AS [機種],
+                {time_expr}                      AS [時間標籤],
+                SUM(ACTUAL_PRO)                  AS [總產量],
+                SUM(BAD_PRO_RATE)                AS [總不良數],
+                ROUND(
+                    CAST(SUM(BAD_PRO_RATE) AS FLOAT) /
+                    NULLIF(SUM(ACTUAL_PRO), 0) * 100, 4
+                )                                AS [不良率百分比],
+                '{start_date} ~ {end_date}'      AS [資料區間]
+            FROM [dbo].[Daily_Status_Report]
+            WHERE PRO_TIME BETWEEN '{start_date}' AND '{end_date}'
+              AND jz IS NOT NULL
+              {mssql_filter}
+            GROUP BY jz, {time_expr}
+            ORDER BY jz, {time_expr}
+        """
+        trend_rows = self._execute_mssql_query(mssql_query)
+
+        # Build chart: per-model bar(qty) + line(defect) paired datasets
+        model_qty_map:  Dict[str, Dict[str, float]] = {}
+        model_rate_map: Dict[str, Dict[str, float]] = {}
+        period_set: List[str] = []
+        for row in trend_rows:
+            m = str(row.get('機種', ''))
+            p = str(row.get('時間標籤', ''))
+            model_qty_map.setdefault(m,  {})[p] = float(row.get('總產量')     or 0)
+            model_rate_map.setdefault(m, {})[p] = float(row.get('不良率百分比') or 0)
+            if p not in period_set:
+                period_set.append(p)
+        period_set.sort()
+
+        palette = [
+            'rgba(255,99,132,1)',  'rgba(54,162,235,1)',
+            'rgba(255,206,86,1)', 'rgba(75,192,192,1)',
+            'rgba(153,102,255,1)','rgba(255,159,64,1)',
+            'rgba(199,199,199,1)','rgba(83,102,255,1)',
+        ]
+        def _short(name: str) -> str:
+            return name if len(name) <= 14 else name[:13] + '\u2026'
+
+        datasets: List[Dict] = []
+        for i, model in enumerate(sorted(model_qty_map.keys())):
+            color = palette[i % len(palette)]
+            lbl   = _short(model)
+            datasets.append({
+                "type":            "bar",
+                "label":           f"{lbl} 產量",
+                "data":            [model_qty_map[model].get(p, 0) for p in period_set],
+                "yAxisID":         "y_quantity",
+                "backgroundColor": color.replace(',1)', ',0.30)'),
+                "borderColor":     color,
+                "hideInLegend":    True,
+            })
+            datasets.append({
+                "type":        "line",
+                "label":       lbl,
+                "data":        [model_rate_map[model].get(p) for p in period_set],
+                "yAxisID":     "y_defect_rate",
+                "borderColor": color,
+                "fill":        False,
+                "tension":     0.3,
+            })
+
+        chart_config = {
+            "chart_type": "bar_line_combo",
+            "title":      f"設備 {resolved_name} – 各機種產量與不良率（{granularity_zh.get(granularity, granularity)}）",
+            "labels":     period_set,
+            "datasets":   datasets,
+            "yAxes": {
+                "y_quantity":    {"label": "各機種產量 (units)", "position": "left"},
+                "y_defect_rate": {"label": "不良率 (%)",         "position": "right"},
+            }
+        }
+
+        return {
+            "status":          "success",
+            "equipment_code":  equipment_code,
+            "equipment_name":  resolved_name,
+            "start_date":      start_date,
+            "end_date":        end_date,
+            "granularity":     granularity,
+            "work_orders_found": len(wo_list),
+            "trend_data":      trend_rows,
+            "chart_config":    chart_config,
+        }
 
 
     # ──────────────────────────────────────────────────────────────────────────────
