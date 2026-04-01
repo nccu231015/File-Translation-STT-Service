@@ -451,81 +451,52 @@ class FactorySqlTools:
         if not target_date:
             target_date = datetime.date.today().isoformat()
         target_ymd  = target_date.replace('-', '')
-        safe_floor  = floor.replace("'", "''") if floor else ''
-        floor_filter = f'AND e."EQUIP_INSTALL_POSITION" = \'{safe_floor}\'' if floor else ''
+        safe_floor = floor.replace("'", "''") if floor else ''
+        floor_filter = f"AND e.\"EQUIP_INSTALL_POSITION\" ILIKE '%{safe_floor[0]}%'" if floor and len(safe_floor)>0 else ""
 
         query = f"""
-            WITH deltas AS (
-                SELECT
-                    "TOPIC" AS "SBMC",
-                    "CODE",
-                    (
-                        SUBSTRING("DATETIMES", 10, 2)::INT * 3600 +
-                        SUBSTRING("DATETIMES", 12, 2)::INT * 60 +
-                        CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT
-                    ) -
-                    LAG(
-                        SUBSTRING("DATETIMES", 10, 2)::INT * 3600 +
-                        SUBSTRING("DATETIMES", 12, 2)::INT * 60 +
-                        CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT
-                    ) OVER (
-                        PARTITION BY "TOPIC"
-                        ORDER BY "DATETIMES"
-                    ) AS duration_sec
+            WITH daily_qty AS (
+                SELECT "SBMC", SUM("LPSL") AS "LPSL", SUM("BLSL") AS "BLSL"
+                FROM "public"."CIM_MQTT_OK_NG_QTY"
+                WHERE "YMD" = '{target_ymd}'
+                GROUP BY "SBMC"
+            ),
+            deltas AS (
+                SELECT "TOPIC" AS "SBMC", "CODE",
+                       (SUBSTRING("DATETIMES", 10, 2)::INT * 3600 + SUBSTRING("DATETIMES", 12, 2)::INT * 60 + CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT) -
+                       LAG(SUBSTRING("DATETIMES", 10, 2)::INT * 3600 + SUBSTRING("DATETIMES", 12, 2)::INT * 60 + CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT)
+                       OVER (PARTITION BY "TOPIC" ORDER BY "DATETIMES") AS duration_sec
                 FROM "public"."CIM_MQTTCOLLECT"
                 WHERE "YMD" = '{target_ymd}'
-                  AND "CODE" IN (
-                      'A001','A002','A003','A004','A005',
-                      'A006','A007','A008','A009','A010',
-                      'A011','A012','A013','A014'
-                  )
             ),
             times AS (
-                SELECT
-                    "SBMC",
-                    ROUND(SUM(CASE WHEN "CODE" = 'A003'
-                                   AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "RUN",
-                    ROUND(SUM(CASE WHEN "CODE" IN ('A001','A006','A007','A008','A009')
-                                   AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "DOWN",
-                    ROUND(SUM(CASE WHEN "CODE" IN ('A002','A011','A012','A013','A014')
-                                   AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "IDEL",
-                    ROUND(SUM(CASE WHEN "CODE" IN ('A004','A010')
-                                   AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "SHUTDOWN"
-                FROM deltas
-                GROUP BY "SBMC"
+                SELECT "SBMC",
+                       ROUND(SUM(CASE WHEN "CODE" = 'A003' AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "RUN",
+                       ROUND(SUM(CASE WHEN "CODE" IN ('A001','A006','A007','A008','A009') AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "DOWN",
+                       ROUND(SUM(CASE WHEN "CODE" IN ('A002','A011','A012','A013','A014') AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "IDEL",
+                       ROUND(SUM(CASE WHEN "CODE" IN ('A004','A010') AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "SHUTDOWN"
+                FROM deltas GROUP BY "SBMC"
             )
             SELECT
-                COALESCE(e."EQUIP_INSTALL_POSITION", 'N/A')  AS "樓層",
-                q."SBMC"                                     AS "設備代碼",
-                COALESCE(e."EQUIPMENT_NAME", q."SBMC")       AS "設備名稱",
-                COALESCE(t."RUN", 0)                         AS "RUN(分)",
-                COALESCE(t."DOWN", 0)                        AS "DOWN(分)",
-                COALESCE(t."IDEL", 0)                        AS "IDEL(分)",
-                COALESCE(t."SHUTDOWN", 0)                    AS "SHUTDOWN(分)",
-                CASE
-                    WHEN (COALESCE(t."RUN", 0) + COALESCE(t."DOWN", 0)) > 0
-                    THEN ROUND(COALESCE(t."RUN", 0)::FLOAT / (COALESCE(t."RUN", 0) + COALESCE(t."DOWN", 0)) * 100, 1)
-                    ELSE 0
-                END AS "稼動率(%)",
-                COALESCE(SUM(q."LPSL"), 0)                   AS "良品數量",
-                COALESCE(SUM(q."BLSL"), 0)                   AS "不良數量",
-                CASE
-                    WHEN COALESCE(SUM(q."LPSL"), 0) + COALESCE(SUM(q."BLSL"), 0) > 0
-                    THEN ROUND((
-                        COALESCE(SUM(q."LPSL"), 0)::FLOAT /
-                        (COALESCE(SUM(q."LPSL"), 0) + COALESCE(SUM(q."BLSL"), 0)) * 100
-                    )::NUMERIC, 2)
-                    ELSE NULL
-                END AS "良率(%)",
+                COALESCE(e."EQUIP_INSTALL_POSITION", 'N/A') AS "樓層",
+                COALESCE(e."EQUIPMENT_CODE", e."TOPIC") AS "設備代碼",
+                e."EQUIPMENT_NAME" AS "設備名稱",
+                COALESCE(t."RUN", 0) AS "RUN(分)",
+                COALESCE(t."DOWN", 0) AS "DOWN(分)",
+                COALESCE(t."IDEL", 0) AS "IDEL(分)",
+                COALESCE(t."SHUTDOWN", 0) AS "SHUTDOWN(分)",
+                CASE WHEN (COALESCE(t."RUN", 0) + COALESCE(t."DOWN", 0)) > 0
+                     THEN ROUND(COALESCE(t."RUN", 0)::FLOAT / (COALESCE(t."RUN", 0) + COALESCE(t."DOWN", 0)) * 100, 1) ELSE 0 END AS "稼動率(%)",
+                COALESCE(q."LPSL", 0) AS "良品數量",
+                COALESCE(q."BLSL", 0) AS "不良數量",
+                CASE WHEN (COALESCE(q."LPSL", 0) + COALESCE(q."BLSL", 0)) > 0
+                     THEN ROUND((COALESCE(q."LPSL", 0)::FLOAT / (COALESCE(q."LPSL", 0) + COALESCE(q."BLSL", 0)) * 100)::NUMERIC, 2) ELSE NULL END AS "良率(%)",
                 '{target_date}' AS "資料日期"
-            FROM "public"."CIM_MQTT_OK_NG_QTY" q
-            LEFT JOIN "public"."EQUIPMENT_INFO_DICT" e ON (e."TOPIC" = q."SBMC" OR e."EQUIPMENT_CODE" = q."SBMC")
-            LEFT JOIN times t ON t."SBMC" = q."SBMC"
-            WHERE q."YMD" = '{target_ymd}'
+            FROM "public"."EQUIPMENT_INFO_DICT" e
+            LEFT JOIN daily_qty q ON (q."SBMC" = e."TOPIC" OR q."SBMC" = e."EQUIPMENT_CODE")
+            LEFT JOIN times t ON (t."SBMC" = e."TOPIC" OR t."SBMC" = e."EQUIPMENT_CODE")
+            WHERE 1=1
             {floor_filter}
-            GROUP BY
-                e."EQUIP_INSTALL_POSITION", q."SBMC", e."EQUIPMENT_NAME",
-                t."RUN", t."DOWN", t."IDEL", t."SHUTDOWN"
             ORDER BY "樓層", "設備代碼"
         """
         rows = self._execute_postgres_query(query)
@@ -617,66 +588,43 @@ class FactorySqlTools:
         if not target_date:
             target_date = datetime.date.today().isoformat()
         target_ymd  = target_date.replace('-', '')
-        safe_floor  = floor.replace("'", "''")
-
-        # Daily aggregated times via LAG-based state transitions from CIM_MQTTCOLLECT
         query_daily = f"""
-            WITH deltas AS (
-                SELECT
-                    "TOPIC" AS "SBMC",
-                    "CODE",
-                    (
-                        SUBSTRING("DATETIMES", 10, 2)::INT * 3600 +
-                        SUBSTRING("DATETIMES", 12, 2)::INT * 60 +
-                        CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT
-                    ) -
-                    LAG(
-                        SUBSTRING("DATETIMES", 10, 2)::INT * 3600 +
-                        SUBSTRING("DATETIMES", 12, 2)::INT * 60 +
-                        CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT
-                    ) OVER (
-                        PARTITION BY "TOPIC"
-                        ORDER BY "DATETIMES"
-                    ) AS duration_sec
+            WITH daily_qty AS (
+                SELECT "SBMC", SUM("LPSL") AS "LPSL", SUM("BLSL") AS "BLSL"
+                FROM "public"."CIM_MQTT_OK_NG_QTY"
+                WHERE "YMD" = '{target_ymd}'
+                GROUP BY "SBMC"
+            ),
+            deltas AS (
+                SELECT "TOPIC" AS "SBMC", "CODE",
+                       (SUBSTRING("DATETIMES", 10, 2)::INT * 3600 + SUBSTRING("DATETIMES", 12, 2)::INT * 60 + CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT) -
+                       LAG(SUBSTRING("DATETIMES", 10, 2)::INT * 3600 + SUBSTRING("DATETIMES", 12, 2)::INT * 60 + CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT)
+                       OVER (PARTITION BY "TOPIC" ORDER BY "DATETIMES") AS duration_sec
                 FROM "public"."CIM_MQTTCOLLECT"
                 WHERE "YMD" = '{target_ymd}'
-                  AND "CODE" IN (
-                      'A001','A002','A003','A004','A005',
-                      'A006','A007','A008','A009','A010',
-                      'A011','A012','A013','A014'
-                  )
             ),
             times AS (
-                SELECT
-                    "SBMC",
-                    ROUND(SUM(CASE WHEN "CODE" = 'A003'
-                                   AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "RUN",
-                    ROUND(SUM(CASE WHEN "CODE" IN ('A001','A006','A007','A008','A009')
-                                   AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "DOWN",
-                    ROUND(SUM(CASE WHEN "CODE" IN ('A002','A011','A012','A013','A014')
-                                   AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "IDEL",
-                    ROUND(SUM(CASE WHEN "CODE" IN ('A004','A010')
-                                   AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "SHUTDOWN"
-                FROM deltas
-                GROUP BY "SBMC"
+                SELECT "SBMC",
+                       ROUND(SUM(CASE WHEN "CODE" = 'A003' AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "RUN",
+                       ROUND(SUM(CASE WHEN "CODE" IN ('A001','A006','A007','A008','A009') AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "DOWN",
+                       ROUND(SUM(CASE WHEN "CODE" IN ('A002','A011','A012','A013','A014') AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "IDEL",
+                       ROUND(SUM(CASE WHEN "CODE" IN ('A004','A010') AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "SHUTDOWN"
+                FROM deltas GROUP BY "SBMC"
             )
             SELECT
-                q."SBMC"                               AS "設備代碼",
-                COALESCE(e."EQUIPMENT_NAME", q."SBMC") AS "設備名稱",
-                COALESCE(t."RUN", 0)                   AS "RUN(分)",
-                COALESCE(t."DOWN", 0)                  AS "DOWN(分)",
-                COALESCE(t."IDEL", 0)                  AS "IDEL(分)",
-                COALESCE(t."SHUTDOWN", 0)              AS "SHUTDOWN(分)",
-                COALESCE(SUM(q."LPSL"), 0)             AS "良品數量",
-                COALESCE(SUM(q."BLSL"), 0)             AS "不良數量",
-                '{target_date}'                        AS "資料日期"
-            FROM (SELECT "SBMC", SUM("LPSL") AS "LPSL", SUM("BLSL") AS "BLSL" FROM "public"."CIM_MQTT_OK_NG_QTY" WHERE "YMD" = '{target_ymd}' GROUP BY "SBMC") q
-            LEFT JOIN "public"."EQUIPMENT_INFO_DICT" e ON (e."TOPIC" = q."SBMC" OR e."EQUIPMENT_CODE" = q."SBMC")
-            LEFT JOIN times t ON t."SBMC" = q."SBMC"
-            WHERE e."EQUIP_INSTALL_POSITION" = '{safe_floor}'
-            GROUP BY
-                q."SBMC", e."EQUIPMENT_NAME",
-                t."RUN", t."DOWN", t."IDEL", t."SHUTDOWN"
+                COALESCE(e."EQUIPMENT_CODE", e."TOPIC") AS "設備代碼",
+                e."EQUIPMENT_NAME" AS "設備名稱",
+                COALESCE(t."RUN", 0) AS "RUN(分)",
+                COALESCE(t."DOWN", 0) AS "DOWN(分)",
+                COALESCE(t."IDEL", 0) AS "IDEL(分)",
+                COALESCE(t."SHUTDOWN", 0) AS "SHUTDOWN(分)",
+                COALESCE(q."LPSL", 0) AS "良品數量",
+                COALESCE(q."BLSL", 0) AS "不良數量",
+                '{target_date}' AS "資料日期"
+            FROM "public"."EQUIPMENT_INFO_DICT" e
+            LEFT JOIN daily_qty q ON (q."SBMC" = e."TOPIC" OR q."SBMC" = e."EQUIPMENT_CODE")
+            LEFT JOIN times t ON (t."SBMC" = e."TOPIC" OR t."SBMC" = e."EQUIPMENT_CODE")
+            WHERE e."EQUIP_INSTALL_POSITION" ILIKE '%{safe_floor[0]}%'
             ORDER BY "設備名稱", "設備代碼"
         """
 
