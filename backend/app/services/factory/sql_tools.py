@@ -526,25 +526,26 @@ class FactorySqlTools:
         target_ymd = target_date.replace('-', '')
 
         query = f"""
+            WITH daily_qty AS (
+                SELECT "SBMC", SUM("LPSL") AS "LPSL", SUM("BLSL") AS "BLSL"
+                FROM "public"."CIM_MQTT_OK_NG_QTY"
+                WHERE "YMD" = '{target_ymd}'
+                GROUP BY "SBMC"
+            )
             SELECT
-                COALESCE(e."EQUIP_INSTALL_POSITION", 'N/A') AS "樓層",
-                q."SBMC"                                     AS "設備代碼",
-                COALESCE(e."EQUIPMENT_NAME", q."SBMC")       AS "設備名稱",
-                COALESCE(SUM(q."LPSL"), 0)                   AS "良品數量",
-                COALESCE(SUM(q."BLSL"), 0)                   AS "不良數量",
+                COALESCE(e."EQUIP_INSTALL_POSITION", '位置不明') AS "樓層",
+                COALESCE(e."EQUIPMENT_CODE", e."TOPIC") AS "設備代碼",
+                e."EQUIPMENT_NAME" AS "設備名稱",
+                COALESCE(q."LPSL", 0) AS "良品數量",
+                COALESCE(q."BLSL", 0) AS "不良數量",
                 CASE
-                    WHEN COALESCE(SUM(q."LPSL"), 0) + COALESCE(SUM(q."BLSL"), 0) > 0
-                    THEN ROUND((
-                        COALESCE(SUM(q."LPSL"), 0)::FLOAT /
-                        (COALESCE(SUM(q."LPSL"), 0) + COALESCE(SUM(q."BLSL"), 0)) * 100
-                    )::NUMERIC, 2)
+                    WHEN (COALESCE(q."LPSL", 0) + COALESCE(q."BLSL", 0)) > 0
+                    THEN ROUND((COALESCE(q."LPSL", 0)::FLOAT / (COALESCE(q."LPSL", 0) + COALESCE(q."BLSL", 0))) * 100::NUMERIC, 2)
                     ELSE NULL
                 END AS "良率(%)",
                 '{target_date}' AS "資料日期"
-            FROM "public"."CIM_MQTT_OK_NG_QTY" q
-            LEFT JOIN "public"."EQUIPMENT_INFO_DICT" e ON (e."TOPIC" = q."SBMC" OR e."EQUIPMENT_CODE" = q."SBMC")
-            WHERE q."YMD" = '{target_ymd}'
-            GROUP BY e."EQUIP_INSTALL_POSITION", q."SBMC", e."EQUIPMENT_NAME"
+            FROM "public"."EQUIPMENT_INFO_DICT" e
+            LEFT JOIN daily_qty q ON (q."SBMC" = e."TOPIC" OR q."SBMC" = e."EQUIPMENT_CODE")
             ORDER BY "樓層", "設備代碼"
         """
         rows = self._execute_postgres_query(query)
@@ -552,7 +553,10 @@ class FactorySqlTools:
         below_count = 0
         for row in rows:
             rate = row.get('良率(%)')
-            if rate is not None and float(rate) < threshold:
+            if rate is None:
+                row['是否未達標'] = False
+                row['狀態燈'] = '⚪ 無生產'
+            elif float(rate) < threshold:
                 row['是否未達標'] = True
                 row['狀態燈'] = '🔴 未達標'
                 below_count += 1
