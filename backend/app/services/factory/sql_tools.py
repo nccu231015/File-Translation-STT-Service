@@ -643,10 +643,13 @@ class FactorySqlTools:
             ORDER BY "設備名稱", "設備代碼"
         """
 
-        # Current state query: latest signal code per device
+        from datetime import datetime as dt, timedelta
+        seven_days_ago = (dt.strptime(target_date, "%Y-%m-%d") - timedelta(days=7)).strftime("%Y%m%d%00")
+
+        # Current state query: latest signal code per device within the last 7 days
         query_state = f"""
             SELECT
-                sub."TOPIC" AS "設備代碼",
+                COALESCE(e."EQUIPMENT_CODE", sub."TOPIC") AS "設備代碼",
                 CASE
                     WHEN sub."CODE" IN ('A003')                              THEN 'RUN'
                     WHEN sub."CODE" IN ('A001','A006','A007','A008','A009') THEN 'DOWN'
@@ -661,13 +664,14 @@ class FactorySqlTools:
                            ORDER BY "DATETIMES" DESC
                        ) AS rn
                 FROM "public"."CIM_MQTTCOLLECT"
-                WHERE "DATEHOUR" LIKE '{target_ymd}%'
+                WHERE "DATEHOUR" >= '{seven_days_ago}'
                   AND "CODE" IN (
                       'A001','A002','A003','A004',
                       'A006','A007','A008','A009',
                       'A010','A011','A012','A013','A014'
                   )
             ) sub
+            LEFT JOIN "public"."EQUIPMENT_INFO_DICT" e ON e."TOPIC" = sub."TOPIC"
             WHERE sub.rn = 1
         """
 
