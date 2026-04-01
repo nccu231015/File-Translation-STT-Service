@@ -727,74 +727,46 @@ class FactorySqlTools:
         else:
             resolved_name = equipment_code
 
-        # Step 2: PG – extract equipment line number from name, get WORK_ORDER_NOs
-        equip_info_q = f"""
-            SELECT "EQUIPMENT_NAME"
-            FROM "public"."EQUIPMENT_INFO_DICT"
-            WHERE "EQUIPMENT_CODE" = '{equipment_code.replace(chr(39), chr(39)*2)}'
-            LIMIT 1
-        """
-        info_rows    = self._execute_postgres_query(equip_info_q)
-        if not info_rows:
-            return {"status": "error", "message": f"設備代碼 {equipment_code} 查無資料"}
+        # Step 2: Query Model Production directly from CIM_MQTT_OK_NG_QTY in PG
+        start_ymd = start_date.replace('-', '')
+        end_ymd   = end_date.replace('-', '')
 
-        equip_full_name = info_rows[0].get('EQUIPMENT_NAME', '')
-        num_match       = re.search(r'\d+', equip_full_name)
-        line_no         = num_match.group() if num_match else None
-
-        if line_no:
-            start_ymd = start_date.replace('-', '')
-            end_ymd   = end_date.replace('-', '')
-            wo_query = f"""
-                SELECT DISTINCT "WORK_ORDER_NO"
-                FROM "public"."CIM_WORK_GD_NUM_GLW"
-                WHERE "NO" = '{line_no}'
-                  AND TO_CHAR("PRO_TIME", 'YYYYMMDD') BETWEEN '{start_ymd}' AND '{end_ymd}'
-            """
-            wo_rows = self._execute_postgres_query(wo_query)
-        else:
-            wo_rows = []
-
-        wo_list = [str(r.get('WORK_ORDER_NO', '')) for r in wo_rows if r.get('WORK_ORDER_NO')]
-
-        # Step 3: MSSQL – get model production data
         granularity_map = {
-            'daily':     "CONVERT(VARCHAR(10), PRO_TIME, 120)",
-            'weekly':    "CONCAT(YEAR(PRO_TIME), '-W', RIGHT('0'+CAST(DATEPART(wk,PRO_TIME) AS VARCHAR),2))",
-            'monthly':   "CONVERT(VARCHAR(7),  PRO_TIME, 120)",
-            'quarterly': "CONCAT(YEAR(PRO_TIME), '-Q', DATEPART(QUARTER, PRO_TIME))",
-            'yearly':    "CAST(YEAR(PRO_TIME) AS VARCHAR)",
+            'daily':     "TO_CHAR(TO_DATE(\"YMD\", 'YYYYMMDD'), 'YYYY-MM-DD')",
+            'weekly':    "TO_CHAR(TO_DATE(\"YMD\", 'YYYYMMDD'), 'IYYY-\"W\"IW')",
+            'monthly':   "TO_CHAR(TO_DATE(\"YMD\", 'YYYYMMDD'), 'YYYY-MM')",
+            'quarterly': "TO_CHAR(TO_DATE(\"YMD\", 'YYYYMMDD'), 'YYYY-\"Q\"Q')",
+            'yearly':    "TO_CHAR(TO_DATE(\"YMD\", 'YYYYMMDD'), 'YYYY')",
         }
         time_expr    = granularity_map.get(granularity, granularity_map['monthly'])
         granularity_zh = {'daily':'每日','weekly':'每週','monthly':'月對月',
                           'quarterly':'季對季','yearly':'年對年'}
 
-        if wo_list:
-            wo_in = "', '".join(wo for wo in wo_list if wo)
-            mssql_filter = f"AND WORK_ORDER_NO IN ('{wo_in}')"
-        else:
-            # Fallback: query by date range only (if no work order mapping found)
-            mssql_filter = ""
-
-        mssql_query = f"""
+        safe_code = equipment_code.replace("'", "''")
+        
+        pg_query = f"""
             SELECT
-                jz                               AS [機種],
-                {time_expr}                      AS [時間標籤],
-                SUM(ACTUAL_PRO)                  AS [總產量],
-                SUM(BAD_PRO_RATE)                AS [總不良數],
+                "MODEL" AS "機種",
+                {time_expr} AS "時間標籤",
+                SUM(COALESCE("LPSL", 0) + COALESCE("BLSL", 0)) AS "總產量",
+                SUM(COALESCE("BLSL", 0)) AS "總不良數",
                 ROUND(
-                    CAST(SUM(BAD_PRO_RATE) AS FLOAT) /
-                    NULLIF(SUM(ACTUAL_PRO), 0) * 100, 4
-                )                                AS [不良率百分比],
-                '{start_date} ~ {end_date}'      AS [資料區間]
-            FROM [dbo].[Daily_Status_Report]
-            WHERE PRO_TIME BETWEEN '{start_date}' AND '{end_date}'
-              AND jz IS NOT NULL
-              {mssql_filter}
-            GROUP BY jz, {time_expr}
-            ORDER BY jz, {time_expr}
+                    CASE 
+                        WHEN SUM(COALESCE("LPSL", 0) + COALESCE("BLSL", 0)) > 0 
+                        THEN (SUM(COALESCE("BLSL", 0)))::NUMERIC / SUM(COALESCE("LPSL", 0) + COALESCE("BLSL", 0)) * 100 
+                        ELSE 0 
+                    END, 2
+                ) AS "不良率百分比",
+                '{start_date} ~ {end_date}' AS "資料區間"
+            FROM "public"."CIM_MQTT_OK_NG_QTY"
+            WHERE "YMD" BETWEEN '{start_ymd}' AND '{end_ymd}'
+              AND "SBMC" = '{safe_code}'
+              AND "MODEL" IS NOT NULL
+              AND "MODEL" != ''
+            GROUP BY "MODEL", {time_expr}
+            ORDER BY "MODEL", {time_expr}
         """
-        trend_rows = self._execute_mssql_query(mssql_query)
+        trend_rows = self._execute_postgres_query(pg_query)
 
         # Build chart only if explicitly requested
         if include_chart and trend_rows:
@@ -861,8 +833,7 @@ class FactorySqlTools:
             "equipment_name":  resolved_name,
             "start_date":      start_date,
             "end_date":        end_date,
-            "granularity":     granularity,
-            "work_orders_found": len(wo_list),
+            "granularity":     granularity_zh.get(granularity, granularity),
             "trend_data":      trend_rows,
             "chart_config":    chart_config,
         }
