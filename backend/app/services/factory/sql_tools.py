@@ -452,7 +452,6 @@ class FactorySqlTools:
         query = f"""
             SELECT
                 COALESCE(e."EQUIP_INSTALL_POSITION", 'N/A') AS "樓層",
-                COALESCE(e."EQUIP_TYPE",             'N/A') AS "設備類型",
                 q."SBMC"                                     AS "設備代碼",
                 COALESCE(e."EQUIPMENT_NAME", q."SBMC")       AS "設備名稱",
                 COALESCE(SUM(q."LPSL"), 0)                   AS "良品數量",
@@ -470,8 +469,8 @@ class FactorySqlTools:
             LEFT JOIN "public"."EQUIPMENT_INFO_DICT" e ON e."EQUIPMENT_CODE" = q."SBMC"
             WHERE q."YMD" = '{target_ymd}'
             {floor_filter}
-            GROUP BY e."EQUIP_INSTALL_POSITION", e."EQUIP_TYPE", q."SBMC", e."EQUIPMENT_NAME"
-            ORDER BY "樓層", "設備類型", "設備代碼"
+            GROUP BY e."EQUIP_INSTALL_POSITION", q."SBMC", e."EQUIPMENT_NAME"
+            ORDER BY "樓層", "設備代碼"
         """
         rows = self._execute_postgres_query(query)
         return {
@@ -502,7 +501,6 @@ class FactorySqlTools:
         query = f"""
             SELECT
                 COALESCE(e."EQUIP_INSTALL_POSITION", 'N/A') AS "樓層",
-                COALESCE(e."EQUIP_TYPE",             'N/A') AS "設備類型",
                 q."SBMC"                                     AS "設備代碼",
                 COALESCE(e."EQUIPMENT_NAME", q."SBMC")       AS "設備名稱",
                 COALESCE(SUM(q."LPSL"), 0)                   AS "良品數量",
@@ -519,7 +517,7 @@ class FactorySqlTools:
             FROM "public"."CIM_MQTT_OK_NG_QTY" q
             LEFT JOIN "public"."EQUIPMENT_INFO_DICT" e ON e."EQUIPMENT_CODE" = q."SBMC"
             WHERE q."YMD" = '{target_ymd}'
-            GROUP BY e."EQUIP_INSTALL_POSITION", e."EQUIP_TYPE", q."SBMC", e."EQUIPMENT_NAME"
+            GROUP BY e."EQUIP_INSTALL_POSITION", q."SBMC", e."EQUIPMENT_NAME"
             HAVING
                 COALESCE(SUM(q."LPSL"), 0) + COALESCE(SUM(q."BLSL"), 0) > 0
                 AND ROUND((
@@ -568,7 +566,6 @@ class FactorySqlTools:
             SELECT
                 q."SBMC"                                     AS "設備代碼",
                 COALESCE(e."EQUIPMENT_NAME", q."SBMC")       AS "設備名稱",
-                COALESCE(e."EQUIP_TYPE",     'N/A')          AS "設備類型",
                 COALESCE(q."RUN",  0)                        AS "RUN(分)",
                 COALESCE(q."DOWN", 0)                        AS "DOWN(分)",
                 COALESCE(q."IDEL", 0)                        AS "IDEL(分)",
@@ -683,7 +680,6 @@ class FactorySqlTools:
                 SELECT "EQUIPMENT_CODE", "EQUIPMENT_NAME"
                 FROM "public"."EQUIPMENT_INFO_DICT"
                 WHERE "EQUIPMENT_NAME" ILIKE '%{safe_kw}%'
-                   OR "EQUIP_NAME"     ILIKE '%{safe_kw}%'
                 ORDER BY "EQUIPMENT_NAME" LIMIT 1
             """
             matches = self._execute_postgres_query(match_q)
