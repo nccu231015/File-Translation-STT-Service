@@ -743,20 +743,22 @@ async def factory_chat(payload: dict, background_tasks: BackgroundTasks):
                 print(f"[Session Warning] Fallback session id generated: {se}")
             
         print(f"\n[Factory Chat] Processing request (session={session_id})", flush=True)
-        response = await factory_agent.chat(user_text, history=history)
+        result = await factory_agent.chat(user_text, history=history)
+        response_text = result["response"] if isinstance(result, dict) else str(result)
+        chart_config  = result.get("chart_config") if isinstance(result, dict) else None
         
         # Safely add background archive task
         try:
-            background_tasks.add_task(factory_store.append_messages, session_id, user_text, str(response))
+            background_tasks.add_task(factory_store.append_messages, session_id, user_text, response_text)
         except Exception as bg_e:
             print(f"[BG Task Error] Failed to queue session save: {bg_e}")
 
-        print(f"[Factory Chat] Success: {len(str(response))} chars", flush=True)
+        print(f"[Factory Chat] Success: {len(response_text)} chars", flush=True)
         
-        # FastAPI handles JSON serialization automatically
         return {
-            "response": str(response),
-            "session_id": str(session_id)
+            "response": response_text,
+            "session_id": str(session_id),
+            "chart_config": chart_config   # None when not a chart query; dict for Q5/Q7
         }
         
     except Exception as e:

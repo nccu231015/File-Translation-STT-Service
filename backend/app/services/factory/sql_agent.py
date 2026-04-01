@@ -325,9 +325,10 @@ class SqlAgent:
         """Alias for compatibility with router agent."""
         return await self.chat(question)
 
-    async def chat(self, question: str, history: List[Dict[str, str]] = None) -> str:
+    async def chat(self, question: str, history: List[Dict[str, str]] = None) -> dict:
         """
         支援上下文記憶的聊天接口。
+        Returns: {"response": str, "chart_config": dict | None}
         """
         current_date_info = f"目前的系統日期是 {datetime.date.today().isoformat()}。"
         
@@ -408,13 +409,13 @@ class SqlAgent:
         messages.append({"role": "user", "content": question})
 
         try:
-            # 參數名稱 tool_executor_obj 必須與 llm_service.py 定義一致
-            response = await self.llm.chat_with_tools(
+            result = await self.llm.chat_with_tools(
                 messages=messages,
                 tools=self._get_tool_schemas(),
                 tool_executor_obj=self.tools
             )
-            return self.llm.s2tw.convert(response)
+            response_text = self.llm.s2tw.convert(result["response"])
+            return {"response": response_text, "chart_config": result.get("chart_config")}
         except Exception as e:
             print(f"[SQL Agent Error] {e}")
-            return f"抱歉，在查詢資料庫時發生錯誤：{str(e)}"
+            return {"response": f"抱歉，在查詢資料庫時發生錯誤：{str(e)}", "chart_config": None}

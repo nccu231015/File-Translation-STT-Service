@@ -67,8 +67,8 @@ function CustomTooltip({ active, payload, label }: any) {
                     <span className="size-2.5 rounded-full flex-shrink-0" style={{ background: p.color }} />
                     <span className="text-slate-500">{p.name}：</span>
                     <span className="font-bold text-slate-800">
-                        {p.value == null ? '—' : typeof p.value === 'number' && p.value < 1
-                            ? `${(p.value * 100).toFixed(2)}%`
+                        {p.value == null ? '—' : typeof p.value === 'number' && p.value < 5 && p.name.includes('%')
+                            ? `${p.value.toFixed(4)}%`
                             : p.value.toLocaleString()}
                     </span>
                 </div>
@@ -125,7 +125,7 @@ export function ChartBlock({ config }: ChartBlockProps) {
                         <YAxis
                             yAxisId={rightAxisId}
                             orientation="right"
-                            tickFormatter={(v: number) => `${(v * 100).toFixed(1)}%`}
+                            tickFormatter={(v: number) => `${v.toFixed(2)}%`}
                             tick={{ fontSize: 11, fill: '#94a3b8' }}
                             axisLine={false}
                             tickLine={false}
@@ -172,7 +172,7 @@ export function ChartBlock({ config }: ChartBlockProps) {
                             tickLine={false}
                         />
                         <YAxis
-                            tickFormatter={(v: number) => `${(v * 100).toFixed(1)}%`}
+                            tickFormatter={(v: number) => `${v.toFixed(2)}%`}
                             tick={{ fontSize: 11, fill: '#94a3b8' }}
                             axisLine={false}
                             tickLine={false}

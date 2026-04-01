@@ -172,12 +172,13 @@ class LLMService:
             print(f"[LLM JSON Error] {e}")
             return {}
 
-    async def chat_with_tools(self, messages: list, tools: list, tool_executor_obj: Any) -> str:
+    async def chat_with_tools(self, messages: list, tools: list, tool_executor_obj: Any) -> dict:
         """
-        Full tool calling loop: 
+        Full tool calling loop:
         1. AI decides which tool to use
         2. Execution of the tool via tool_executor_obj
         3. AI synthesizes final answer with tool result
+        Returns: {"response": str, "chart_config": dict | None}
         """
         from fastapi.concurrency import run_in_threadpool
         
@@ -198,6 +199,8 @@ class LLMService:
                 # Append assistant tool call request to messages
                 messages.append(response["message"])
 
+                collected_chart_config = None  # will hold the first chart_config found
+
                 for tool_call in tool_calls:
                     func_name = tool_call["function"]["name"]
                     func_args = tool_call["function"]["arguments"]
@@ -208,6 +211,10 @@ class LLMService:
                     try:
                         tool_func = getattr(tool_executor_obj, func_name)
                         result = await run_in_threadpool(tool_func, **func_args)
+                        
+                        # Extract chart_config BEFORE sending to LLM (strip heavy data for synthesis)
+                        if isinstance(result, dict) and "chart_config" in result:
+                            collected_chart_config = result["chart_config"]
                         
                         # Append tool output to messages
                         messages.append({
@@ -221,21 +228,21 @@ class LLMService:
                             "content": f"Error executing tool: {te}",
                         })
 
-                # Step 2: Final completion with data — 用全新精簡對話完成彙整，避免 LLM 重新進入 tool-calling 模式
+                # Step 2: Final completion with data
                 print("[LLM Tool] Synthesizing final answer with tool data...")
                 
-                # 收集所有 tool 回傳結果
+                # Collect all tool output text
                 tool_results_text = ""
                 for msg in messages:
                     if msg.get("role") == "tool":
                         tool_results_text += str(msg.get("content", "")) + "\n"
                 
-                # 取出原始問題
+                # Extract original question
                 original_question = next(
                     (m["content"] for m in reversed(messages) if m["role"] == "user"), ""
                 )
                 
-                # 建立全新的精簡訊息陣列，完全不帶 tool 歷史
+                # Build lean synthesis prompt (no tool history)
                 synthesis_messages = [
                     {
                         "role": "system",
@@ -251,9 +258,9 @@ class LLMService:
 請根據以上數據回答使用者問題。規範：
 1. **數據一致性鐵律**：
    - 輸出的表格項數必須與數據源中的數組長度絕對對齊。
-   - 若原始計數（如活線數）與清單長度（如去重後的工單數）不同，請務必在分析中說明：「目前共計 X 條活線，分屬 Y 個不同工單」之類的明確解釋，不可混淆兩者數字。
-2. **排行與數據表格化**：排行或數值必須優先使用 Markdown 網格表格呈現。
-3. **專業數據解說**：在表格下方提供一段具建設性的專業文字解說。**不須使用「亮點」、「風險」或「建議」等固定標題段落**，而是以連貫的專業語言闡述目前的數據現狀（例如：達成率分布、產能狀態等）。"""
+   - 若原始計數（如活線數）與清單長度（如去重後的工單數）不同，請務必在分析中說明。
+2. **排行與數據表格化**：排行或數傼必須優先使用 Markdown 網格表格呈現。
+3. **專業數據解說**：在表格下方提供一段具建設性的專業文字解說。"""
                     }
                 ]
                 
@@ -265,21 +272,20 @@ class LLMService:
                     )
                     content = final_response.get("message", {}).get("content", "").strip()
                     if not content:
-                        return tool_results_text
-                    return content
+                        content = tool_results_text
+                    return {"response": content, "chart_config": collected_chart_config}
                 except Exception as synth_e:
                     print(f"[LLM Synthesis Error] Fallback triggered: {synth_e}")
-                    return tool_results_text
+                    return {"response": tool_results_text, "chart_config": collected_chart_config}
 
             
             # Fallback if no tool call was made
             fallback_content = response.get("message", {}).get("content", "")
-            return fallback_content
+            return {"response": fallback_content, "chart_config": None}
 
         except Exception as e:
             print(f"[LLM Tool Loop Error] {e}")
-            return "處理您的請求時發生工具調用錯誤。"
-
+            return {"response": "處理您的請求時發生工具調用錯誤。", "chart_config": None}
 
     def _clean_llm_response(self, text: str) -> str:
         """
