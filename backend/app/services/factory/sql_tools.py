@@ -465,16 +465,24 @@ class FactorySqlTools:
                     ELSE NULL
                 END AS "良率(%)",
                 CASE
-                    WHEN COALESCE(SUM(q."RUN"), 0) + COALESCE(SUM(q."DOWN"), 0) > 0
+                    WHEN COALESCE(MAX(c."T_RUN"), 0) + COALESCE(MAX(c."T_DOWN"), 0) > 0
                     THEN ROUND((
-                        COALESCE(SUM(q."RUN"), 0)::FLOAT /
-                        (COALESCE(SUM(q."RUN"), 0) + COALESCE(SUM(q."DOWN"), 0)) * 100
+                        COALESCE(MAX(c."T_RUN"), 0)::FLOAT /
+                        (COALESCE(MAX(c."T_RUN"), 0) + COALESCE(MAX(c."T_DOWN"), 0)) * 100
                     )::NUMERIC, 1)
                     ELSE 0
                 END AS "稼動率(%)",
                 '{target_date}' AS "資料日期"
             FROM "public"."CIM_MQTT_OK_NG_QTY" q
             LEFT JOIN "public"."EQUIPMENT_INFO_DICT" e ON (e."TOPIC" = q."SBMC" OR e."EQUIPMENT_CODE" = q."SBMC")
+            LEFT JOIN (
+                SELECT "TOPIC", 
+                       SUM(NULLIF("RUN", '')::FLOAT) AS "T_RUN",
+                       SUM(NULLIF("DOWN", '')::FLOAT) AS "T_DOWN"
+                FROM "public"."CIM_MQTTCOLLECT"
+                WHERE "YMD" = '{target_ymd}'
+                GROUP BY "TOPIC"
+            ) c ON c."TOPIC" = q."SBMC"
             WHERE q."YMD" = '{target_ymd}'
             {floor_filter}
             GROUP BY e."EQUIP_INSTALL_POSITION", q."SBMC", e."EQUIPMENT_NAME"
@@ -576,15 +584,25 @@ class FactorySqlTools:
             SELECT
                 q."SBMC"                                     AS "設備代碼",
                 COALESCE(e."EQUIPMENT_NAME", q."SBMC")       AS "設備名稱",
-                COALESCE(q."RUN",  0)                        AS "RUN(分)",
-                COALESCE(q."DOWN", 0)                        AS "DOWN(分)",
-                COALESCE(q."IDEL", 0)                        AS "IDEL(分)",
-                COALESCE(q."SHUTDOWN", 0)                    AS "SHUTDOWN(分)",
+                COALESCE(c."T_RUN",  0)                      AS "RUN(分)",
+                COALESCE(c."T_DOWN", 0)                      AS "DOWN(分)",
+                COALESCE(c."T_IDEL", 0)                      AS "IDEL(分)",
+                COALESCE(c."T_SHUTDOWN", 0)                  AS "SHUTDOWN(分)",
                 COALESCE(SUM_LPSL.total_lpsl, 0)             AS "良品數量",
                 COALESCE(SUM_BLSL.total_blsl, 0)             AS "不良數量",
                 '{target_date}'                              AS "資料日期"
-            FROM "public"."CIM_MQTT_OK_NG_QTY" q
-            LEFT JOIN "public"."EQUIPMENT_INFO_DICT" e ON e."TOPIC" = q."SBMC"
+            FROM (SELECT DISTINCT "SBMC" FROM "public"."CIM_MQTT_OK_NG_QTY" WHERE "YMD" = '{target_ymd}') q
+            LEFT JOIN "public"."EQUIPMENT_INFO_DICT" e ON (e."TOPIC" = q."SBMC" OR e."EQUIPMENT_CODE" = q."SBMC")
+            LEFT JOIN (
+                SELECT "TOPIC", 
+                       SUM(NULLIF("RUN", '')::FLOAT) AS "T_RUN", 
+                       SUM(NULLIF("DOWN", '')::FLOAT) AS "T_DOWN",
+                       SUM(NULLIF("IDEL", '')::FLOAT) AS "T_IDEL",
+                       SUM(NULLIF("SHUTDOWN", '')::FLOAT) AS "T_SHUTDOWN"
+                FROM "public"."CIM_MQTTCOLLECT"
+                WHERE "YMD" = '{target_ymd}'
+                GROUP BY "TOPIC"
+            ) c ON c."TOPIC" = q."SBMC"
             LEFT JOIN (
                 SELECT "SBMC", SUM("LPSL") AS total_lpsl
                 FROM   "public"."CIM_MQTT_OK_NG_QTY"
