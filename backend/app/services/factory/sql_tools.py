@@ -744,8 +744,9 @@ class FactorySqlTools:
         if not matches:
             return {"status": "error", "message": f"找不到設備：{safe_kw}"}
             
-        eq_name = matches[0].get("EQUIPMENT_NAME", equipment_name)
+        eq_code = matches[0].get("EQUIPMENT_CODE")
         topic = matches[0].get("TOPIC")
+        eq_name = matches[0].get("EQUIPMENT_NAME", eq_code)
         
         # 收集這台機器掛載的所有不重複 GDHM
         unique_gdhms = list(set([m.get("GDHM") for m in matches if m.get("GDHM")]))
@@ -768,17 +769,18 @@ class FactorySqlTools:
                     model_mapping[wo] = row.get("MODEL_NAME", wo)
                     target_model = model_mapping[wo]  # 至少保留一個機種名做代表
                     
-        # Step 3: 從 PostgreSQL 取出這半年該機台 (TOPIC) 的總產量
+        # Step 3: 從 PostgreSQL 取出這半年該機台的總產量
         start_ymd = start_date.replace('-', '')
         end_ymd   = end_date.replace('-', '')
         
+        # QTY 表的 SBMC 可能是 TOPIC 也可能是 EQUIPMENT_CODE
         pg_qty_query = f"""
             SELECT
                 SUM(COALESCE("LPSL", 0)) AS "總良品",
                 SUM(COALESCE("BLSL", 0)) AS "總不良"
             FROM "public"."CIM_MQTT_OK_NG_QTY"
             WHERE "YMD" BETWEEN '{start_ymd}' AND '{end_ymd}'
-              AND "SBMC" = '{topic}'
+              AND ("SBMC" = '{topic}' OR "SBMC" = '{eq_code}')
         """
         qty_res = self._execute_postgres_query(pg_qty_query)
         total_good = 0
