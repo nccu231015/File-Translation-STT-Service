@@ -624,7 +624,7 @@ class FactorySqlTools:
             FROM "public"."EQUIPMENT_INFO_DICT" e
             LEFT JOIN daily_qty q ON (q."SBMC" = e."TOPIC" OR q."SBMC" = e."EQUIPMENT_CODE")
             LEFT JOIN times t ON (t."SBMC" = e."TOPIC" OR t."SBMC" = e."EQUIPMENT_CODE")
-            WHERE e."EQUIP_INSTALL_POSITION" ILIKE '%{safe_floor[0]}%'
+            WHERE e."EQUIP_INSTALL_POSITION" ILIKE '%{safe_floor[0] if safe_floor else ''}%'
             ORDER BY "設備名稱", "設備代碼"
         """
 
