@@ -486,7 +486,7 @@ class FactorySqlTools:
                 COALESCE(t."IDEL", 0) AS "IDEL(分)",
                 COALESCE(t."SHUTDOWN", 0) AS "SHUTDOWN(分)",
                 CASE WHEN (COALESCE(t."RUN", 0) + COALESCE(t."DOWN", 0)) > 0
-                     THEN ROUND(COALESCE(t."RUN", 0)::FLOAT / (COALESCE(t."RUN", 0) + COALESCE(t."DOWN", 0)) * 100, 1) ELSE 0 END AS "稼動率(%)",
+                     THEN ROUND((COALESCE(t."RUN", 0)::FLOAT / (COALESCE(t."RUN", 0) + COALESCE(t."DOWN", 0)) * 100)::NUMERIC, 1) ELSE 0 END AS "稼動率(%)",
                 COALESCE(q."LPSL", 0) AS "良品數量",
                 COALESCE(q."BLSL", 0) AS "不良數量",
                 CASE WHEN (COALESCE(q."LPSL", 0) + COALESCE(q."BLSL", 0)) > 0
