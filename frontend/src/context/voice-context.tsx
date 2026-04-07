@@ -55,12 +55,17 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
         if (saved) {
             try {
                 const parsed = JSON.parse(saved);
-                setRecords(parsed.map((r: any) => ({
-                    ...r,
-                    processedAt: new Date(r.processedAt),
-                    downloadUrl: undefined,
-                    transcriptUrl: undefined,
-                })));
+                // Restore blob URLs from IndexedDB (Blob URLs are ephemeral, cannot be stored in localStorage)
+                Promise.all(parsed.map(async (r: any) => {
+                    const minutesBlob = await loadBlob(`${r.id}_minutes`).catch(() => null);
+                    const transcriptBlob = await loadBlob(`${r.id}_transcript`).catch(() => null);
+                    return {
+                        ...r,
+                        processedAt: new Date(r.processedAt),
+                        downloadUrl: minutesBlob ? URL.createObjectURL(minutesBlob) : undefined,
+                        transcriptUrl: transcriptBlob ? URL.createObjectURL(transcriptBlob) : undefined,
+                    };
+                })).then(loadedRecords => setRecords(loadedRecords));
             } catch {
                 // Corrupt data — silently reset
             }
@@ -89,13 +94,17 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
         if (!saved) { setRecords([]); return; }
         try {
             const parsed = JSON.parse(saved);
-            const newRecords: ProcessedRecord[] = parsed.map((r: any) => ({
-                ...r,
-                processedAt: new Date(r.processedAt),
-                downloadUrl: undefined,
-                transcriptUrl: undefined,
-            }));
-            setRecords(newRecords);
+            // Restore blob URLs from IndexedDB on user switch
+            Promise.all(parsed.map(async (r: any) => {
+                const minutesBlob = await loadBlob(`${r.id}_minutes`).catch(() => null);
+                const transcriptBlob = await loadBlob(`${r.id}_transcript`).catch(() => null);
+                return {
+                    ...r,
+                    processedAt: new Date(r.processedAt),
+                    downloadUrl: minutesBlob ? URL.createObjectURL(minutesBlob) : undefined,
+                    transcriptUrl: transcriptBlob ? URL.createObjectURL(transcriptBlob) : undefined,
+                };
+            })).then(setRecords).catch(() => setRecords([]));
         } catch {
             setRecords([]);
         }
@@ -111,20 +120,27 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
             const recordId = Date.now().toString();
 
             // n8n Microservice Version: Results are at the top level.
-            // Word documents are returned as base64 and converted to blob URLs for download.
-            const _base64ToUrl = (b64: string, mime: string) => {
+            // Word documents are returned as base64, saved to IndexedDB for persistence across refreshes.
+            const _base64ToBlob = (b64: string, mime: string): Blob => {
                 const binary = window.atob(b64);
                 const bytes = new Uint8Array(binary.length);
                 for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-                return URL.createObjectURL(new Blob([bytes], { type: mime }));
+                return new Blob([bytes], { type: mime });
             };
 
-            const downloadUrl = data.file_download?.content_base64
-                ? _base64ToUrl(data.file_download.content_base64, data.file_download.mime_type)
-                : '';
-            const transcriptUrl = data.transcript_download?.content_base64
-                ? _base64ToUrl(data.transcript_download.content_base64, data.transcript_download.mime_type)
-                : '';
+            let downloadUrl = '';
+            if (data.file_download?.content_base64) {
+                const blob = _base64ToBlob(data.file_download.content_base64, data.file_download.mime_type);
+                await saveBlob(`${recordId}_minutes`, blob);
+                downloadUrl = URL.createObjectURL(blob);
+            }
+
+            let transcriptUrl = '';
+            if (data.transcript_download?.content_base64) {
+                const blob = _base64ToBlob(data.transcript_download.content_base64, data.transcript_download.mime_type);
+                await saveBlob(`${recordId}_transcript`, blob);
+                transcriptUrl = URL.createObjectURL(blob);
+            }
 
             const newRecord: ProcessedRecord = {
                 id: recordId,
@@ -181,6 +197,9 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
 
     // ─── Remove a record ─────────────────────────────────────────────────────────
     const removeRecord = (id: string) => {
+        // Clean up persisted blobs from IndexedDB
+        deleteBlob(`${id}_minutes`).catch(() => {});
+        deleteBlob(`${id}_transcript`).catch(() => {});
         setRecords(prev => prev.filter(r => r.id !== id));
     };
 

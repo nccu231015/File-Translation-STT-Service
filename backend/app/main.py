@@ -731,9 +731,10 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
 async def document_process_for_n8n(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    model: str = Form(""),             # Ollama model override from n8n (empty = use service default)
-    temperature: float = Form(0.1),    # Translation temperature from n8n
-    target_lang: str = Form("zh-TW"),  # Target language forwarded from frontend via n8n
+    model: str = Form(""),                    # Ollama model override from n8n (empty = use service default)
+    temperature: float = Form(0.1),           # Translation temperature from n8n
+    target_lang: str = Form("zh-TW"),         # Target language forwarded from frontend via n8n
+    is_complex_table: str = Form("true"),     # Protect table areas via YOLO; DOCX handles cell translation
 ):
     """
     n8n Document Translation Microservice Entrypoint.
@@ -764,7 +765,7 @@ async def document_process_for_n8n(
             file=file,
             target_lang=target_lang,
             debug="false",
-            is_complex_table="false",
+            is_complex_table=is_complex_table,
         )
         return result
     finally:
