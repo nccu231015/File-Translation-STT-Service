@@ -31,12 +31,12 @@ export const analyzeMeetingAudio = async (file: File): Promise<N8nSTTResponse> =
     // ─── Route to n8n Microservice Webhook ─────────────────────────────────────
     // n8n forwards the file to Python /api/v1/stt/process,
     // and the Respond to Webhook node returns the processed result.
+    // mode / temperature / num_predict / model are hardcoded in the n8n HTTP Request node.
+    // The frontend only sends the audio file.
     const N8N_WEBHOOK_URL = "http://172.16.2.68:5678/webhook/ff6bacb9-5b6e-486e-9929-5a735090b28d";
 
     const formData = new FormData();
     formData.append('file', file);
-    // Note: mode/temperature/num_predict are pre-configured in the n8n HTTP Request node.
-    // The frontend only sends the file — client tunes params via n8n directly.
 
     try {
         const response = await fetch(N8N_WEBHOOK_URL, {

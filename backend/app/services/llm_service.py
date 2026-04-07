@@ -344,19 +344,31 @@ class LLMService:
 
         return cleaned
 
-    def analyze_meeting_transcript(self, text: str) -> dict:
+    def analyze_meeting_transcript(
+        self,
+        text: str,
+        model: str = None,
+        temperature: float = 0.2,
+        num_predict: int = 1024,
+    ) -> dict:
         """
         Analyzes a meeting transcript to extract summary, decisions, and action items.
         Uses Map-Reduce for long texts.
+        model: Ollama model override; None = use self.analysis_model.
         """
-        print("[LLM] Starting meeting analysis...")
+        _effective_model = model or self.analysis_model
+        print(
+            f"[LLM] analyze_meeting_transcript | "
+            f"model={_effective_model} | temperature={temperature} | num_predict={num_predict}",
+            flush=True,
+        )
         # DeepSeek/gpt-oss models support large context windows.
         # We use a 15000 character chunk size to balance detail and stability.
         chunk_size = 15000
         
         # Simple case: Short text (fits in one chunk)
         if len(text) <= chunk_size:
-            return self._analyze_chunk(text, final=True)
+            return self._analyze_chunk(text, final=True, model=model, temperature=temperature, num_predict=num_predict)
 
         # Long text: Map-Reduce
         print("[LLM] Transcript is long. Starting Map-Reduce analysis...")
@@ -382,21 +394,30 @@ class LLMService:
         
         for idx, chunk in enumerate(chunks):
             print(f"[LLM] Analyzing chunk {idx + 1}/{len(chunks)} (Length: {len(chunk)})...")
-            partial = self._analyze_chunk(chunk, final=False)
+            partial = self._analyze_chunk(chunk, final=False, model=model, temperature=temperature, num_predict=num_predict)
             if partial:
                 partial_results.append(partial)
 
         # Reduce
         print("[LLM] Synthesizing final meeting minutes...")
         combined_text = "\n\n".join([json.dumps(p, ensure_ascii=False) for p in partial_results])
-        final_result = self._analyze_chunk(combined_text, final=True, is_reduce_step=True)
+        final_result = self._analyze_chunk(combined_text, final=True, is_reduce_step=True, model=model, temperature=temperature, num_predict=num_predict)
         
         return final_result
 
-    def _analyze_chunk(self, text: str, final: bool = False, is_reduce_step: bool = False) -> dict:
+    def _analyze_chunk(
+        self,
+        text: str,
+        final: bool = False,
+        is_reduce_step: bool = False,
+        model: str = None,
+        temperature: float = 0.2,
+        num_predict: int = 1024,
+    ) -> dict:
         """
-        Helper to call LLM for meeting analysis. 
+        Helper to call LLM for meeting analysis.
         Returns a dict with 'summary', 'decisions', 'action_items'.
+        model: Ollama model override; None = use self.analysis_model.
         """
         if is_reduce_step:
             prompt = (
@@ -448,8 +469,11 @@ class LLMService:
         ]
 
         try:
-            # Use reasoning model for analysis
-            response = self.client.chat(model=self.analysis_model, messages=messages, format="json")
+            # Use reasoning model for analysis (override if caller specifies a model)
+            _model = model or self.analysis_model
+            _options = {"temperature": temperature, "num_predict": num_predict}
+            print(f"[LLM] _analyze_chunk model={_model} options={_options}", flush=True)
+            response = self.client.chat(model=_model, messages=messages, format="json", options=_options)
             content = response["message"]["content"]
             
             # Clean and Parse JSON
@@ -491,7 +515,7 @@ class LLMService:
             return {"summary": "分析失敗", "decisions": [], "action_items": []}
 
 
-    def translate_analysis(self, analysis: dict) -> dict:
+    def translate_analysis(self, analysis: dict, model: str = None) -> dict:
         """
         Translate Chinese meeting analysis fields into English.
 
@@ -501,6 +525,7 @@ class LLMService:
 
         Returns the same JSON structure with values in English.
         Falls back to empty structure on error so docx can still be generated.
+        model: Ollama model override; None = use self.translation_model.
         """
         print("[LLM] Translating analysis to English for bilingual meeting minutes...", flush=True)
 
@@ -527,8 +552,10 @@ class LLMService:
         ]
 
         try:
-            # Use translation model for speed
-            response = self.client.chat(model=self.translation_model, messages=messages, format="json")
+            # Use translation model for speed (override if caller specifies a model)
+            _model = model or self.translation_model
+            print(f"[LLM] translate_analysis model={_model}", flush=True)
+            response = self.client.chat(model=_model, messages=messages, format="json")
             content = self._clean_llm_response(response["message"]["content"])
             translated = json.loads(content)
             print("[LLM] Analysis translation complete.", flush=True)
@@ -634,6 +661,7 @@ class LLMService:
         self,
         segments: list[dict],
         detected_language: str,
+        model: str = None,
     ) -> list[dict]:
         is_chinese = detected_language.lower().startswith("zh")
         if is_chinese:
@@ -644,6 +672,7 @@ class LLMService:
             tgt_label = "Traditional Chinese (Taiwan)"
 
         BATCH = 30
+        _model = model or self.translation_model
         
         async def process_batch(batch: list[dict]) -> list[dict]:
             numbered_lines = "\n".join(
@@ -668,7 +697,7 @@ class LLMService:
 
             translated_lines: list[str] = [""] * len(batch)
             try:
-                response = await self.async_client.chat(model=self.translation_model, messages=messages)
+                response = await self.async_client.chat(model=_model, messages=messages)
                 raw = response["message"]["content"].strip()
 
                 for line in raw.splitlines():
@@ -698,7 +727,7 @@ class LLMService:
         for batch_start in range(0, len(segments), BATCH):
             tasks.append(process_batch(segments[batch_start: batch_start + BATCH]))
 
-        print(f"[LLM] Starting parallel translation for {len(tasks)} batches using {self.translation_model}...", flush=True)
+        print(f"[LLM] Starting parallel translation for {len(tasks)} batches using {_model}...", flush=True)
         results_lists = await asyncio.gather(*tasks)
 
         # Flatten

@@ -195,6 +195,7 @@ async def stt_process_for_n8n(
     mode: str = Form("stt_only"),          # "stt_only" or "minutes"
     temperature: float = Form(0.2),        # LLM temperature (0.0 strict ~ 1.0 creative)
     num_predict: int = Form(1024),         # Max tokens for LLM response
+    model: str = Form(""),                 # Ollama model override (empty = use service default)
     initial_prompt: str = Form(""),        # Whisper initial prompt for terminology/style
     language: str = Form("zh"),            # Designated language for Whisper
 ):
@@ -240,12 +241,16 @@ async def stt_process_for_n8n(
 
         # Step 4: LLM analysis (Traditional Chinese output)
         llm_options = {"temperature": temperature, "num_predict": num_predict}
-        print(f"[n8n STT] Running LLM analysis with options: {llm_options}", flush=True)
-        analysis = await run_in_threadpool(llm_service.analyze_meeting_transcript, transcript_text)
+        model_override = model.strip() or None
+        print(f"[n8n STT] Running LLM analysis | model={model_override or 'default'} options={llm_options}", flush=True)
+        analysis = await run_in_threadpool(
+            llm_service.analyze_meeting_transcript, transcript_text,
+            model_override, temperature, num_predict
+        )
 
         # Step 5: Translate analysis to English (for bilingual minutes)
         try:
-            en_analysis = await run_in_threadpool(llm_service.translate_analysis, analysis)
+            en_analysis = await run_in_threadpool(llm_service.translate_analysis, analysis, model_override)
         except Exception as te:
             print(f"[n8n STT] translate_analysis failed: {te}")
             en_analysis = {}
@@ -286,7 +291,9 @@ async def stt_process_for_n8n(
         is_chinese = detected_lang.lower().startswith("zh")
         try:
             if segments:
-                translated_segments = await llm_service.translate_segments_async(segments, detected_lang)
+                translated_segments = await llm_service.translate_segments_async(
+                    segments, detected_lang, model_override
+                )
                 transcript_svc = TranscriptDocxService()
                 transcript_bytes = await run_in_threadpool(
                     transcript_svc.generate,
