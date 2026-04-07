@@ -361,7 +361,7 @@ class PDFLayoutPreservingService:
                         except Exception:
                             pass
 
-                # ── PHASE 2: Translate (Batch) & Render ──────────────────────
+                # ── PHASE 2: Translate (Batch with Dedup Cache) & Render ─────
                 n_blocks = len(processed_queue)
                 print(
                     f"[PDF Layout] Page {page_num+1}: Batch-translating {n_blocks} blocks...",
@@ -370,19 +370,33 @@ class PDFLayoutPreservingService:
 
                 all_texts = [item["text"] for item in processed_queue]
 
+                # Deduplicate texts before sending to LLM (preserve insertion order).
+                # Benefits:
+                #   1. Reduces LLM token usage (repeated table headers translated only once).
+                #   2. Ensures consistent translations for identical strings on the same page.
+                #   3. Fewer items per batch → less chance of <SKIP> misfire on table cells.
+                unique_texts = list(dict.fromkeys(all_texts))
+                n_unique = len(unique_texts)
+                if n_unique < n_blocks:
+                    print(f"  [Dedup] {n_blocks} blocks → {n_unique} unique texts to translate.", flush=True)
+
                 # Use batch func if available, otherwise fall back to sequential
-                if self.translate_batch_func and n_blocks > 1:
+                if self.translate_batch_func and n_unique > 1:
                     try:
-                        translations = await self.translate_batch_func(all_texts, target_lang, page_context)
+                        unique_translations = await self.translate_batch_func(unique_texts, target_lang, page_context)
                     except Exception as batch_err:
                         print(f"[PDF Layout] Batch translate error, falling back: {batch_err}", flush=True)
-                        translations = [await self.translate_func(t, target_lang, page_context) for t in all_texts]
+                        unique_translations = [await self.translate_func(t, target_lang, page_context) for t in unique_texts]
                 else:
-                    translations = [await self.translate_func(t, target_lang, page_context) for t in all_texts]
+                    unique_translations = [await self.translate_func(t, target_lang, page_context) for t in unique_texts]
 
-                for i, (item, translated_text) in enumerate(zip(processed_queue, translations)):
+                # Build translation cache: original_text → translated_text
+                translation_cache = dict(zip(unique_texts, unique_translations))
+
+                for i, item in enumerate(processed_queue):
                     try:
                         original_text = item["text"]
+                        translated_text = translation_cache.get(original_text, "")
 
                         # If translation is empty or None, fall back to original text
                         # to prevent blank cells (text was already redacted at this point)
