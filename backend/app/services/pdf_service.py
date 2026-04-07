@@ -235,15 +235,30 @@ class PDFService:
                         }
                     )
                     if r.status_code == 200:
-                        raw_out = self._clean_llm_response(
-                            r.json().get("message", {}).get("content", "")
-                        )
-                        # Parse ##N## format with regex
-                        parsed = {}
-                        for m in re.finditer(r'##(\d+)##\s*(.*?)(?=\n##\d+##|\Z)', raw_out, re.DOTALL):
-                            idx = int(m.group(1))
-                            val = m.group(2).strip()
-                            parsed[idx] = val
+                        raw_content = r.json().get("message", {}).get("content", "")
+                        raw_out = self._clean_llm_response(raw_content)
+
+                        def _extract_parsed(text: str) -> dict:
+                            """Extract ##N## translation map from text."""
+                            result = {}
+                            for m in re.finditer(r'##(\d+)##\s*(.*?)(?=\n##\d+##|\Z)', text, re.DOTALL):
+                                idx = int(m.group(1))
+                                val = m.group(2).strip()
+                                result[idx] = val
+                            return result
+
+                        # Parse ##N## format from cleaned output
+                        parsed = _extract_parsed(raw_out)
+
+                        # Fallback: if thinking model placed translations inside <think> block,
+                        # try extracting from raw content directly (before think removal)
+                        if len(parsed) < total // 2:
+                            think_match = re.search(r'<think>(.*?)</think>', raw_content, re.DOTALL)
+                            if think_match:
+                                parsed_from_think = _extract_parsed(think_match.group(1))
+                                if len(parsed_from_think) > len(parsed):
+                                    print(f"  [Batch] Recovered from <think> block: {len(parsed_from_think)} items.", flush=True)
+                                    parsed = parsed_from_think
 
                         print(f"  [Batch] Parsed {len(parsed)}/{total} translations.", flush=True)
 
