@@ -191,12 +191,16 @@ class PDFService:
                 "1. Respond ONLY with translations. No commentary, no original text.\n"
                 "2. Preserve the numbering format EXACTLY: ##N## [translation]\n"
                 "3. Each item on its own line. Do NOT merge or skip numbers.\n"
-                "4. If an item is a meaningless fragment, output: ##N## <SKIP>\n"
+                "4. Use <SKIP> ONLY when an item is a mid-word/mid-sentence TAIL fragment "
+                "that was already translated as part of the previous item "
+                "(e.g., 'tion', '料)', 'ching'). Short but COMPLETE items like table cell content, "
+                "dates, or database names must be translated, NOT skipped.\n"
                 "5. If an item starts mid-word/mid-phrase, use the Page Context to complete its meaning.\n"
                 "EXAMPLE OUTPUT FORMAT:\n"
                 "##1## Root Cause Analysis\n"
-                "##2## <SKIP>\n"
-                "##3## The model tuning is performed monthly.\n"
+                "##2## FINE_USER User Table\n"
+                "##3## <SKIP>\n"
+                "##4## The model tuning is performed monthly.\n"
             )
         else:
             system_prompt = (
@@ -205,12 +209,14 @@ class PDFService:
                 "1. 只輸出翻譯結果，不要輸出原文或任何說明。\n"
                 "2. 嚴格保留編號格式：##N## [翻譯]\n"
                 "3. 每個項目獨立一行，不得合併或跳過編號。\n"
-                "4. 核心邏輯：除非該項目「完全無意義」（例如只有單一個標點符號、或是純亂碼），否則必須輸出翻譯或保留原樣。\n"
-                "5. 若項目是日期（如2024/09/19）或簡短標題，請保留或做對應翻譯，不要跳過。\n"
+                "4. 只有在某項目是「上一項的殘尾碎塊」（例如：'料)'、'教，'、單一標點）時才使用 <SKIP>。\n"
+                "   短小但意義完整的項目（如：表格欄位內容、日期、資料庫名稱）必須翻譯，不得跳過。\n"
+                "5. 若項目是日期（如2024/09/19）或簡短標題，請保留或做對應翻譯。\n"
                 "範例輸出格式：\n"
                 "##1## 根因分析\n"
-                "##2## 2024/09/19\n"
-                "##3## 模型調教每月執行一次。\n"
+                "##2## FINE_USER 用戶表\n"
+                "##3## <SKIP>\n"
+                "##4## 模型調教每月執行一次。\n"
             )
 
         messages = [{"role": "system", "content": system_prompt}]

@@ -382,15 +382,33 @@ class PDFLayoutPreservingService:
 
                 for i, (item, translated_text) in enumerate(zip(processed_queue, translations)):
                     try:
+                        original_text = item["text"]
+
+                        # If translation is empty or None, fall back to original text
+                        # to prevent blank cells (text was already redacted at this point)
                         if not translated_text or not translated_text.strip():
+                            self._insert_text_adaptive(
+                                page, item["raw_rect"], original_text,
+                                target_lang, item["format"], item["block"].type,
+                            )
                             continue
 
                         # Intercept the <SKIP> token from LLM for meaningless fragments
+                        # Fall back to original text instead of leaving the cell blank
                         translated_text = translated_text.replace("<SKIP>", "").strip()
                         if not translated_text:
+                            self._insert_text_adaptive(
+                                page, item["raw_rect"], original_text,
+                                target_lang, item["format"], item["block"].type,
+                            )
                             continue
 
-                        if translated_text.strip() == item["text"]:
+                        # No real change — still render to keep cell intact after redaction
+                        if translated_text.strip() == original_text:
+                            self._insert_text_adaptive(
+                                page, item["raw_rect"], original_text,
+                                target_lang, item["format"], item["block"].type,
+                            )
                             continue
 
                         self._insert_text_adaptive(
