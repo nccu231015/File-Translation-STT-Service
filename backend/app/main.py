@@ -779,9 +779,61 @@ async def chat_text(payload: dict):
     response = await llm_service.chat(text)
     return {"response": response}
 
+# ── n8n Sub-Agent Endpoints ────────────────────────────────────────────────────
+# These endpoints are called by the three n8n branches (SQL_PROD / SQL_EQ / RAG).
+# The Router decision is made in n8n; actual AI processing stays in the backend.
+
+N8N_FACTORY_WEBHOOK = "http://172.16.2.68:5678/webhook/factory-chat"
+
+class FactoryChatRequest(BaseModel):
+    question: str
+    history: Optional[list] = []
+
+@app.post("/api/v1/factory/sql/production-chat")
+async def production_chat(request: FactoryChatRequest):
+    """Production SQL Agent endpoint - called by n8n SQL_PROD branch"""
+    try:
+        print(f"[Production Chat] question='{request.question}'", flush=True)
+        result = await factory_agent.sql_agent.chat(request.question, history=request.history)
+        if isinstance(result, dict):
+            return result
+        return {"response": str(result), "chart_config": None}
+    except Exception as e:
+        print(f"[Production Chat Error] {e}", flush=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/v1/factory/sql/equipment-chat")
+async def equipment_chat(request: FactoryChatRequest):
+    """Equipment SQL Agent endpoint - called by n8n SQL_EQ branch"""
+    try:
+        print(f"[Equipment Chat] question='{request.question}'", flush=True)
+        result = await factory_agent.equipment_sql_agent.chat(request.question, history=request.history)
+        if isinstance(result, dict):
+            return result
+        return {"response": str(result), "chart_config": None}
+    except Exception as e:
+        print(f"[Equipment Chat Error] {e}", flush=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/v1/factory/rag/query")
+async def rag_query(request: FactoryChatRequest):
+    """RAG Agent endpoint - called by n8n RAG branch"""
+    try:
+        print(f"[RAG Query] question='{request.question}'", flush=True)
+        response = await factory_agent.rag_agent.execute_task(request.question)
+        return {"response": str(response), "chart_config": None}
+    except Exception as e:
+        print(f"[RAG Query Error] {e}", flush=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ──────────────────────────────────────────────────────────────────────────────
+
 @app.post("/factory-chat")
 async def factory_chat(payload: dict, background_tasks: BackgroundTasks):
-    """Factory data chat interface: integrate session history with SQL querying"""
+    """Factory data chat interface: proxies to n8n Router webhook.
+    n8n decides the route (SQL_PROD / SQL_EQ / RAG) and calls the
+    corresponding sub-agent endpoint on this server.
+    """
     try:
         user_text = payload.get("text")
         session_id = payload.get("session_id")
@@ -792,7 +844,7 @@ async def factory_chat(payload: dict, background_tasks: BackgroundTasks):
             session = await factory_store.get_session(session_id)
             if session: history = session.get("messages", [])
         
-        # Ensure session id exists (simplified logic for stability)
+        # Ensure session id exists
         if not session_id:
             try:
                 session = await factory_store.create_session(user_text)
@@ -800,13 +852,23 @@ async def factory_chat(payload: dict, background_tasks: BackgroundTasks):
             except Exception as se:
                 session_id = str(uuid.uuid4())
                 print(f"[Session Warning] Fallback session id generated: {se}")
-            
-        print(f"\n[Factory Chat] Processing request (session={session_id})", flush=True)
-        result = await factory_agent.chat(user_text, history=history)
-        response_text = result["response"] if isinstance(result, dict) else str(result)
-        chart_config  = result.get("chart_config") if isinstance(result, dict) else None
+
+        print(f"\n[Factory Chat] Forwarding to n8n (session={session_id})", flush=True)
+
+        # Forward to n8n Router webhook; n8n will call the sub-agent
+        # endpoints above and return { response, chart_config }
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            n8n_resp = await client.post(
+                N8N_FACTORY_WEBHOOK,
+                json={"question": user_text, "history": history}
+            )
+            n8n_resp.raise_for_status()
+            result = n8n_resp.json()
+
+        response_text = result.get("response", "")
+        chart_config  = result.get("chart_config", None)
         
-        # Safely add background archive task
+        # Archive conversation history in background
         try:
             background_tasks.add_task(factory_store.append_messages, session_id, user_text, response_text)
         except Exception as bg_e:
@@ -817,7 +879,7 @@ async def factory_chat(payload: dict, background_tasks: BackgroundTasks):
         return {
             "response": response_text,
             "session_id": str(session_id),
-            "chart_config": chart_config   # None when not a chart query; dict for Q5/Q7
+            "chart_config": chart_config
         }
         
     except Exception as e:
