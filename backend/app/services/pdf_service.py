@@ -11,6 +11,8 @@ class PDFService:
         self.target_lang = target_lang
         # Default model is now gpt-oss:20b
         self.ollama_model = os.getenv("OLLAMA_MODEL", "gpt-oss:20b")
+        # Translation temperature (can be overridden at runtime by n8n endpoint)
+        self.temperature = 0.1
         self.s2tw = OpenCC("s2tw")
         
         # Initialize with DocLayout-YOLO detector
@@ -131,7 +133,7 @@ class PDFService:
                             "messages": messages,
                             "stream": False,
                             "options": {
-                                "temperature": 0.1,
+                                "temperature": self.temperature,
                                 "num_predict": 4096,
                                 "top_p": 0.9,
                             },
@@ -229,7 +231,7 @@ class PDFService:
                             "model": self.ollama_model,
                             "messages": messages,
                             "stream": False,
-                            "options": {"temperature": 0.1, "num_predict": 8192, "top_p": 0.9},
+                            "options": {"temperature": self.temperature, "num_predict": 8192, "top_p": 0.9},
                         }
                     )
                     if r.status_code == 200:
@@ -340,7 +342,7 @@ class PDFService:
                                 "messages": messages,
                                 "stream": False,
                                 "options": {
-                                    "temperature": 0.1,
+                                    "temperature": self.temperature,
                                     "num_predict": 4096,
                                     "top_p": 0.9,
                                 },

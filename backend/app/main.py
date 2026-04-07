@@ -721,6 +721,57 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
         if docx_path and os.path.exists(docx_path): os.remove(docx_path)
         raise HTTPException(status_code=500, detail=str(e))
 
+# ------------------------------------------------------------------------------
+# n8n Microservice Interface: POST /api/v1/document/process
+# Receives file + n8n-controlled parameters (model, temperature, target_lang).
+# Delegates entirely to the existing /pdf-translation core logic.
+# All file output / DOCX generation logic is untouched.
+# ------------------------------------------------------------------------------
+@app.post("/api/v1/document/process")
+async def document_process_for_n8n(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    model: str = Form(""),             # Ollama model override from n8n (empty = use service default)
+    temperature: float = Form(0.1),    # Translation temperature from n8n
+    target_lang: str = Form("zh-TW"),  # Target language forwarded from frontend via n8n
+):
+    """
+    n8n Document Translation Microservice Entrypoint.
+    - Accepts model / temperature overrides from the n8n HTTP Request node.
+    - target_lang is forwarded transparently from the frontend via the n8n Webhook.
+    - Delegates to the existing /pdf-translation core logic without duplicating code.
+    - Returns {"pdf_base64": ..., "docx_base64": ...} for n8n to forward back.
+    """
+    # Temporarily override pdf_service runtime settings
+    original_model = pdf_service.ollama_model
+    original_temperature = pdf_service.temperature
+
+    model_override = model.strip() or None
+    if model_override:
+        pdf_service.ollama_model = model_override
+    pdf_service.temperature = temperature
+
+    print(
+        f"[n8n Document] model={pdf_service.ollama_model} | "
+        f"temperature={temperature} | target_lang={target_lang}",
+        flush=True,
+    )
+
+    try:
+        # Delegate to existing translate_pdf function (all core logic lives there)
+        result = await translate_pdf(
+            background_tasks=background_tasks,
+            file=file,
+            target_lang=target_lang,
+            debug="false",
+            is_complex_table="false",
+        )
+        return result
+    finally:
+        # Always restore original settings to avoid affecting other concurrent requests
+        pdf_service.ollama_model = original_model
+        pdf_service.temperature = original_temperature
+
 @app.post("/chat")
 async def chat_text(payload: dict):
     text = payload.get("question", payload.get("text", ""))
