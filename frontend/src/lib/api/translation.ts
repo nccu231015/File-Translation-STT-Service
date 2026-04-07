@@ -34,9 +34,12 @@ export const translatePDF = async (
     formData.append('debug', debug.toString());
     formData.append('is_complex_table', isComplexTable.toString());
 
-    // DIRECT CALL to backend to bypass Next.js proxy/body-size issues
-    const BACKEND_URL = "http://172.16.2.68:8000";
-    const response = await fetch(`${BACKEND_URL}/pdf-translation`, {
+    // ─── Route to n8n Microservice Webhook ─────────────────────────────────────
+    // n8n forwards the file + language to Python /api/v1/document/process,
+    // and returns the processed result directly.
+    const N8N_WEBHOOK_URL = "http://172.16.2.68/webhook/ff6bacb9-5b6e-486e-9929-5a735090b28d";
+
+    const response = await fetch(N8N_WEBHOOK_URL, {
         method: 'POST',
         body: formData,
     });
