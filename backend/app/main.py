@@ -734,7 +734,7 @@ async def document_process_for_n8n(
     model: str = Form(""),                    # Ollama model override from n8n (empty = use service default)
     temperature: float = Form(0.1),           # Translation temperature from n8n
     target_lang: str = Form("zh-TW"),         # Target language forwarded from frontend via n8n
-    is_complex_table: str = Form("true"),     # Protect table areas via YOLO; DOCX handles cell translation
+    is_complex_table: str = Form("false"),    # Forwarded from frontend toggle; true = YOLO protects tables, DOCX handles cells
 ):
     """
     n8n Document Translation Microservice Entrypoint.
