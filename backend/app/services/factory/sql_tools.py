@@ -1196,6 +1196,180 @@ class FactorySqlTools:
             "chart_config":         chart_config           # JSON for frontend chart
         }
 
+    # ──────────────────────────────────────────────────────────────────────────────
+    # Q8: Defect quantity trend (dual-line chart) + top defect cause ranking
+    # Source A: Daily_Status_Report → NG_NUM + REJECT_RATE time-series
+    # Source B: blpjl_new_copy1    → bllt defect type ranking + date concentration
+    # ──────────────────────────────────────────────────────────────────────────────
+    def get_defect_cause_analysis(
+        self,
+        start_date: str = None,
+        end_date: str = None,
+        line_no: str = None,
+        model: str = None,
+        granularity: str = 'daily',
+        top_n: int = 5
+    ) -> Dict[str, Any]:
+        """
+        Q8: Defect quantity trend + top-N defect cause ranking with date concentration.
+        At least one of line_no or model must be provided.
+        Returns:
+          - 'trend_data':    time-series rows for table display
+          - 'chart_config':  dual Y-axis line chart JSON (left=NG_NUM, right=REJECT_RATE%)
+          - 'cause_ranking': top-N defect causes with date concentration flag
+        """
+        # Default date range: last 30 days
+        if not end_date:
+            end_date = datetime.date.today().isoformat()
+        if not start_date:
+            start_date = (
+                datetime.date.fromisoformat(end_date) - datetime.timedelta(days=30)
+            ).isoformat()
+
+        # Build WHERE filters (at least one of line_no / model expected)
+        filters: List[str] = [f"PRO_TIME BETWEEN '{start_date}' AND '{end_date}'"]
+        bl_filters: List[str] = [f"PRO_TIME BETWEEN '{start_date}' AND '{end_date}'"]
+        if line_no:
+            safe_line = str(line_no).replace("'", "''")
+            filters.append(f"CAST([NO] AS VARCHAR(50)) = '{safe_line}'")
+            bl_filters.append(f"CAST([NO] AS VARCHAR(50)) = '{safe_line}'")
+        if model:
+            safe_model = str(model).replace("'", "''")
+            filters.append(f"jz = '{safe_model}'")
+            bl_filters.append(f"jz = '{safe_model}'")
+
+        where_dsr = " AND ".join(filters)
+        where_bl  = " AND ".join(bl_filters)
+
+        # Granularity time label for trend grouping
+        granularity_map = {
+            'daily':   "CONVERT(VARCHAR(10), PRO_TIME, 120)",
+            'weekly':  (
+                "CAST(YEAR(PRO_TIME) AS VARCHAR) + '-W' + "
+                "RIGHT('0' + CAST(DATEPART(WEEK, PRO_TIME) AS VARCHAR), 2)"
+            ),
+            'monthly': "CONVERT(VARCHAR(7), PRO_TIME, 120)",
+        }
+        time_expr = granularity_map.get(granularity, granularity_map['daily'])
+
+        # ── Query A: Defect quantity & rate trend ──────────────────────────────
+        query_trend = f"""
+            WITH base AS (
+                SELECT
+                    {time_expr}   AS period_label,
+                    NG_NUM,
+                    ACTUAL_PRO,
+                    REJECT_RATE
+                FROM [dbo].[Daily_Status_Report]
+                WHERE {where_dsr}
+                  AND [NO] IS NOT NULL
+            )
+            SELECT
+                period_label                                AS [時間標籤],
+                SUM(NG_NUM)                                 AS [不良數量],
+                ROUND(
+                    CAST(SUM(NG_NUM) AS FLOAT) /
+                    NULLIF(SUM(ACTUAL_PRO), 0) * 100, 4
+                )                                           AS [不良率(%)],
+                ROUND(AVG(REJECT_RATE) * 100, 4)            AS [REJECT_RATE平均(%)]
+            FROM base
+            GROUP BY period_label
+            ORDER BY period_label
+        """
+
+        # ── Query B: Top-N defect causes from blpjl_new_copy1 ─────────────────
+        query_cause = f"""
+            SELECT TOP {top_n}
+                bllt                            AS [不良型態],
+                SUM(blsl)                       AS [不良數量],
+                COUNT(DISTINCT PRO_TIME)        AS [發生天數]
+            FROM [dbo].[blpjl_new_copy1]
+            WHERE {where_bl}
+              AND bllt IS NOT NULL
+              AND bllt <> ''
+            GROUP BY bllt
+            ORDER BY [不良數量] DESC
+        """
+
+        trend_result = self._execute_mssql_query(query_trend)
+        cause_result = self._execute_mssql_query(query_cause)
+
+        # ── Date concentration analysis (Python-side) ──────────────────────────
+        try:
+            total_days = (
+                datetime.date.fromisoformat(end_date) -
+                datetime.date.fromisoformat(start_date)
+            ).days + 1
+        except Exception:
+            total_days = 30
+
+        for row in cause_result:
+            appeared = int(row.get('發生天數') or 0)
+            conc_pct = round(appeared / total_days * 100, 1) if total_days > 0 else 0
+            row['集中度(%)'] = conc_pct
+            row['集中性標示'] = (
+                '⚠️ 集中發生'  if conc_pct < 30
+                else '📊 分散發生' if conc_pct < 70
+                else '🔴 持續發生'
+            )
+
+        # ── Chart config: dual Y-axis line chart ──────────────────────────────
+        labels     = [r.get('時間標籤', '')   for r in trend_result]
+        ng_data    = [r.get('不良數量', 0)    for r in trend_result]
+        rate_data  = [r.get('不良率(%)', 0)  for r in trend_result]
+
+        scope_label = ""
+        if line_no and model:
+            scope_label = f"產線 {line_no} × {model}"
+        elif line_no:
+            scope_label = f"產線 {line_no}"
+        elif model:
+            scope_label = f"機種 {model}"
+
+        chart_config = {
+            "chart_type": "dual_line",
+            "title":      f"不良數量與不良率趨勢 ({granularity}) | {scope_label}",
+            "labels":     labels,
+            "datasets": [
+                {
+                    "type":        "line",
+                    "label":       "不良數量",
+                    "data":        ng_data,
+                    "yAxisID":     "y_ng_count",
+                    "borderColor": "rgba(255, 99, 132, 1)",
+                    "backgroundColor": "rgba(255, 99, 132, 0.1)",
+                    "fill":        True,
+                    "tension":     0.3,
+                },
+                {
+                    "type":        "line",
+                    "label":       "不良率 (%)",
+                    "data":        rate_data,
+                    "yAxisID":     "y_defect_rate",
+                    "borderColor": "rgba(54, 162, 235, 1)",
+                    "fill":        False,
+                    "tension":     0.3,
+                }
+            ],
+            "yAxes": {
+                "y_ng_count":    {"label": "不良數量 (件)", "position": "left"},
+                "y_defect_rate": {"label": "不良率 (%)",   "position": "right"},
+            }
+        }
+
+        return {
+            "status":        "success",
+            "start_date":    start_date,
+            "end_date":      end_date,
+            "granularity":   granularity,
+            "line_no":       line_no,
+            "model":         model,
+            "top_n":         top_n,
+            "trend_data":    trend_result,    # for LLM text table
+            "cause_ranking": cause_result,    # top-N defect types with concentration
+            "chart_config":  chart_config     # dual-line JSON for frontend
+        }
+
     def _execute_postgres_query(self, query: str) -> List[Dict[str, Any]]:
         try:
             conn = psycopg2.connect(host=POSTGRES_CONFIG['host'], port=POSTGRES_CONFIG['port'],
