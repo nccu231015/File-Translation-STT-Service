@@ -102,7 +102,7 @@ class FactorySqlTools:
     def _build_line_filter(self, line_no: str, no_col: str = "[NO]") -> str:
         """
         Build a SQL WHERE condition for line_no that handles both numeric IDs
-        (e.g. '302') and human-readable names (e.g. 'SMT B', '三樓A線').
+        (e.g. '302') and human-readable 怎麼可能查不到原因跟數量？table跟欄位我三樓A線').
         - Numeric  → direct equality:  CAST([NO] AS VARCHAR(50)) = '302'
         - Name     → lookup via Scx_base.scx_value LIKE '%SMT B%'
         """
@@ -1223,7 +1223,7 @@ class FactorySqlTools:
     # ──────────────────────────────────────────────────────────────────────────────
     # Q8: Defect quantity trend (dual-line chart) + top defect cause ranking
     # Source A: Daily_Status_Report → NG_NUM + REJECT_RATE time-series
-    # Source B: blpjl_new_copy1    → bllt defect type ranking + date concentration
+    # Source B: blpjl_new (live view) → bllt defect type ranking + date concentration
     # ──────────────────────────────────────────────────────────────────────────────
     def get_defect_cause_analysis(
         self,
@@ -1302,13 +1302,13 @@ class FactorySqlTools:
             ORDER BY period_label
         """
 
-        # ── Query B: Top-N defect causes from blpjl_new_copy1 ─────────────────
+        # ── Query B: Top-N defect causes from blpjl_new (live view) ─────────────
         query_cause = f"""
             SELECT TOP {top_n}
                 bllt                            AS [不良型態],
                 SUM(blsl)                       AS [不良數量],
                 COUNT(DISTINCT PRO_TIME)        AS [發生天數]
-            FROM [dbo].[blpjl_new_copy1]
+            FROM [dbo].[blpjl_new]
             WHERE {where_bl}
               AND bllt IS NOT NULL
               AND bllt <> ''
