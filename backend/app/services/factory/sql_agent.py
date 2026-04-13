@@ -240,15 +240,15 @@ class SqlAgent:
 
 1. **即時稼動狀態 (Q1)**：
    - 詢問「各樓層/全廠產線稼動狀態、開工/停工、稼動率」→ 必定調用 `get_line_operation_status`。
-   - 回覆時，依據 floor_summary 呈現各樓層匯總表，再依 line_detail 呈現逐條產線狀態：「開工」前加🟢、「停工」前加🔴。
+   - 回覆時，依據 floor_summary 呈現各樓層匯總表，再依 line_detail 呈現逐條產線狀態；「狀態燈」欄位值為 RUN/STOP，呈現時轉換：RUN → 🟢 開工、STOP → 🔴 停工。
 
 2. **指定樓層產線數量與機種 (Q2)**：
    - 詢問「X 樓目前開工幾條、X 樓在生產什麼機種、X 樓的工單狀況」→ 必定調用 `get_floor_active_lines(floor=X)`。
-   - 回覆時，使用 line_status_table（產線狀態表）與 active_model_table（機種表）分別呈現兩張 Markdown 表格；「開工」前加🟢、「停工」前加🔴。
+   - 回覆時，使用 line_status_table（產線狀態表）與 active_model_table（機種表）分別呈現兩張 Markdown 表格；「狀態燈」欄位值為 RUN/STOP，呈現時轉換：RUN → 🟢 開工、STOP → 🔴 停工。
 
 3. **工單進度落後 (Q3)**：
    - 詢問「哪些工單落後、哪些產線進度有問題、落後工單清單」→ 調用 `get_lagging_workorders`。
-   - 回覆時，在表格的「落後嚴重度」欄位前加上燈號：「嚴重落後」→ 🔴、「輕微落後」→ 🟡、「接近達標」→ 🟡，依達成率由低至高呈現。
+   - 回覆時，「落後嚴重度」欄位的值為 CRITICAL / MILD / NEAR，呈現時請轉換：CRITICAL → 🔴 嚴重落後、MILD → 🟡 輕微落後、NEAR → 🟡 接近達標，依達成率由低至高呈現。
 
 4. **高不良率產線 (Q4)**：
    - 詢問「哪些產線不良比例高、不良率排行、異常比例」→ 優先調用 `get_high_defect_lines`。
@@ -261,7 +261,7 @@ class SqlAgent:
 
 6. **單一工單進度確認 (Q6)**：
    - 使用者給出工單號碼，詢問「這張工單有沒有落後」→ 調用 `get_workorder_progress_check`。
-   - 回覆必須包含：(a) Y/N 答案 (b) 嚴重度燈號：「N – 正常」→🟢、「Y – 輕微落後」→🟡、「Y – 嚴重落後」→🔴 (c) 具體的生產改善建議（直接從 recommendation 欄位呈現）。
+   - 回覆必須包含：(a) Y/N 答案 (b) 嚴重度燈號，「是否落後」欄位值為 ON_TRACK / MILD_BEHIND / SEVERE_BEHIND，呈現時轉換：ON_TRACK → 🟢 正常、MILD_BEHIND → 🟡 輕微落後、SEVERE_BEHIND → 🔴 嚴重落後 (c) 具體的生產改善建議（直接從 recommendation 欄位呈現）。
 
 7. **機種不良率波動排行 (Q7)**：
    - 詢問「哪些機種不良率波動最大、本季與上季比對、M-o-M/Q-o-Q/Y-o-Y/1H-2H 波動、某時間區間每日或每週波動」→ 調用 `get_defect_rate_fluctuation_data`。

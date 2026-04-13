@@ -527,11 +527,11 @@ class FactorySqlTools:
         """
         result = self._execute_mssql_query(query)
 
-        # Use plain-text labels (no emoji in data to prevent LLM garbling in Markdown tables)
+        # Use ASCII-only labels to prevent LLM garbling in Markdown tables
         # LLM will add 🟢/🔴 based on System Prompt instructions
-        STATUS_LABEL = {'RUNNING': '開工', 'STOPPED': '停工'}
+        STATUS_LABEL = {'RUNNING': 'RUN', 'STOPPED': 'STOP'}
         for row in result:
-            row['狀態燈'] = STATUS_LABEL.get(row.get('稼動狀態', 'STOPPED'), '停工')
+            row['狀態燈'] = STATUS_LABEL.get(row.get('稼動狀態', 'STOPPED'), 'STOP')
 
         # Calculate per-floor summary
         floor_map: Dict[str, Dict[str, int]] = {}
@@ -630,11 +630,11 @@ class FactorySqlTools:
         lines_result  = self._execute_mssql_query(query_lines)
         models_result = self._execute_mssql_query(query_models)
 
-        # Use plain-text labels (no emoji in data to prevent LLM garbling in Markdown tables)
+        # Use ASCII-only labels to prevent LLM garbling in Markdown tables
         # LLM will add 🟢/🔴 based on System Prompt instructions
-        STATUS_LABEL = {'RUNNING': '開工', 'STOPPED': '停工'}
+        STATUS_LABEL = {'RUNNING': 'RUN', 'STOPPED': 'STOP'}
         for row in lines_result:
-            row['狀態燈'] = STATUS_LABEL.get(row.get('稼動狀態', 'STOPPED'), '停工')
+            row['狀態燈'] = STATUS_LABEL.get(row.get('稼動狀態', 'STOPPED'), 'STOP')
 
         running = sum(1 for r in lines_result if r.get('稼動狀態') == 'RUNNING')
         total   = len(lines_result)
@@ -689,16 +689,15 @@ class FactorySqlTools:
         """
         result = self._execute_mssql_query(query)
 
-        # Map severity to plain-text labels (no emoji in data to avoid LLM garbling in Markdown tables)
-        # The LLM will add color indicators based on System Prompt instructions
+        # Use short ASCII-safe severity labels to prevent LLM garbling in Markdown tables
         SEVERITY_MAP = {
-            '嚴重落後': '嚴重落後 (<70%)',
-            '輕微落後': '輕微落後 (<90%)',
-            '接近達標': '接近達標 (<100%)',
+            '嚴重落後': 'CRITICAL',
+            '輕微落後': 'MILD',
+            '接近達標': 'NEAR',
         }
         for row in result:
-            raw = row.pop('落後嚴重度_raw', '接近達標')
-            row['落後嚴重度'] = SEVERITY_MAP.get(raw, raw)
+            raw = row.pop('落後嚴重度_raw', '嚴重落後')
+            row['落後嚴重度'] = SEVERITY_MAP.get(raw, 'CRITICAL')
 
         return {
             "status": "success",
@@ -934,16 +933,16 @@ class FactorySqlTools:
         """
         result = self._execute_mssql_query(query)
 
-        # Use plain-text labels (no emoji in data to prevent LLM garbling in Markdown tables)
+        # Use ASCII-only labels to prevent LLM garbling in Markdown tables
         # LLM will add 🟢/🟡/🔴 based on System Prompt instructions
         STATUS_MAP = {
-            'On track':       'N – 正常 (On track)',
-            'Mildly behind':  'Y – 輕微落後 (Mildly behind)',
-            'Severely behind':'Y – 嚴重落後 (Severely behind)',
+            'On track':       'ON_TRACK',
+            'Mildly behind':  'MILD_BEHIND',
+            'Severely behind':'SEVERE_BEHIND',
         }
         for row in result:
             raw = row.pop('進度狀態_raw', 'Severely behind')
-            row['是否落後'] = STATUS_MAP.get(raw, raw)
+            row['是否落後'] = STATUS_MAP.get(raw, 'SEVERE_BEHIND')
 
         # Derive overall verdict and recommendation
         is_behind = "UNKNOWN"
