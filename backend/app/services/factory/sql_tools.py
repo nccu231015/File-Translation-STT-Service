@@ -527,10 +527,11 @@ class FactorySqlTools:
         """
         result = self._execute_mssql_query(query)
 
-        # Inject emoji into result rows (kept out of SQL to avoid cp950 encoding errors)
-        STATUS_ICON = {'RUNNING': '🟢 開工', 'STOPPED': '🔴 停工'}
+        # Use plain-text labels (no emoji in data to prevent LLM garbling in Markdown tables)
+        # LLM will add 🟢/🔴 based on System Prompt instructions
+        STATUS_LABEL = {'RUNNING': '開工', 'STOPPED': '停工'}
         for row in result:
-            row['狀態燈'] = STATUS_ICON.get(row.get('稼動狀態', 'STOPPED'), '🔴 停工')
+            row['狀態燈'] = STATUS_LABEL.get(row.get('稼動狀態', 'STOPPED'), '停工')
 
         # Calculate per-floor summary
         floor_map: Dict[str, Dict[str, int]] = {}
@@ -629,10 +630,11 @@ class FactorySqlTools:
         lines_result  = self._execute_mssql_query(query_lines)
         models_result = self._execute_mssql_query(query_models)
 
-        # Inject emoji (kept out of SQL to avoid cp950 encoding errors)
-        STATUS_ICON = {'RUNNING': '🟢 開工', 'STOPPED': '🔴 停工'}
+        # Use plain-text labels (no emoji in data to prevent LLM garbling in Markdown tables)
+        # LLM will add 🟢/🔴 based on System Prompt instructions
+        STATUS_LABEL = {'RUNNING': '開工', 'STOPPED': '停工'}
         for row in lines_result:
-            row['狀態燈'] = STATUS_ICON.get(row.get('稼動狀態', 'STOPPED'), '🔴 停工')
+            row['狀態燈'] = STATUS_LABEL.get(row.get('稼動狀態', 'STOPPED'), '停工')
 
         running = sum(1 for r in lines_result if r.get('稼動狀態') == 'RUNNING')
         total   = len(lines_result)
@@ -932,11 +934,12 @@ class FactorySqlTools:
         """
         result = self._execute_mssql_query(query)
 
-        # Inject emoji into result rows (kept out of SQL to avoid cp950 encoding errors)
+        # Use plain-text labels (no emoji in data to prevent LLM garbling in Markdown tables)
+        # LLM will add 🟢/🟡/🔴 based on System Prompt instructions
         STATUS_MAP = {
-            'On track':       '🟢 N – On track',
-            'Mildly behind':  '🟡 Y – Mildly behind',
-            'Severely behind':'🔴 Y – Severely behind',
+            'On track':       'N – 正常 (On track)',
+            'Mildly behind':  'Y – 輕微落後 (Mildly behind)',
+            'Severely behind':'Y – 嚴重落後 (Severely behind)',
         }
         for row in result:
             raw = row.pop('進度狀態_raw', 'Severely behind')
