@@ -1113,6 +1113,130 @@ class FactorySqlTools:
             "chart_config":    chart_config,
         }
 
+    # ══════════════════════════════════════════════════════════════════════════════
+    # EQ-G: Fault reason heat map (equipment × fault_note → occurrence_count)
+    # X-axis = top-N equipment by total fault occurrences
+    # Y-axis = top-M fault reasons (NOTE from CIM_MQTTCODEERR)
+    # Cell value = occurrence count within the period
+    # ══════════════════════════════════════════════════════════════════════════════
+    def get_fault_heatmap(
+        self,
+        start_date: str,
+        end_date: str,
+        floor: str = None,
+        top_n_equipment: int = 8,
+        top_m_notes: int = 10,
+    ) -> Dict[str, Any]:
+        """
+        EQ-G: Build a heat map of fault reasons (NOTE) × equipment for a period.
+        Returns chart_type='heatmap' compatible with ChartConfig.
+        """
+        start_ymd = start_date.replace('-', '')
+        end_ymd   = end_date.replace('-', '')
+        safe_floor = (floor or '').replace("'", "''")
+        floor_filter = (
+            f'AND ei."EQUIP_INSTALL_POSITION" ILIKE \'%{safe_floor}%\''
+            if safe_floor else ''
+        )
+
+        # Query: count occurrences of each (equipment_name, NOTE) pair
+        query = f"""
+            SELECT
+                COALESCE(ei."EQUIPMENT_NAME", c."TOPIC") AS "設備名稱",
+                err."NOTE"                                AS "故障原因",
+                err."CATE"                                AS "異常類別",
+                COUNT(*)                                  AS "發生次數"
+            FROM "public"."CIM_MQTTCOLLECT" c
+            LEFT JOIN "public"."EQUIPMENT_INFO_DICT" ei ON ei."TOPIC" = c."TOPIC"
+            LEFT JOIN "public"."CIM_MQTTCODEERR" err
+                ON err."PLCCODE" = c."CODE"
+                AND err."MACHINE" = ei."EQUIPMENT_NAME"
+            WHERE c."YMD" BETWEEN '{start_ymd}' AND '{end_ymd}'
+              AND err."NOTE" IS NOT NULL
+              {floor_filter}
+            GROUP BY
+                COALESCE(ei."EQUIPMENT_NAME", c."TOPIC"),
+                err."NOTE", err."CATE"
+            ORDER BY "發生次數" DESC
+        """
+        rows = self._execute_postgres_query(query)
+        if not rows or (len(rows) == 1 and rows[0].get("error")):
+            return {
+                "status":  "success",
+                "period":  f"{start_date} ~ {end_date}",
+                "message": "查詢期間內無故障紀錄，無法建立熱點圖",
+                "chart_config": None,
+            }
+
+        # ── Tally totals to pick top-N equipment and top-M notes ──────────────
+        eq_totals: Dict[str, int] = {}
+        note_totals: Dict[str, int] = {}
+        matrix_raw: Dict[str, Dict[str, int]] = {}   # note → {equip → count}
+        note_cate: Dict[str, str] = {}
+
+        for r in rows:
+            equip = r.get("設備名稱") or ""
+            note  = r.get("故障原因") or ""
+            cnt   = int(r.get("發生次數") or 0)
+            if not equip or not note:
+                continue
+            eq_totals[equip]   = eq_totals.get(equip, 0) + cnt
+            note_totals[note]  = note_totals.get(note, 0) + cnt
+            note_cate[note]    = r.get("異常類別") or "未分類"
+            if note not in matrix_raw:
+                matrix_raw[note] = {}
+            matrix_raw[note][equip] = matrix_raw[note].get(equip, 0) + cnt
+
+        # Select top-N equipment and top-M notes
+        top_equips = [
+            eq for eq, _ in sorted(eq_totals.items(), key=lambda x: -x[1])[:top_n_equipment]
+        ]
+        top_notes = [
+            n for n, _ in sorted(note_totals.items(), key=lambda x: -x[1])[:top_m_notes]
+        ]
+
+        if not top_equips or not top_notes:
+            return {
+                "status":  "success",
+                "period":  f"{start_date} ~ {end_date}",
+                "message": "該期間內 CIM_MQTTCODEERR 中無符合設備的故障代碼對照，熱點圖無資料",
+                "chart_config": None,
+            }
+
+        # ── Build datasets (one per note / row) ───────────────────────────────
+        max_val = 0
+        datasets = []
+        for note in top_notes:
+            data = [matrix_raw.get(note, {}).get(eq, 0) for eq in top_equips]
+            mv = max(data)
+            if mv > max_val:
+                max_val = mv
+            datasets.append({
+                "type":  "heatmap",
+                "label": note,
+                "data":  data,
+                "cate":  note_cate.get(note, "未分類"),
+            })
+
+        chart_config = {
+            "chart_type": "heatmap",
+            "title":      f"故障原因熱點圖（{floor or '全廠'}） {start_date} ~ {end_date}",
+            "labels":     top_equips,           # X-axis: equipment
+            "datasets":   datasets,             # Y-axis: one row per fault note
+            "max_value":  max_val,
+        }
+
+        return {
+            "status":          "success",
+            "period":          f"{start_date} ~ {end_date}",
+            "floor":           floor or "全廠",
+            "top_n_equipment": top_n_equipment,
+            "top_m_notes":     top_m_notes,
+            "equipment_list":  top_equips,
+            "note_list":       top_notes,
+            "chart_config":    chart_config,
+        }
+
     # ──────────────────────────────────────────────────────────────────────────────
     # Q1: Real-time operation status for each floor / line
     # Utilization = running lines / total lines  (RUN / [RUN + DOWN])

@@ -4,13 +4,14 @@ import datetime
 
 class EquipmentSqlAgent:
     """
-    負責處理「設備檢索」上下文的工具調用，將自然語言轉為 6 種設備分析功能：
+    負責處理「設備檢索」上下文的工具調用，將自然語言轉為 7 種設備分析功能：
       EQ-A: 各樓層設備即時稼動狀態
       EQ-B: 良率未達標設備（紅色標記）
       EQ-C: 指定樓層設備稼動燈號與稼動率
       EQ-D: 特定設備生産機種不良率趨勢（Bar+Line）
       EQ-E: 停機時數異常排行 Top-N（Pareto）
       EQ-F: 設備故障原因分布比較（兩期間對比）
+      EQ-G: 故障原因熱點圖（設備 × 故障原因 Heat Map）
     """
 
     def __init__(self, llm_service):
@@ -240,6 +241,45 @@ class EquipmentSqlAgent:
                     }
                 }
             },
+            # ── EQ-G ─────────────────────────────────────────────────────────────────────
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_fault_heatmap",
+                    "description": (
+                        "[EQ-G] 產生設備故障原因熱點圖（Heat Map），"
+                        "X 軸 = 設備名稱，Y 軸 = 具體故障原因（NOTE），"
+                        "儲格色階 = 發生次數（白→深紅）。"
+                        "適用於：「哪台設備跟哪種故障最相關」「故障熱點圖」。"
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "start_date": {
+                                "type": "string",
+                                "description": "開始日期 YYYY-MM-DD。"
+                            },
+                            "end_date": {
+                                "type": "string",
+                                "description": "結束日期 YYYY-MM-DD。"
+                            },
+                            "floor": {
+                                "type": "string",
+                                "description": "樓層篩選（如 '3F'），省略則全廠。"
+                            },
+                            "top_n_equipment": {
+                                "type": "integer",
+                                "description": "X 軸顯示的設備數，預設 8。"
+                            },
+                            "top_m_notes": {
+                                "type": "integer",
+                                "description": "Y 軸顯示的故障原因數，預設 10。"
+                            }
+                        },
+                        "required": ["start_date", "end_date"]
+                    }
+                }
+            },
         ]
 
     async def execute_task(self, question: str) -> Dict[str, Any]:
@@ -292,6 +332,11 @@ class EquipmentSqlAgent:
    - 回傳兩層比對：`comparison`（A001-A009 狀態碼粗分類停機時數）和 `note_comparison`（具體 NOTE 層級發生次數細分類）
    - 回覆時**優先呈現 `note_comparison` 表格**（具體故障原因有意義），`comparison` 作為補充說明；若 `note_comparison` 為空代表該設備未建立故障碼對照，則僅呈現 `comparison`
 
+7. 詢問「故障熱點圖/heat map/哪台設備跟哪種故障最相關」 → 調用 `get_fault_heatmap`
+   - 需提供時間範圍，可選填樓層、top_n_equipment、top_m_notes
+   - 回傳 chart_config（chart_type='heatmap'），前端會自動渲染熱點色階圖
+   - 請說明：「X 軸為設備名稱、Y 軸為故障原因、儲格色越深表示發生次數越多」
+
 【回覆格式規範】
 - **全程使用繁體中文**，絕對禁止輸出英文句子，禁止使用「產線」一詞（本模式為「設備」專區）
 - **強制要求**：不論資料筆數多寡，**必須且務必將工具回傳的 `data` 陣列完整輸出成 Markdown 表格**。你可以提供總結文字，但**絕對不准省略表格**！
@@ -309,6 +354,7 @@ class EquipmentSqlAgent:
 - 若詢問「達標/良率」：只顯示 `樓層`、`設備(代碼)`、`產出(良/不良)`、`良率(%)`、`狀態燈`。
 - 若詢問「停機排名/EQ-E」：表格顯示 `排名`、`樓層`、`設備(代碼)`、`停機時數(h)`、`主要停機原因`；停機原因明細（各代碼小時數）可在表格下方另起一個「各原因明細」摺疊說明，不放入主表格。
 - 若詢問「故障分布比較/EQ-F」：**優先**使用 `note_comparison` 建立「具體故障原因對比表」，欄位為 `故障原因`、`異常類別`、`{期間A}次數`、`{期間B}次數`、`變化(次)`、`趨勢`；狀態碼 `comparison` 表格標題明確標注「（停機時數粗分類）」作為補充。若 `note_comparison` 為空，則只呈現 `comparison`。趨勢欄位保留 ⬆ 惡化 / ⬇ 改善 / ─ 持平標記。
+- 若詢問「故障熱點圖/EQ-G」：當工具回傳 chart_config.chart_type='heatmap' 時，前端將自動渲染熱點圖。你只需在文字中說明「X 軸為設備、Y 軸為故障原因，儲格顏色越深代表該設備此故障發生次數越多」，並點出前幾名熱點組合即可。
 - 「資料日期」只需在總結文字中提及一次即可，**絕對禁止**放進表格中成為獨立欄位！
 
 【稼動率計算說明】

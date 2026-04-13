@@ -4,9 +4,10 @@
  * ChartBlock.tsx
  *
  * Renders a chart from a `chart_config` object returned by the backend API.
- * Supports two chart types:
+ * Supports three chart types:
  *   - 'bar_line_combo' : dual-Y-axis (Bar = quantity, Line = defect rate) for Q5
  *   - 'multi_line'    : multiple lines, one per model/line  for Q7
+ *   - 'heatmap'       : fault reason × equipment occurrence matrix  for EQ-G
  *
  * This component is intentionally *backend-agnostic*:
  * it only depends on the ChartConfig interface, not on how the data was fetched.
@@ -77,12 +78,109 @@ function CustomTooltip({ active, payload, label }: any) {
     );
 }
 
+// ── Heat map colour helpers ───────────────────────────────────────────────────
+/** Interpolate white (#f8fafc) → deep-red (#b91c1c) based on normalised t ∈ [0,1] */
+function heatColor(value: number, maxVal: number): string {
+    if (maxVal === 0 || value === 0) return 'rgb(248,250,252)';
+    const t = Math.min(value / maxVal, 1);
+    // 0 → white, 0.5 → orange-ish, 1 → crimson
+    const r = Math.round(248 + t * (185 - 248));  // 248 → 185
+    const g = Math.round(250 + t * (28  - 250));  // 250 → 28
+    const b = Math.round(252 + t * (28  - 252));  // 252 → 28
+    return `rgb(${r},${g},${b})`;
+}
+function textOnHeat(value: number, maxVal: number): string {
+    if (maxVal === 0) return '#94a3b8';
+    return value / maxVal > 0.45 ? '#ffffff' : '#1e293b';
+}
+
+// ── Heat map sub-component ────────────────────────────────────────────────────
+function HeatMapBlock({ config }: { config: ChartConfig }) {
+    const maxVal = config.max_value ?? Math.max(...config.datasets.flatMap(ds => ds.data as number[]), 1);
+    const equipNames = config.labels;          // X-axis = equipment (columns)
+    const notes      = config.datasets;        // Y-axis rows = fault reasons
+
+    return (
+        <div className="mt-4 rounded-2xl border border-slate-100 bg-slate-50/60 p-4 shadow-sm">
+            <p className="text-sm font-semibold text-slate-700 mb-3">{config.title}</p>
+
+            {/* Scrollable wrapper so many columns don't break layout */}
+            <div className="overflow-x-auto">
+                <table className="text-[11px] border-separate border-spacing-[2px] min-w-max">
+                    <thead>
+                        <tr>
+                            {/* Row-label header */}
+                            <th className="sticky left-0 z-10 bg-slate-100 text-slate-500 font-medium px-2 py-1 rounded text-left whitespace-nowrap min-w-[140px]">
+                                故障原因 \ 設備
+                            </th>
+                            {equipNames.map(eq => (
+                                <th
+                                    key={eq}
+                                    className="bg-slate-100 text-slate-500 font-medium px-2 py-1 rounded text-center whitespace-nowrap"
+                                >
+                                    {eq}
+                                </th>
+                            ))}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {notes.map(ds => (
+                            <tr key={ds.label}>
+                                {/* Fault reason label – sticky */}
+                                <td className="sticky left-0 z-10 bg-white border border-slate-100 text-slate-600 font-medium px-2 py-1 rounded whitespace-nowrap">
+                                    <span className="block truncate max-w-[200px]" title={ds.label}>
+                                        {ds.label}
+                                    </span>
+                                    {ds.cate && (
+                                        <span className="text-[9px] text-slate-400 ml-0.5">[{ds.cate}]</span>
+                                    )}
+                                </td>
+                                {(ds.data as number[]).map((val, ci) => (
+                                    <td
+                                        key={ci}
+                                        className="text-center rounded px-1 py-1 font-semibold transition-all"
+                                        style={{
+                                            backgroundColor: heatColor(val, maxVal),
+                                            color: textOnHeat(val, maxVal),
+                                            minWidth: 40,
+                                        }}
+                                        title={`${ds.label} × ${equipNames[ci]}：${val} 次`}
+                                    >
+                                        {val > 0 ? val : ''}
+                                    </td>
+                                ))}
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+
+            {/* Legend */}
+            <div className="flex items-center gap-2 mt-3">
+                <span className="text-[10px] text-slate-400">低頻</span>
+                <div className="flex h-3 w-32 rounded overflow-hidden">
+                    {Array.from({ length: 20 }, (_, i) => (
+                        <div key={i} className="flex-1" style={{ backgroundColor: heatColor(i + 1, 20) }} />
+                    ))}
+                </div>
+                <span className="text-[10px] text-slate-400">高頻</span>
+                <span className="ml-auto text-[10px] text-slate-400">資料由 AI 助手即時查詢，僅供參考</span>
+            </div>
+        </div>
+    );
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 interface ChartBlockProps {
     config: ChartConfig;
 }
 
 export function ChartBlock({ config }: ChartBlockProps) {
+    // ── Heat map: render its own pure-CSS component ───────────────────────────
+    if (config.chart_type === 'heatmap') {
+        return <HeatMapBlock config={config} />;
+    }
+
     const rows = toRows(config.labels, config.datasets);
 
     // Detect which datasets are bars vs lines for ComposedChart

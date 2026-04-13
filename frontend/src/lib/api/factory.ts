@@ -25,8 +25,9 @@ const getBackendUrl = () => {
 // ── Chart config types (Recharts-compatible) ─────────────────────────────────
 
 export interface ChartDataset {
-    type: 'bar' | 'line';
+    type: 'bar' | 'line' | 'heatmap';
     label: string;
+    cate?: string;          // heatmap: fault category
     data: (number | null)[];
     yAxisID?: string;       // 'y_quantity' | 'y_defect_rate'
     backgroundColor?: string;
@@ -42,11 +43,12 @@ export interface YAxisConfig {
 }
 
 export interface ChartConfig {
-    chart_type: 'bar_line_combo' | 'multi_line';
+    chart_type: 'bar_line_combo' | 'multi_line' | 'heatmap';
     title: string;
-    labels: string[];       // X-axis labels (time periods)
+    labels: string[];       // X-axis labels (time periods or equipment names)
     datasets: ChartDataset[];
     yAxes?: Record<string, YAxisConfig>; // only for bar_line_combo
+    max_value?: number;                  // heatmap: normalisation ceiling
 }
 
 export interface FactoryResponse {
