@@ -147,7 +147,15 @@ class FactorySqlTools:
         floor_filter = f"AND e.\"EQUIP_INSTALL_POSITION\" ILIKE '%{safe_floor[0]}%'" if floor and len(safe_floor)>0 else ""
 
         query = f"""
-            WITH daily_qty AS (
+            WITH eq_info AS (
+                -- Deduplicate EQUIPMENT_INFO_DICT: one row per EQUIPMENT_CODE (latest GDHM)
+                SELECT DISTINCT ON ("EQUIPMENT_CODE")
+                    "EQUIPMENT_CODE", "EQUIPMENT_NAME", "TOPIC",
+                    "EQUIP_INSTALL_POSITION", "GDHM"
+                FROM "public"."EQUIPMENT_INFO_DICT"
+                ORDER BY "EQUIPMENT_CODE", "GDHM" DESC NULLS LAST
+            ),
+            daily_qty AS (
                 SELECT "SBMC", SUM("LPSL") AS "LPSL", SUM("BLSL") AS "BLSL"
                 FROM "public"."CIM_MQTT_OK_NG_QTY"
                 WHERE "YMD" = '{target_ymd}'
@@ -186,7 +194,7 @@ class FactorySqlTools:
                 CASE WHEN (COALESCE(q."LPSL", 0) + COALESCE(q."BLSL", 0)) > 0
                      THEN ROUND((COALESCE(q."LPSL", 0)::FLOAT / (COALESCE(q."LPSL", 0) + COALESCE(q."BLSL", 0)) * 100)::NUMERIC, 2)
                      ELSE NULL END                            AS "良率(%)"
-            FROM "public"."EQUIPMENT_INFO_DICT" e
+            FROM eq_info e
             LEFT JOIN daily_qty q ON (q."SBMC" = e."TOPIC" OR q."SBMC" = e."EQUIPMENT_CODE")
             LEFT JOIN times t ON (t."SBMC" = e."TOPIC" OR t."SBMC" = e."EQUIPMENT_CODE")
             WHERE 1=1
@@ -331,7 +339,15 @@ class FactorySqlTools:
         target_ymd  = target_date.replace('-', '')
         safe_floor  = floor.replace("'", "''") if floor else ''
         query_daily = f"""
-            WITH daily_qty AS (
+            WITH eq_info AS (
+                -- Deduplicate EQUIPMENT_INFO_DICT: one row per EQUIPMENT_CODE (latest GDHM)
+                SELECT DISTINCT ON ("EQUIPMENT_CODE")
+                    "EQUIPMENT_CODE", "EQUIPMENT_NAME", "TOPIC",
+                    "EQUIP_INSTALL_POSITION", "GDHM"
+                FROM "public"."EQUIPMENT_INFO_DICT"
+                ORDER BY "EQUIPMENT_CODE", "GDHM" DESC NULLS LAST
+            ),
+            daily_qty AS (
                 SELECT "SBMC", SUM("LPSL") AS "LPSL", SUM("BLSL") AS "BLSL"
                 FROM "public"."CIM_MQTT_OK_NG_QTY"
                 WHERE "YMD" = '{target_ymd}'
@@ -366,7 +382,7 @@ class FactorySqlTools:
                 COALESCE(q."LPSL", 0) AS "良品數量",
                 COALESCE(q."BLSL", 0) AS "不良數量",
                 '{target_date}' AS "資料日期"
-            FROM "public"."EQUIPMENT_INFO_DICT" e
+            FROM eq_info e
             LEFT JOIN daily_qty q ON (q."SBMC" = e."TOPIC" OR q."SBMC" = e."EQUIPMENT_CODE")
             LEFT JOIN times t ON (t."SBMC" = e."TOPIC" OR t."SBMC" = e."EQUIPMENT_CODE")
             WHERE e."EQUIP_INSTALL_POSITION" ILIKE '%{safe_floor[0] if safe_floor else ''}%'
@@ -374,7 +390,7 @@ class FactorySqlTools:
         """
 
         from datetime import datetime as dt, timedelta
-        seven_days_ago = (dt.strptime(target_date, "%Y-%m-%d") - timedelta(days=7)).strftime("%Y%m%d%00")
+        seven_days_ago = (dt.strptime(target_date, "%Y-%m-%d") - timedelta(days=7)).strftime("%Y%m%d") + "00"
 
         # Current state query: latest signal code per device within the last 7 days
         query_state = f"""
