@@ -170,40 +170,72 @@ class FactorySqlTools:
                 FROM deltas GROUP BY "SBMC"
             )
             SELECT
-                COALESCE(e."EQUIP_INSTALL_POSITION", 'N/A') AS "樓層",
-                COALESCE(e."EQUIPMENT_CODE", e."TOPIC") AS "設備代碼",
-                e."EQUIPMENT_NAME" AS "設備名稱",
-                COALESCE(t."RUN", 0) AS "RUN(分)",
-                COALESCE(t."DOWN", 0) AS "DOWN(分)",
-                COALESCE(t."IDEL", 0) AS "IDEL(分)",
-                COALESCE(t."SHUTDOWN", 0) AS "SHUTDOWN(分)",
+                COALESCE(e."EQUIP_INSTALL_POSITION", 'N/A')  AS "樓層",
+                COALESCE(e."EQUIPMENT_CODE", e."TOPIC")       AS "設備代碼",
+                e."EQUIPMENT_NAME"                            AS "設備名稱",
+                COALESCE(t."RUN", 0)                          AS "RUN(分)",
+                COALESCE(t."DOWN", 0)                         AS "DOWN(分)",
                 CASE WHEN (COALESCE(t."RUN", 0) + COALESCE(t."DOWN", 0)) > 0
-                     THEN ROUND((COALESCE(t."RUN", 0)::FLOAT / (COALESCE(t."RUN", 0) + COALESCE(t."DOWN", 0)) * 100)::NUMERIC, 1) ELSE 0 END AS "稼動率(%)",
-                COALESCE(q."LPSL", 0) AS "良品數量",
-                COALESCE(q."BLSL", 0) AS "不良數量",
+                     THEN ROUND((COALESCE(t."RUN", 0)::FLOAT / (COALESCE(t."RUN", 0) + COALESCE(t."DOWN", 0)) * 100)::NUMERIC, 1)
+                     ELSE 0 END                               AS "稼動率(%)",
+                COALESCE(q."LPSL", 0)                         AS "良品數量",
+                COALESCE(q."BLSL", 0)                         AS "不良數量",
                 CASE WHEN (COALESCE(q."LPSL", 0) + COALESCE(q."BLSL", 0)) > 0
-                     THEN ROUND((COALESCE(q."LPSL", 0)::FLOAT / (COALESCE(q."LPSL", 0) + COALESCE(q."BLSL", 0)) * 100)::NUMERIC, 2) ELSE NULL END AS "良率(%)",
-                '{target_date}' AS "資料日期"
+                     THEN ROUND((COALESCE(q."LPSL", 0)::FLOAT / (COALESCE(q."LPSL", 0) + COALESCE(q."BLSL", 0)) * 100)::NUMERIC, 2)
+                     ELSE NULL END                            AS "良率(%)"
             FROM "public"."EQUIPMENT_INFO_DICT" e
             LEFT JOIN daily_qty q ON (q."SBMC" = e."TOPIC" OR q."SBMC" = e."EQUIPMENT_CODE")
             LEFT JOIN times t ON (t."SBMC" = e."TOPIC" OR t."SBMC" = e."EQUIPMENT_CODE")
             WHERE 1=1
             {floor_filter}
-            ORDER BY "樓層", "設備代碼"
+            ORDER BY "樓層", "設備名稱", "設備代碼"
         """
         rows = self._execute_postgres_query(query)
+
+        import re as _re
+        def _derive_type(name: str) -> str:
+            """
+            Derive machine type from equipment name by stripping trailing
+            alphanumeric identifiers (e.g. 'WELD2A' → 'WELD', '成型機-03' → '成型機').
+            Falls back to first 4 chars if pattern can not be extracted.
+            """
+            if not name:
+                return '-'
+            m = _re.match(r'^([^\d\-_A-Z]+)', name, _re.UNICODE)
+            if m and len(m.group(1)) >= 2:
+                return m.group(1).strip()
+            return name[:4].strip() if len(name) >= 4 else name
+
+        # Determine status light from RUN/DOWN minutes
+        # ASCII codes used to avoid LLM garbling; LLM converts to emoji per system prompt
+        def _eq_status(run, down):
+            if run and float(run) > 0:
+                return 'RUN'
+            if down and float(down) > 0:
+                return 'DOWN'
+            return 'STOP'
+
         clean_rows = []
         for r in rows:
-            rate = r.get('稼動率(%)')
-            # 只有當稼動率 > 0 時才顯示數字，否則一律顯示 '-' 以便一眼看出開工機台
-            disp_rate = f"{rate}%" if (rate and float(rate) > 0) else "-"
-            
+            run  = r.get('RUN(分)') or 0
+            down = r.get('DOWN(分)') or 0
+            util = r.get('稼動率(%)')
+            yld  = r.get('良率(%)')
+            good = r.get('良品數量', 0) or 0
+            bad  = r.get('不良數量', 0) or 0
+            eq_name = r.get('設備名稱') or ''
+
             clean_rows.append({
-                '樓層': r.get('樓層', '未知'),
-                '設備 (代碼)': f"{r.get('設備名稱')} ({r.get('設備代碼')})",
-                '稼動率': disp_rate
+                '樓層':        r.get('樓層', 'N/A'),
+                '機型':        _derive_type(eq_name),
+                '設備(代碼)':  f"{eq_name} ({r.get('設備代碼', '')})",
+                '稼動狀態':    _eq_status(run, down),
+                '稼動率(%)':  f"{util}%" if (util and float(util) > 0) else '-',
+                '生產數':      int(good),
+                '不良數':      int(bad),
+                '良率(%)':    round(float(yld), 2) if yld is not None else '-',
             })
-            
+
         return {
             "status":     "success",
             "query_date": target_date,
@@ -409,8 +441,11 @@ class FactorySqlTools:
         }
 
     # ══════════════════════════════════════════════════════════════════════════════
-    # EQ-D: Equipment model production trend (cross-DB PG→MSSQL)
-    # Req 4: bar(qty) + line(defect rate) chart per machine type for one equipment
+    # EQ-D: Equipment model production trend (cross-DB PG → MSSQL)
+    # Data flow:
+    #   EQUIPMENT_INFO_DICT (PG)
+    #     ├─ TOPIC / EQUIPMENT_CODE → CIM_MQTT_OK_NG_QTY.SBMC  (daily LPSL/BLSL)
+    #     └─ GDHM (work order)      → MSSQL Daily_Status_Report.WORK_ORDER_NO → jz (model name)
     # ══════════════════════════════════════════════════════════════════════════════
     def get_equipment_model_production_trend(
         self,
@@ -422,84 +457,177 @@ class FactorySqlTools:
         include_chart: bool = False
     ) -> Dict[str, Any]:
         """
-        EQ-D: Retrieve production output and unique model names for a specific equipment.
-        Mapping Logic: Bridge PG GDHM (Work Order) to MSSQL Daily_Status_Report WORK_ORDER_NO.
+        EQ-D: Per-equipment production trend with model name resolution.
+        - Q4 (include_chart=False): table of models produced + summary qty/yield
+        - Q5 (include_chart=True):  time-series bar(qty)+line(defect rate) chart_config
+        granularity: daily | weekly | monthly | quarterly | half_yearly | yearly
         """
-        # Step 1: Resolve equipment metadata (GDHM, TOPIC, EQ_CODE) from PostgreSQL INFO_DICT
+        import re as _re
+
+        # ── Step 1: Resolve TOPIC and GDHM from EQUIPMENT_INFO_DICT ─────────────
         safe_kw = (equipment_name or equipment_code or "").replace("'", "''")
-        match_q = f"""
-            SELECT DISTINCT "EQUIPMENT_CODE", "EQUIPMENT_NAME", "GDHM", "TOPIC"
+        info_q = f"""
+            SELECT "EQUIPMENT_CODE", "EQUIPMENT_NAME", "TOPIC", "GDHM"
             FROM "public"."EQUIPMENT_INFO_DICT"
-            WHERE "EQUIPMENT_NAME" ILIKE '%{safe_kw}%' OR "EQUIPMENT_CODE" ILIKE '%{safe_kw}%'
+            WHERE "EQUIPMENT_NAME" ILIKE '%{safe_kw}%'
+               OR "EQUIPMENT_CODE" ILIKE '%{safe_kw}%'
+            LIMIT 20
         """
-        matches = self._execute_postgres_query(match_q)
-        if not matches:
-            return {"status": "error", "message": f"Equipment not found: {safe_kw}"}
-            
-        eq_code = matches[0].get("EQUIPMENT_CODE")
-        topic = matches[0].get("TOPIC")
-        eq_name = matches[0].get("EQUIPMENT_NAME", eq_code)
-        
-        # Collect unique GDHMs (Work Orders) assigned to this equipment
-        unique_gdhms = list(set([m.get("GDHM") for m in matches if m.get("GDHM")]))
-        
-        # Step 2: Bridge to MSSQL Daily_Status_Report to retrieve actual Model Names
-        model_mapping = {}
-        target_model = "Unknown Model"
+        info_rows = self._execute_postgres_query(info_q)
+        if not info_rows:
+            return {"status": "error", "message": f"找不到設備：{safe_kw}"}
+
+        eq_name  = info_rows[0].get("EQUIPMENT_NAME") or safe_kw
+        eq_code  = info_rows[0].get("EQUIPMENT_CODE") or safe_kw
+        topic    = info_rows[0].get("TOPIC") or eq_code
+
+        # Collect all unique work order numbers (GDHM) tied to this equipment
+        unique_gdhms = list({r.get("GDHM") for r in info_rows if r.get("GDHM")})
+
+        # ── Step 2: Resolve model names via MSSQL Daily_Status_Report ────────────
+        # GDHM in EQUIPMENT_INFO_DICT == WORK_ORDER_NO in Daily_Status_Report
+        # Model name is stored in jz column
+        model_names: List[str] = []
         if unique_gdhms:
-            gdhm_in_clause = ",".join([f"'{g}'" for g in unique_gdhms])
-            ms_query = f"""
-                SELECT [WORK_ORDER_NO], MAX(COALESCE([PART_NO], [ITEM_NO], [MODEL_NAME], [PRODUCT_NAME], [WORK_ORDER_NO])) as MODEL_NAME
+            gdhm_in = ",".join(f"'{g}'" for g in unique_gdhms)
+            ms_q = f"""
+                SELECT DISTINCT jz AS [機種名稱]
                 FROM [dbo].[Daily_Status_Report]
-                WHERE [WORK_ORDER_NO] IN ({gdhm_in_clause})
-                GROUP BY [WORK_ORDER_NO]
+                WHERE [WORK_ORDER_NO] IN ({gdhm_in})
+                  AND jz IS NOT NULL AND jz <> ''
             """
-            ms_res = self._execute_mssql_query(ms_query)
-            for row in ms_res:
-                wo = row.get("WORK_ORDER_NO")
-                if wo:
-                    model_mapping[wo] = row.get("MODEL_NAME", wo)
-                    target_model = model_mapping[wo]  # Keep one as a representative if needed
-                    
-        # Step 3: Fetch total production metrics from PostgreSQL QTY table
+            ms_rows = self._execute_mssql_query(ms_q)
+            model_names = [r.get("機種名稱") for r in ms_rows if r.get("機種名稱")]
+
+        # ── Step 3: Fetch daily LPSL / BLSL from CIM_MQTT_OK_NG_QTY ─────────────
         start_ymd = start_date.replace('-', '')
         end_ymd   = end_date.replace('-', '')
-        
-        # Mapping Note: SBMC in QTY table corresponds directly to TOPIC in Info Dict.
-        pg_qty_query = f"""
+
+        qty_q = f"""
             SELECT
-                SUM(COALESCE("LPSL", 0)) AS "total_ok",
-                SUM(COALESCE("BLSL", 0)) AS "total_ng"
+                "YMD"                        AS "日期碼",
+                SUM(COALESCE("LPSL", 0))     AS "良品數量",
+                SUM(COALESCE("BLSL", 0))     AS "不良數量"
             FROM "public"."CIM_MQTT_OK_NG_QTY"
             WHERE "YMD" BETWEEN '{start_ymd}' AND '{end_ymd}'
               AND "SBMC" = '{topic}'
+            GROUP BY "YMD"
+            ORDER BY "YMD"
         """
-        qty_res = self._execute_postgres_query(pg_qty_query)
-        total_good = 0
-        total_bad = 0
-        if qty_res:
-            total_good = qty_res[0].get("total_ok") or 0
-            total_bad = qty_res[0].get("total_ng") or 0
-            
-        # Calculation: Final yield and accumulation
-        total_qty = total_good + total_bad
-        yield_rate = round((total_good / total_qty * 100), 2) if total_qty > 0 else 0
-        
-        # Prepare final clean results (ensure unique model names)
-        unique_models = list(set(model_mapping.values())) if model_mapping else [target_model]
-            
-        return {
-            "status": "success",
-            "equipment_name": eq_name,
-            "period": f"{start_date} ~ {end_date}",
-            "data": [
-                {
-                    "Model List": ", ".join(unique_models),
-                    "Total Qty": total_qty,
-                    "NG Qty": total_bad,
-                    "Yield Rate": f"{yield_rate}%"
-                }
+        qty_rows = self._execute_postgres_query(qty_q)
+
+        # ── Step 4: Convert YMD (YYYYMMDD) to period label by granularity ────────
+        def ymd_to_period(ymd: str, gran: str) -> str:
+            """Convert YYYYMMDD string to a period label for the given granularity."""
+            try:
+                y, m, d = int(ymd[:4]), int(ymd[4:6]), int(ymd[6:8])
+                dt = datetime.date(y, m, d)
+                if gran == 'daily':
+                    return dt.isoformat()
+                elif gran == 'weekly':
+                    return f"{y}-W{dt.isocalendar()[1]:02d}"
+                elif gran == 'monthly':
+                    return f"{y}-{m:02d}"
+                elif gran == 'quarterly':
+                    return f"{y}-Q{(m - 1) // 3 + 1}"
+                elif gran == 'half_yearly':
+                    return f"{y}-{'1H' if m <= 6 else '2H'}"
+                elif gran == 'yearly':
+                    return str(y)
+            except Exception:
+                pass
+            return ymd  # fallback
+
+        # Aggregate by period
+        period_good: Dict[str, float] = {}
+        period_bad:  Dict[str, float] = {}
+        for row in qty_rows:
+            ymd  = str(row.get("日期碼") or "")
+            good = float(row.get("良品數量") or 0)
+            bad  = float(row.get("不良數量") or 0)
+            p    = ymd_to_period(ymd, granularity)
+            period_good[p] = period_good.get(p, 0) + good
+            period_bad[p]  = period_bad.get(p,  0) + bad
+
+        periods = sorted(period_good.keys())
+
+        # Build trend table
+        trend_data = []
+        for p in periods:
+            good = period_good[p]
+            bad  = period_bad[p]
+            total = good + bad
+            defect_rate = round(bad / total * 100, 4) if total > 0 else 0
+            yield_rate  = round(good / total * 100, 2) if total > 0 else 0
+            trend_data.append({
+                "時間標籤":    p,
+                "良品數量":    int(good),
+                "不良數量":    int(bad),
+                "總產量":      int(total),
+                "不良率(%)":  defect_rate,
+                "良率(%)":    yield_rate,
+            })
+
+        # ── Step 5: Build chart_config (bar_line_combo) if requested ─────────────
+        chart_config = None
+        if include_chart and periods:
+            qty_data  = [int(period_good[p] + period_bad[p]) for p in periods]
+            rate_data = [
+                round(period_bad[p] / (period_good[p] + period_bad[p]) * 100, 4)
+                if (period_good[p] + period_bad[p]) > 0 else 0
+                for p in periods
             ]
+            chart_config = {
+                "chart_type": "bar_line_combo",
+                "title":      f"{eq_name} 產量與不良率趨勢（{granularity}）",
+                "labels":     periods,
+                "datasets": [
+                    {
+                        "type":            "bar",
+                        "label":           "總產量",
+                        "data":            qty_data,
+                        "yAxisID":         "y_quantity",
+                        "backgroundColor": "rgba(99, 102, 241, 0.55)",
+                        "borderColor":     "rgba(99, 102, 241, 1)",
+                    },
+                    {
+                        "type":        "line",
+                        "label":       "不良率 (%)",
+                        "data":        rate_data,
+                        "yAxisID":     "y_defect_rate",
+                        "borderColor": "rgba(239, 68, 68, 1)",
+                        "fill":        False,
+                        "tension":     0.3,
+                    },
+                ],
+                "yAxes": {
+                    "y_quantity":    {"label": "總產量 (件)", "position": "left"},
+                    "y_defect_rate": {"label": "不良率 (%)", "position": "right"},
+                },
+            }
+
+        # Total summary
+        total_good_all = sum(period_good.values())
+        total_bad_all  = sum(period_bad.values())
+        total_all      = total_good_all + total_bad_all
+
+        return {
+            "status":         "success",
+            "equipment_name": eq_name,
+            "equipment_code": eq_code,
+            "topic":          topic,
+            "period":         f"{start_date} ~ {end_date}",
+            "granularity":    granularity,
+            "model_names":    model_names,  # list of jz values from Daily_Status_Report
+            "summary": {
+                "總產量":    int(total_all),
+                "良品數量":  int(total_good_all),
+                "不良數量":  int(total_bad_all),
+                "良率(%)":  round(total_good_all / total_all * 100, 2) if total_all > 0 else 0,
+                "不良率(%)": round(total_bad_all  / total_all * 100, 4) if total_all > 0 else 0,
+            },
+            "trend_data":     trend_data,    # time-series rows for table display
+            "chart_config":   chart_config,  # None when include_chart=False
         }
 
 
