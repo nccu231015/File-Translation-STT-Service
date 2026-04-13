@@ -815,19 +815,6 @@ async def equipment_chat(request: FactoryChatRequest):
         print(f"[Equipment Chat Error] {e}", flush=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/v1/factory/rag/query")
-async def rag_query(request: FactoryChatRequest):
-    """RAG branch stub - n8n still routes here; delegate to production SQL agent."""
-    try:
-        print(f"[RAG→SQL] question='{request.question}'", flush=True)
-        result = await factory_agent.sql_agent.chat(request.question, history=request.history)
-        if isinstance(result, dict):
-            return result
-        return {"response": str(result), "chart_config": None}
-    except Exception as e:
-        print(f"[RAG→SQL Error] {e}", flush=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
 # ──────────────────────────────────────────────────────────────────────────────
 
 @app.post("/factory-chat")
