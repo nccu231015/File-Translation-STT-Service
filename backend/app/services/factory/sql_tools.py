@@ -513,9 +513,10 @@ class FactorySqlTools:
         unique_gdhms = list({r.get("GDHM") for r in same_device_rows if r.get("GDHM")})
 
         # ── Step 2: Resolve model names via MSSQL Daily_Status_Report ────────────
-        # GDHM in EQUIPMENT_INFO_DICT == WORK_ORDER_NO in Daily_Status_Report
-        # Model name is stored in jz column
+        # GDHM (EQUIPMENT_INFO_DICT) → WORK_ORDER_NO → jz (machine model name)
+        # If GDHM is NULL in EQUIPMENT_INFO_DICT, model lookup cannot proceed.
         model_names: List[str] = []
+        gdhm_available = bool(unique_gdhms)
         if unique_gdhms:
             gdhm_in = ",".join(f"'{g}'" for g in unique_gdhms)
             ms_q = f"""
@@ -646,7 +647,9 @@ class FactorySqlTools:
             "topic":          topic,
             "period":         f"{start_date} ~ {end_date}",
             "granularity":    granularity,
-            "model_names":    model_names,  # list of jz values from Daily_Status_Report
+            "model_names":    model_names,   # jz from Daily_Status_Report via GDHM
+            "gdhm_available": gdhm_available, # False = GDHM is NULL in EQUIPMENT_INFO_DICT, model lookup skipped
+            "debug_gdhms":    unique_gdhms,   # work order numbers found (empty = GDHM not set)
             "summary": {
                 "總產量":    int(total_all),
                 "良品數量":  int(total_good_all),
