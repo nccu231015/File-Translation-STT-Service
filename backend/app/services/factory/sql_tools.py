@@ -498,12 +498,19 @@ class FactorySqlTools:
         if not info_rows:
             return {"status": "error", "message": f"找不到設備：{safe_kw}"}
 
-        eq_name  = info_rows[0].get("EQUIPMENT_NAME") or safe_kw
-        eq_code  = info_rows[0].get("EQUIPMENT_CODE") or safe_kw
-        topic    = info_rows[0].get("TOPIC") or eq_code
+        # Prefer exact match (EQUIPMENT_CODE == kw or EQUIPMENT_NAME == kw) over partial ILIKE hits
+        exact = [r for r in info_rows
+                 if (r.get("EQUIPMENT_CODE") or "").upper() == safe_kw.upper()
+                 or (r.get("EQUIPMENT_NAME") or "").upper() == safe_kw.upper()]
+        primary_row = exact[0] if exact else info_rows[0]
 
-        # Collect ALL unique GDHMs (work orders) across every row for this equipment
-        unique_gdhms = list({r.get("GDHM") for r in info_rows if r.get("GDHM")})
+        eq_name  = primary_row.get("EQUIPMENT_NAME") or safe_kw
+        eq_code  = primary_row.get("EQUIPMENT_CODE") or safe_kw
+        topic    = primary_row.get("TOPIC") or eq_code
+
+        # Collect ALL unique GDHMs only from rows that share the same EQUIPMENT_CODE
+        same_device_rows = [r for r in info_rows if r.get("EQUIPMENT_CODE") == eq_code]
+        unique_gdhms = list({r.get("GDHM") for r in same_device_rows if r.get("GDHM")})
 
         # ── Step 2: Resolve model names via MSSQL Daily_Status_Report ────────────
         # GDHM in EQUIPMENT_INFO_DICT == WORK_ORDER_NO in Daily_Status_Report
