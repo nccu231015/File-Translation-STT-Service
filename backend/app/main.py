@@ -780,7 +780,7 @@ async def chat_text(payload: dict):
     return {"response": response}
 
 # ── n8n Sub-Agent Endpoints ────────────────────────────────────────────────────
-# These endpoints are called by the three n8n branches (SQL_PROD / SQL_EQ / RAG).
+# These endpoints are called by the two n8n branches (SQL_PROD / SQL_EQ).
 # The Router decision is made in n8n; actual AI processing stays in the backend.
 
 N8N_FACTORY_WEBHOOK = "http://172.16.2.68:5678/webhook/factory-chat"
@@ -815,23 +815,12 @@ async def equipment_chat(request: FactoryChatRequest):
         print(f"[Equipment Chat Error] {e}", flush=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/v1/factory/rag/query")
-async def rag_query(request: FactoryChatRequest):
-    """RAG Agent endpoint - called by n8n RAG branch"""
-    try:
-        print(f"[RAG Query] question='{request.question}'", flush=True)
-        response = await factory_agent.rag_agent.execute_task(request.question)
-        return {"response": str(response), "chart_config": None}
-    except Exception as e:
-        print(f"[RAG Query Error] {e}", flush=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
 # ──────────────────────────────────────────────────────────────────────────────
 
 @app.post("/factory-chat")
 async def factory_chat(payload: dict, background_tasks: BackgroundTasks):
     """Factory data chat interface: proxies to n8n Router webhook.
-    n8n decides the route (SQL_PROD / SQL_EQ / RAG) and calls the
+    n8n decides the route (SQL_PROD / SQL_EQ) and calls the
     corresponding sub-agent endpoint on this server.
     """
     try:

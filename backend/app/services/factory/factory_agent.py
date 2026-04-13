@@ -2,7 +2,6 @@ from typing import List, Dict
 from .router_agent import FactoryRouterAgent
 from .sql_agent import SqlAgent
 from .equipment_sql_agent import EquipmentSqlAgent
-from .rag_agent import RagAgent
 
 class FactoryAgentService:
     """
@@ -19,7 +18,6 @@ class FactoryAgentService:
         self.router = FactoryRouterAgent(llm_service)
         self.sql_agent = SqlAgent(llm_service)
         self.equipment_sql_agent = EquipmentSqlAgent(llm_service)
-        self.rag_agent = RagAgent(llm_service)
         
     async def chat(self, user_question: str, history: List[Dict] = None) -> dict:
         """
@@ -54,9 +52,11 @@ class FactoryAgentService:
             return {"response": str(result), "chart_config": None}
             
         elif route_type == "RAG":
-            # 委託給 RAG Agent 檢索 C 類說明手冊
-            response = await self.rag_agent.execute_task(clean_question)
-            return {"response": str(response), "chart_config": None}
+            # RAG route removed; fall back to production SQL agent
+            result = await self.sql_agent.chat(clean_question, history=history)
+            if isinstance(result, dict):
+                return result
+            return {"response": str(result), "chart_config": None}
             
         else:
             return {
