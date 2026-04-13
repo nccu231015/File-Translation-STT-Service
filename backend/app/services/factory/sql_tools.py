@@ -1331,19 +1331,17 @@ class FactorySqlTools:
             scope_label = f"機種 {model}"
 
         chart_config = {
-            "chart_type": "dual_line",
+            "chart_type": "bar_line_combo",
             "title":      f"不良數量與不良率趨勢 ({granularity}) | {scope_label}",
             "labels":     labels,
             "datasets": [
                 {
-                    "type":        "line",
-                    "label":       "不良數量",
-                    "data":        ng_data,
-                    "yAxisID":     "y_ng_count",
-                    "borderColor": "rgba(255, 99, 132, 1)",
-                    "backgroundColor": "rgba(255, 99, 132, 0.1)",
-                    "fill":        True,
-                    "tension":     0.3,
+                    "type":            "bar",
+                    "label":           "不良數量",
+                    "data":            ng_data,
+                    "yAxisID":         "y_ng_count",
+                    "backgroundColor": "rgba(255, 99, 132, 0.65)",
+                    "borderColor":     "rgba(255, 99, 132, 1)",
                 },
                 {
                     "type":        "line",
