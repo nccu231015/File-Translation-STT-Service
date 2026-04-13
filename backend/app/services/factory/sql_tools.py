@@ -680,14 +680,8 @@ class FactorySqlTools:
         Returns Top-N list with per-code breakdown and optional Pareto chart_config.
         """
         # DOWN code → human-readable reason (update mapping to match factory definitions)
-        DOWN_CODE_DESC = {
-            'A001': '計畫停機',
-            'A006': '設備故障',
-            'A007': '換模/換料',
-            'A008': '品質異常停線',
-            'A009': '待料停工',
-        }
-        DOWN_CODES = list(DOWN_CODE_DESC.keys())
+        # Downtime codes to track - actual meaning should come from DB, not hardcoded
+        DOWN_CODES = ['A001', 'A006', 'A007', 'A008', 'A009']
         codes_sql = "','".join(DOWN_CODES)
 
         start_ymd = start_date.replace('-', '')
@@ -748,11 +742,11 @@ class FactorySqlTools:
                 COALESCE(e."EQUIPMENT_NAME", d."SBMC")       AS "設備名稱",
                 d."SBMC"                                      AS "設備代碼",
                 d.total_down_hours                            AS "停機時數",
-                d."A001"                                      AS "計畫停機(h)",
-                d."A006"                                      AS "設備故障(h)",
-                d."A007"                                      AS "換模換料(h)",
-                d."A008"                                      AS "品質異常(h)",
-                d."A009"                                      AS "待料停工(h)"
+                d."A001"                                      AS "A001(h)",
+                d."A006"                                      AS "A006(h)",
+                d."A007"                                      AS "A007(h)",
+                d."A008"                                      AS "A008(h)",
+                d."A009"                                      AS "A009(h)"
             FROM down_totals d
             LEFT JOIN eq_info e ON (e."TOPIC" = d."SBMC" OR e."EQUIPMENT_CODE" = d."SBMC")
             WHERE d.total_down_hours > 0
@@ -775,25 +769,15 @@ class FactorySqlTools:
         for r in rows:
             hrs = float(r.get("停機時數") or 0)
             # Top reason = code with highest hours
-            code_hours = {
-                k: float(r.get(f"{v}(h)") or 0)
-                for k, v in {
-                    'A001': '計畫停機', 'A006': '設備故障',
-                    'A007': '換模換料', 'A008': '品質異常', 'A009': '待料停工'
-                }.items()
-            }
-            top_code = max(code_hours, key=code_hours.get) if code_hours else '-'
+            code_hours = {code: float(r.get(f"{code}(h)") or 0) for code in DOWN_CODES}
+            top_code = max(code_hours, key=code_hours.get) if any(code_hours.values()) else '-'
             clean_rows.append({
                 "排名":       len(clean_rows) + 1,
                 "樓層":       r.get("樓層", "N/A"),
                 "設備(代碼)": f"{r.get('設備名稱')} ({r.get('設備代碼')})",
                 "停機時數(h)": hrs,
-                "主要停機原因": DOWN_CODE_DESC.get(top_code, top_code),
-                "計畫停機(h)": float(r.get("計畫停機(h)") or 0),
-                "設備故障(h)": float(r.get("設備故障(h)") or 0),
-                "換模換料(h)": float(r.get("換模換料(h)") or 0),
-                "品質異常(h)": float(r.get("品質異常(h)") or 0),
-                "待料停工(h)": float(r.get("待料停工(h)") or 0),
+                "主要停機原因": top_code,
+                **{f"{code}(h)": float(r.get(f"{code}(h)") or 0) for code in DOWN_CODES},
             })
 
         # Pareto chart: bars = downtime desc, line = cumulative %
@@ -836,11 +820,12 @@ class FactorySqlTools:
                 },
             }
 
-        # Summary: total downtime per cause across all returned devices
+        # Summary: total downtime per code across all returned devices
         cause_summary = {}
         for r in clean_rows:
-            for col in ["計畫停機(h)", "設備故障(h)", "換模換料(h)", "品質異常(h)", "待料停工(h)"]:
-                cause_summary[col] = round(cause_summary.get(col, 0) + r[col], 2)
+            for code in DOWN_CODES:
+                col = f"{code}(h)"
+                cause_summary[col] = round(cause_summary.get(col, 0) + r.get(col, 0), 2)
 
         return {
             "status":        "success",
@@ -875,14 +860,8 @@ class FactorySqlTools:
         Can scope to a specific device, floor, or the entire factory.
         Returns per-code hours for both periods + delta, optional multi_line chart.
         """
-        DOWN_CODE_DESC = {
-            'A001': '計畫停機',
-            'A006': '設備故障',
-            'A007': '換模/換料',
-            'A008': '品質異常停線',
-            'A009': '待料停工',
-        }
-        DOWN_CODES = list(DOWN_CODE_DESC.keys())
+        # Downtime codes to track - actual meaning should come from DB, not hardcoded
+        DOWN_CODES = ['A001', 'A006', 'A007', 'A008', 'A009']
         codes_sql  = "','".join(DOWN_CODES)
 
         # Optional equipment filter
@@ -952,17 +931,16 @@ class FactorySqlTools:
         hours_a = _query_period(a_ymd_s, a_ymd_e, topic_filter_a)
         hours_b = _query_period(b_ymd_s, b_ymd_e, topic_filter_b)
 
-        # Build comparison table (all codes present in either period)
+        # Build comparison table (all codes seen in either period)
         all_codes = sorted(set(list(hours_a.keys()) + list(hours_b.keys()) + DOWN_CODES))
         comparison = []
         for code in all_codes:
-            if code not in DOWN_CODE_DESC:
+            if code not in DOWN_CODES:
                 continue
             ha = hours_a.get(code, 0)
             hb = hours_b.get(code, 0)
             delta = round(ha - hb, 2)
             comparison.append({
-                "停機原因":                       DOWN_CODE_DESC[code],
                 "代碼":                           code,
                 f"{period_a_label} 停機(h)":     ha,
                 f"{period_b_label} 停機(h)":     hb,
