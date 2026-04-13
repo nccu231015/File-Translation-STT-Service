@@ -842,6 +842,50 @@ class FactorySqlTools:
             for col in ["計畫停機(h)", "設備故障(h)", "換模換料(h)", "品質異常(h)", "待料停工(h)"]:
                 cause_summary[col] = round(cause_summary.get(col, 0) + r[col], 2)
 
+        # ── Fault note enrichment: join CIM_MQTTCOLLECT → EQUIPMENT_INFO_DICT → CIM_MQTTCODEERR ──
+        # Get specific fault reasons (NOTE) and categories (CATE) per device for the period
+        # CIM_MQTTCODEERR has no timestamp; join on PLCCODE=CODE and MACHINE=EQUIPMENT_NAME
+        ranked_sbmc = [r['設備(代碼)'].split('(')[-1].rstrip(')') for r in clean_rows]
+        sbmc_in = ",".join(f"'{s}'" for s in ranked_sbmc) if ranked_sbmc else "''"
+
+        note_query = f"""
+            SELECT
+                COALESCE(ei."EQUIPMENT_CODE", c."TOPIC") AS "設備代碼",
+                COALESCE(err."NOTE", c."CODE")            AS "故障原因",
+                COALESCE(err."CATE", '未分類')            AS "異常類別",
+                COUNT(*)                                   AS "發生次數"
+            FROM "public"."CIM_MQTTCOLLECT" c
+            LEFT JOIN "public"."EQUIPMENT_INFO_DICT" ei
+                ON ei."TOPIC" = c."TOPIC"
+            LEFT JOIN "public"."CIM_MQTTCODEERR" err
+                ON err."PLCCODE" = c."CODE"
+                AND err."MACHINE" = ei."EQUIPMENT_NAME"
+            WHERE c."YMD" BETWEEN '{start_ymd}' AND '{end_ymd}'
+              AND c."TOPIC" IN ({sbmc_in})
+              AND err."NOTE" IS NOT NULL
+            GROUP BY COALESCE(ei."EQUIPMENT_CODE", c."TOPIC"), err."NOTE", err."CATE"
+            ORDER BY "設備代碼", "發生次數" DESC
+        """
+        note_rows = self._execute_postgres_query(note_query)
+
+        # Group notes by device code → top 5 per device
+        notes_by_device: Dict[str, list] = {}
+        for nr in note_rows:
+            dev = nr.get("設備代碼", "")
+            if dev not in notes_by_device:
+                notes_by_device[dev] = []
+            if len(notes_by_device[dev]) < 5:
+                notes_by_device[dev].append({
+                    "故障原因":  nr.get("故障原因", "-"),
+                    "異常類別":  nr.get("異常類別", "-"),
+                    "發生次數": int(nr.get("發生次數") or 0),
+                })
+
+        # Attach fault notes to each device row
+        for row in clean_rows:
+            dev_code = row["設備(代碼)"].split('(')[-1].rstrip(')')
+            row["具體故障原因"] = notes_by_device.get(dev_code, [])
+
         return {
             "status":        "success",
             "period":        f"{start_date} ~ {end_date}",
@@ -917,7 +961,7 @@ class FactorySqlTools:
             topic_filter_b = topic_filter_a
 
         def _query_period(ymd_start: str, ymd_end: str, topic_filter: str) -> Dict[str, float]:
-            """Return {code: total_hours} for a date range."""
+            """Return {state_code: total_hours} for a date range (coarse-grained by A001-A009)."""
             q = f"""
                 WITH deltas AS (
                     SELECT
@@ -945,6 +989,33 @@ class FactorySqlTools:
             rows = self._execute_postgres_query(q)
             return {r.get("CODE"): float(r.get("down_hours") or 0) for r in rows if r.get("CODE")}
 
+        def _query_period_notes(ymd_start: str, ymd_end: str, topic_filter: str) -> Dict[str, int]:
+            """Return {NOTE: occurrence_count} by joining CIM_MQTTCOLLECT → CIM_MQTTCODEERR."""
+            q = f"""
+                SELECT
+                    COALESCE(err."NOTE", c."CODE") AS "故障原因",
+                    COALESCE(err."CATE", '未分類')    AS "異常類別",
+                    COUNT(*)                        AS "發生次數"
+                FROM "public"."CIM_MQTTCOLLECT" c
+                LEFT JOIN "public"."EQUIPMENT_INFO_DICT" ei ON ei."TOPIC" = c."TOPIC"
+                LEFT JOIN "public"."CIM_MQTTCODEERR" err
+                    ON err."PLCCODE" = c."CODE"
+                    AND err."MACHINE" = ei."EQUIPMENT_NAME"
+                WHERE c."YMD" BETWEEN '{ymd_start}' AND '{ymd_end}'
+                  AND err."NOTE" IS NOT NULL
+                {topic_filter}
+                GROUP BY err."NOTE", err."CATE"
+                ORDER BY "發生次數" DESC
+            """
+            rows = self._execute_postgres_query(q)
+            return {
+                r.get("故障原因", ""): {
+                    "異常類別": r.get("異常類別", "-"),
+                    "發生次數": int(r.get("發生次數") or 0)
+                }
+                for r in rows if r.get("故障原因")
+            }
+
         a_ymd_s = period_a_start.replace('-', '')
         a_ymd_e = period_a_end.replace('-', '')
         b_ymd_s = period_b_start.replace('-', '')
@@ -952,6 +1023,28 @@ class FactorySqlTools:
 
         hours_a = _query_period(a_ymd_s, a_ymd_e, topic_filter_a)
         hours_b = _query_period(b_ymd_s, b_ymd_e, topic_filter_b)
+        notes_a = _query_period_notes(a_ymd_s, a_ymd_e, topic_filter_a)
+        notes_b = _query_period_notes(b_ymd_s, b_ymd_e, topic_filter_b)
+
+        def _build_note_comparison(na: dict, nb: dict, la: str, lb: str) -> list:
+            """Build per-NOTE comparison rows sorted by period_a occurrences desc."""
+            all_notes = sorted(set(list(na.keys()) + list(nb.keys())))
+            result = []
+            for note in all_notes:
+                ca = na.get(note, {}).get("發生次數", 0)
+                cb = nb.get(note, {}).get("發生次數", 0)
+                cate = na.get(note, nb.get(note, {})).get("異常類別", "-")
+                delta = ca - cb
+                result.append({
+                    "故障原因":              note,
+                    "異常類別":              cate,
+                    f"{la} 次數":            ca,
+                    f"{lb} 次數":            cb,
+                    "變化(次)":              delta,
+                    "趨勢":  "⬆ 惡化" if delta > 0 else ("⬇ 改善" if delta < 0 else "─ 持平"),
+                })
+            result.sort(key=lambda x: x.get(f"{la} 次數", 0), reverse=True)
+            return result
 
         # Build comparison table (all codes present in either period)
         all_codes = sorted(set(list(hours_a.keys()) + list(hours_b.keys()) + DOWN_CODES))
@@ -1007,14 +1100,17 @@ class FactorySqlTools:
             }
 
         return {
-            "status":         "success",
-            "scope":          eq_label,
-            "period_a":       f"{period_a_start} ~ {period_a_end}",
-            "period_b":       f"{period_b_start} ~ {period_b_end}",
-            "period_a_label": period_a_label,
-            "period_b_label": period_b_label,
-            "comparison":     comparison,
-            "chart_config":   chart_config,
+            "status":          "success",
+            "scope":           eq_label,
+            "period_a":        f"{period_a_start} ~ {period_a_end}",
+            "period_b":        f"{period_b_start} ~ {period_b_end}",
+            "period_a_label":  period_a_label,
+            "period_b_label":  period_b_label,
+            # Coarse comparison by state code (A001/A006-A009)
+            "comparison":      comparison,
+            # Fine-grained comparison by specific fault NOTE from CIM_MQTTCODEERR
+            "note_comparison": _build_note_comparison(notes_a, notes_b, period_a_label, period_b_label),
+            "chart_config":    chart_config,
         }
 
     # ──────────────────────────────────────────────────────────────────────────────
