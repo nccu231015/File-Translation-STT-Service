@@ -863,6 +863,9 @@ async def factory_chat(payload: dict, background_tasks: BackgroundTasks):
                 json={"question": user_text, "history": history}
             )
             n8n_resp.raise_for_status()
+            raw = n8n_resp.text.strip()
+            if not raw:
+                raise ValueError("n8n webhook returned an empty response body. Check n8n workflow logs.")
             result = n8n_resp.json()
 
         response_text = result.get("response", "")
