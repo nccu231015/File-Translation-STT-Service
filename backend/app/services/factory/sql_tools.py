@@ -842,49 +842,37 @@ class FactorySqlTools:
             for col in ["計畫停機(h)", "設備故障(h)", "換模換料(h)", "品質異常(h)", "待料停工(h)"]:
                 cause_summary[col] = round(cause_summary.get(col, 0) + r[col], 2)
 
-        # ── Fault note enrichment: join CIM_MQTTCOLLECT → EQUIPMENT_INFO_DICT → CIM_MQTTCODEERR ──
-        # Get specific fault reasons (NOTE) and categories (CATE) per device for the period
-        # CIM_MQTTCODEERR has no timestamp; join on PLCCODE=CODE and MACHINE=EQUIPMENT_NAME
+        # ── Fault note enrichment: CIM_MQTTCODEERR is a static reference table ──
+        # MACHINE column stores TOPIC value; query directly without joining event stream
         ranked_sbmc = [r['設備(代碼)'].split('(')[-1].rstrip(')') for r in clean_rows]
         sbmc_in = ",".join(f"'{s}'" for s in ranked_sbmc) if ranked_sbmc else "''"
 
         note_query = f"""
             SELECT
-                c."TOPIC"  AS "設備代碼",
-                err."NOTE" AS "故障原因",
-                err."CATE" AS "異常類別",
-                COUNT(*)   AS "發生次數"
-            FROM "public"."CIM_MQTTCOLLECT" c
-            LEFT JOIN "public"."CIM_MQTTCODEERR" err
-                ON err."PLCCODE" = c."CODE"
-                AND err."MACHINE" = c."TOPIC"
-            WHERE c."YMD" BETWEEN '{start_ymd}' AND '{end_ymd}'
-              AND c."TOPIC" IN ({sbmc_in})
-              AND err."NOTE" IS NOT NULL
-            GROUP BY c."TOPIC", err."NOTE", err."CATE"
-            ORDER BY c."TOPIC", "發生次數" DESC
+                "MACHINE" AS "設備代碼",
+                "NOTE"    AS "故障原因",
+                "CATE"    AS "異常類別"
+            FROM "public"."CIM_MQTTCODEERR"
+            WHERE "MACHINE" IN ({sbmc_in})
+            ORDER BY "MACHINE", "CATE", "NOTE"
         """
         note_rows = self._execute_postgres_query(note_query)
 
-        # Group notes by device code → top 5 per device
+        # Group notes by device (CIM_MQTTCODEERR is static reference; no occurrence count needed)
         notes_by_device: Dict[str, list] = {}
         for nr in note_rows:
             dev = nr.get("設備代碼", "")
             if dev not in notes_by_device:
                 notes_by_device[dev] = []
-            if len(notes_by_device[dev]) < 5:
-                notes_by_device[dev].append({
-                    "故障原因":  nr.get("故障原因", "-"),
-                    "異常類別":  nr.get("異常類別", "-"),
-                    "發生次數": int(nr.get("發生次數") or 0),
-                })
+            notes_by_device[dev].append({
+                "故障原因": nr.get("故障原因", "-"),
+                "異常類別": nr.get("異常類別", "-"),
+            })
 
         # Attach fault notes to each device row
-        print(f"[EQ-E NOTE] notes_by_device keys: {list(notes_by_device.keys())}")
         for row in clean_rows:
             dev_code = row["設備(代碼)"].split('(')[-1].rstrip(')')
             row["具體故障原因"] = notes_by_device.get(dev_code, [])
-            print(f"[EQ-E NOTE] {dev_code} -> {len(row['具體故障原因'])} notes")
 
         return {
             "status":        "success",
@@ -933,8 +921,7 @@ class FactorySqlTools:
         topic_filter_a = ""
         topic_filter_b = ""
         eq_label = floor or "全廠"
-        topic_filter_notes_a = ""
-        topic_filter_notes_b = ""
+        note_machines: list = []  # TOPIC values for CIM_MQTTCODEERR.MACHINE lookup
         if equipment_code or equipment_name:
             safe_kw = (equipment_name or equipment_code or "").replace("'", "''")
             info_q  = f"""
@@ -951,9 +938,7 @@ class FactorySqlTools:
                 eq_label = info_rows[0].get("EQUIPMENT_NAME") or eq_code
                 topic_filter_a = f'AND ("TOPIC" = \'{eq_code}\' OR "TOPIC" = \'{eq_top}\')'
                 topic_filter_b  = topic_filter_a
-                # c.-prefixed version for _query_period_notes (avoids TOPIC ambiguity after JOIN)
-                topic_filter_notes_a = f'AND (c."TOPIC" = \'{eq_code}\' OR c."TOPIC" = \'{eq_top}\')'
-                topic_filter_notes_b = topic_filter_notes_a
+                note_machines = list({eq_top, eq_code})
         elif floor:
             safe_floor = floor.replace("'", "''")
             # Filter by TOPIC values belonging to that floor via EQUIPMENT_INFO_DICT
@@ -964,14 +949,12 @@ class FactorySqlTools:
                 )
             """
             topic_filter_b = topic_filter_a
-            # c.-prefixed version for _query_period_notes (avoids TOPIC ambiguity after JOIN)
-            topic_filter_notes_a = f"""
-                AND c."TOPIC" IN (
-                    SELECT DISTINCT "TOPIC" FROM "public"."EQUIPMENT_INFO_DICT"
-                    WHERE "EQUIP_INSTALL_POSITION" ILIKE '%{safe_floor}%'
-                )
-            """
-            topic_filter_notes_b = topic_filter_notes_a
+            # Collect TOPIC values for this floor for CIM_MQTTCODEERR lookup
+            floor_topic_rows = self._execute_postgres_query(f"""
+                SELECT DISTINCT "TOPIC" FROM "public"."EQUIPMENT_INFO_DICT"
+                WHERE "EQUIP_INSTALL_POSITION" ILIKE '%{safe_floor}%'
+            """)
+            note_machines = [r.get("TOPIC") for r in floor_topic_rows if r.get("TOPIC")]
 
         def _query_period(ymd_start: str, ymd_end: str, topic_filter: str) -> Dict[str, float]:
             """Return {state_code: total_hours} for a date range (coarse-grained by A001-A009)."""
@@ -1002,23 +985,19 @@ class FactorySqlTools:
             rows = self._execute_postgres_query(q)
             return {r.get("CODE"): float(r.get("down_hours") or 0) for r in rows if r.get("CODE")}
 
-        def _query_period_notes(ymd_start: str, ymd_end: str, topic_filter: str) -> Dict[str, int]:
-            """Return {NOTE: occurrence_count} by joining CIM_MQTTCOLLECT → CIM_MQTTCODEERR."""
+        def _query_period_notes(machines: list) -> Dict[str, dict]:
+            """Return {NOTE: {異常類別, 發生次數}} from CIM_MQTTCODEERR (static reference table).
+            MACHINE column stores the TOPIC value; no event-stream join needed."""
+            machines_sql = ",".join(f"'{m}'" for m in machines) if machines else "''"
             q = f"""
                 SELECT
-                    err."NOTE"              AS "故障原因",
-                    err."CATE"              AS "異常類別",
-                    COUNT(*)                AS "發生次數"
-                FROM "public"."CIM_MQTTCOLLECT" c
-                LEFT JOIN "public"."EQUIPMENT_INFO_DICT" ei ON ei."TOPIC" = c."TOPIC"
-                LEFT JOIN "public"."CIM_MQTTCODEERR" err
-                    ON err."PLCCODE" = c."CODE"
-                    AND err."MACHINE" = c."TOPIC"
-                WHERE c."YMD" BETWEEN '{ymd_start}' AND '{ymd_end}'
-                  AND err."NOTE" IS NOT NULL
-                {topic_filter}
-                GROUP BY err."NOTE", err."CATE"
-                ORDER BY "發生次數" DESC
+                    "NOTE" AS "故障原因",
+                    "CATE" AS "異常類別",
+                    COUNT(*) AS "發生次數"
+                FROM "public"."CIM_MQTTCODEERR"
+                WHERE "MACHINE" IN ({machines_sql})
+                GROUP BY "NOTE", "CATE"
+                ORDER BY "故障原因"
             """
             rows = self._execute_postgres_query(q)
             return {
@@ -1036,8 +1015,8 @@ class FactorySqlTools:
 
         hours_a = _query_period(a_ymd_s, a_ymd_e, topic_filter_a)
         hours_b = _query_period(b_ymd_s, b_ymd_e, topic_filter_b)
-        notes_a = _query_period_notes(a_ymd_s, a_ymd_e, topic_filter_notes_a)
-        notes_b = _query_period_notes(b_ymd_s, b_ymd_e, topic_filter_notes_b)
+        notes_a = _query_period_notes(note_machines)
+        notes_b = _query_period_notes(note_machines)
 
         def _build_note_comparison(na: dict, nb: dict, la: str, lb: str) -> list:
             """Build per-NOTE comparison rows sorted by period_a occurrences desc."""
@@ -1152,23 +1131,19 @@ class FactorySqlTools:
             if safe_floor else ''
         )
 
-        # Query: count occurrences of each (equipment_name, NOTE) pair
+        # CIM_MQTTCODEERR is a static reference table; query directly by MACHINE (= TOPIC)
         query = f"""
             SELECT
-                COALESCE(ei."EQUIPMENT_NAME", c."TOPIC") AS "設備名稱",
-                err."NOTE"                                AS "故障原因",
-                err."CATE"                                AS "異常類別",
-                COUNT(*)                                  AS "發生次數"
-            FROM "public"."CIM_MQTTCOLLECT" c
-            LEFT JOIN "public"."EQUIPMENT_INFO_DICT" ei ON ei."TOPIC" = c."TOPIC"
-            LEFT JOIN "public"."CIM_MQTTCODEERR" err
-                ON err."PLCCODE" = c."CODE"
-                AND err."MACHINE" = c."TOPIC"
-            WHERE c."YMD" BETWEEN '{start_ymd}' AND '{end_ymd}'
-              AND err."NOTE" IS NOT NULL
+                COALESCE(ei."EQUIPMENT_NAME", err."MACHINE") AS "設備名稱",
+                err."NOTE"                                    AS "故障原因",
+                err."CATE"                                    AS "異常類別",
+                COUNT(*)                                      AS "發生次數"
+            FROM "public"."CIM_MQTTCODEERR" err
+            LEFT JOIN "public"."EQUIPMENT_INFO_DICT" ei ON ei."TOPIC" = err."MACHINE"
+            WHERE 1=1
               {floor_filter}
             GROUP BY
-                COALESCE(ei."EQUIPMENT_NAME", c."TOPIC"),
+                COALESCE(ei."EQUIPMENT_NAME", err."MACHINE"),
                 err."NOTE", err."CATE"
             ORDER BY "發生次數" DESC
         """
