@@ -687,15 +687,16 @@ class FactorySqlTools:
         """
         result = self._execute_mssql_query(query)
 
-        # Inject emoji (kept out of SQL to avoid cp950 encoding errors)
-        SEVERITY_ICON = {
-            '嚴重落後': '🔴 嚴重落後 (<70%)',
-            '輕微落後': '🟡 輕微落後 (<90%)',
-            '接近達標': '🟡 接近達標 (<100%)',
+        # Map severity to plain-text labels (no emoji in data to avoid LLM garbling in Markdown tables)
+        # The LLM will add color indicators based on System Prompt instructions
+        SEVERITY_MAP = {
+            '嚴重落後': '嚴重落後 (<70%)',
+            '輕微落後': '輕微落後 (<90%)',
+            '接近達標': '接近達標 (<100%)',
         }
         for row in result:
             raw = row.pop('落後嚴重度_raw', '接近達標')
-            row['落後嚴重度'] = SEVERITY_ICON.get(raw, raw)
+            row['落後嚴重度'] = SEVERITY_MAP.get(raw, raw)
 
         return {
             "status": "success",
