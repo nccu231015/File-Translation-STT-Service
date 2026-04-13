@@ -851,8 +851,8 @@ class FactorySqlTools:
         note_query = f"""
             SELECT
                 COALESCE(ei."EQUIPMENT_CODE", c."TOPIC") AS "設備代碼",
-                COALESCE(err."NOTE", c."CODE")            AS "故障原因",
-                COALESCE(err."CATE", '未分類')            AS "異常類別",
+                err."NOTE"                                AS "故障原因",
+                err."CATE"                                AS "異常類別",
                 COUNT(*)                                   AS "發生次數"
             FROM "public"."CIM_MQTTCOLLECT" c
             LEFT JOIN "public"."EQUIPMENT_INFO_DICT" ei
@@ -993,9 +993,9 @@ class FactorySqlTools:
             """Return {NOTE: occurrence_count} by joining CIM_MQTTCOLLECT → CIM_MQTTCODEERR."""
             q = f"""
                 SELECT
-                    COALESCE(err."NOTE", c."CODE") AS "故障原因",
-                    COALESCE(err."CATE", '未分類')    AS "異常類別",
-                    COUNT(*)                        AS "發生次數"
+                    err."NOTE"              AS "故障原因",
+                    err."CATE"              AS "異常類別",
+                    COUNT(*)                AS "發生次數"
                 FROM "public"."CIM_MQTTCOLLECT" c
                 LEFT JOIN "public"."EQUIPMENT_INFO_DICT" ei ON ei."TOPIC" = c."TOPIC"
                 LEFT JOIN "public"."CIM_MQTTCODEERR" err
