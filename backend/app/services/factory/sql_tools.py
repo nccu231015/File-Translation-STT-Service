@@ -98,6 +98,26 @@ class FactorySqlTools:
                     time.sleep(1)
                     continue
                 return [{"error": str(e)}]
+
+    def _build_line_filter(self, line_no: str, no_col: str = "[NO]") -> str:
+        """
+        Build a SQL WHERE condition for line_no that handles both numeric IDs
+        (e.g. '302') and human-readable names (e.g. 'SMT B', '三樓A線').
+        - Numeric  → direct equality:  CAST([NO] AS VARCHAR(50)) = '302'
+        - Name     → lookup via Scx_base.scx_value LIKE '%SMT B%'
+        """
+        safe = str(line_no).replace("'", "''")
+        if safe.strip().isdigit():
+            # Pure numeric ID – direct match
+            return f"CAST({no_col} AS VARCHAR(50)) = '{safe}'"
+        else:
+            # Name-based – resolve scx_no from Scx_base first
+            return (
+                f"CAST({no_col} AS VARCHAR(50)) IN ("
+                f"SELECT CAST(scx_no AS VARCHAR(50)) FROM [dbo].[Scx_base] "
+                f"WHERE scx_value LIKE '%{safe}%'"
+                f")"
+            )
         return []
 
 
@@ -1234,9 +1254,10 @@ class FactorySqlTools:
         filters: List[str] = [f"PRO_TIME BETWEEN '{start_date}' AND '{end_date}'"]
         bl_filters: List[str] = [f"PRO_TIME BETWEEN '{start_date}' AND '{end_date}'"]
         if line_no:
-            safe_line = str(line_no).replace("'", "''")
-            filters.append(f"CAST([NO] AS VARCHAR(50)) = '{safe_line}'")
-            bl_filters.append(f"CAST([NO] AS VARCHAR(50)) = '{safe_line}'")
+            # _build_line_filter handles both numeric IDs (e.g. '302') and
+            # human-readable names (e.g. 'SMT B') via Scx_base lookup
+            filters.append(self._build_line_filter(line_no))
+            bl_filters.append(self._build_line_filter(line_no))
         if model:
             safe_model = str(model).replace("'", "''")
             filters.append(f"jz = '{safe_model}'")
