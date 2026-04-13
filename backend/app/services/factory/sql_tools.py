@@ -933,6 +933,8 @@ class FactorySqlTools:
         topic_filter_a = ""
         topic_filter_b = ""
         eq_label = floor or "全廠"
+        topic_filter_notes_a = ""
+        topic_filter_notes_b = ""
         if equipment_code or equipment_name:
             safe_kw = (equipment_name or equipment_code or "").replace("'", "''")
             info_q  = f"""
@@ -949,6 +951,9 @@ class FactorySqlTools:
                 eq_label = info_rows[0].get("EQUIPMENT_NAME") or eq_code
                 topic_filter_a = f'AND ("TOPIC" = \'{eq_code}\' OR "TOPIC" = \'{eq_top}\')'
                 topic_filter_b  = topic_filter_a
+                # c.-prefixed version for _query_period_notes (avoids TOPIC ambiguity after JOIN)
+                topic_filter_notes_a = f'AND (c."TOPIC" = \'{eq_code}\' OR c."TOPIC" = \'{eq_top}\')'
+                topic_filter_notes_b = topic_filter_notes_a
         elif floor:
             safe_floor = floor.replace("'", "''")
             # Filter by TOPIC values belonging to that floor via EQUIPMENT_INFO_DICT
@@ -959,6 +964,14 @@ class FactorySqlTools:
                 )
             """
             topic_filter_b = topic_filter_a
+            # c.-prefixed version for _query_period_notes (avoids TOPIC ambiguity after JOIN)
+            topic_filter_notes_a = f"""
+                AND c."TOPIC" IN (
+                    SELECT DISTINCT "TOPIC" FROM "public"."EQUIPMENT_INFO_DICT"
+                    WHERE "EQUIP_INSTALL_POSITION" ILIKE '%{safe_floor}%'
+                )
+            """
+            topic_filter_notes_b = topic_filter_notes_a
 
         def _query_period(ymd_start: str, ymd_end: str, topic_filter: str) -> Dict[str, float]:
             """Return {state_code: total_hours} for a date range (coarse-grained by A001-A009)."""
@@ -1023,8 +1036,8 @@ class FactorySqlTools:
 
         hours_a = _query_period(a_ymd_s, a_ymd_e, topic_filter_a)
         hours_b = _query_period(b_ymd_s, b_ymd_e, topic_filter_b)
-        notes_a = _query_period_notes(a_ymd_s, a_ymd_e, topic_filter_a)
-        notes_b = _query_period_notes(b_ymd_s, b_ymd_e, topic_filter_b)
+        notes_a = _query_period_notes(a_ymd_s, a_ymd_e, topic_filter_notes_a)
+        notes_b = _query_period_notes(b_ymd_s, b_ymd_e, topic_filter_notes_b)
 
         def _build_note_comparison(na: dict, nb: dict, la: str, lb: str) -> list:
             """Build per-NOTE comparison rows sorted by period_a occurrences desc."""
