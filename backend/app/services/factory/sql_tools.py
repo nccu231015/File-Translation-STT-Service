@@ -880,9 +880,11 @@ class FactorySqlTools:
                 })
 
         # Attach fault notes to each device row
+        print(f"[EQ-E NOTE] notes_by_device keys: {list(notes_by_device.keys())}")
         for row in clean_rows:
             dev_code = row["設備(代碼)"].split('(')[-1].rstrip(')')
             row["具體故障原因"] = notes_by_device.get(dev_code, [])
+            print(f"[EQ-E NOTE] {dev_code} -> {len(row['具體故障原因'])} notes")
 
         return {
             "status":        "success",
