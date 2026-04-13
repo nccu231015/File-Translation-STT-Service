@@ -124,8 +124,8 @@ class SqlAgent:
                             "model":      {"type": "string", "description": "機種名稱，例如 'M3820'。選填。"},
                             "granularity": {
                                 "type": "string",
-                                "enum": ["daily", "weekly", "monthly", "quarterly", "yearly"],
-                                "description": "時間粒度。預設 monthly。"
+                                "enum": ["daily", "weekly", "monthly", "quarterly", "half_yearly", "yearly"],
+                                "description": "時間粒度。daily=每日 | weekly=每週 | monthly=月對月 | quarterly=季對季 | half_yearly=上下半年(1H/2H) | yearly=年對年。預設 monthly。"
                             }
                         },
                         "required": ["start_date", "end_date"]
@@ -162,8 +162,8 @@ class SqlAgent:
                     "description": (
                         "【不良率波動排行 & 圖表】分析各機種在指定期間的不良率最高/最低值與波動幅度，"
                         "排行波動最大的機種，並回傳可直接渲染的多線折線圖 (chart_config)，每條線代表一個機種。"
-                        "適用於：『哪些機種不良率波動最大？』、'M-o-M/Q-o-Q/Y-o-Y 不良率比對'。"
-                        "granularity：monthly(月對月) | quarterly(季對季) | yearly(年對年)。"
+                        "適用於：『哪些機種不良率波動最大？』、'M-o-M/Q-o-Q/Y-o-Y/1H-2H 不良率比對'，以及特定時間區間中每日或每週的波動比對。"
+                        "granularity：daily(每日) | weekly(每週) | monthly(月對月) | quarterly(季對季) | half_yearly(上下半年1H/2H) | yearly(年對年)。"
                     ),
                     "parameters": {
                         "type": "object",
@@ -171,8 +171,8 @@ class SqlAgent:
                             "end_date":    {"type": "string", "description": "分析截止日，預設今天。"},
                             "granularity": {
                                 "type": "string",
-                                "enum": ["monthly", "quarterly", "yearly"],
-                                "description": "時間粒度：monthly | quarterly | yearly。預設 quarterly。"
+                                "enum": ["daily", "weekly", "monthly", "quarterly", "half_yearly", "yearly"],
+                                "description": "時間粒度：daily(每日) | weekly(每週) | monthly(月對月) | quarterly(季對季) | half_yearly(上下半年1H/2H) | yearly(年對年)。預設 quarterly。"
                             },
                             "periods":  {"type": "integer", "description": "要回溯幾個週期，例如 4 季，預設 4。"},
                             "limit":    {"type": "integer", "description": "最多顯示幾個機種，預設 10。"}
@@ -225,7 +225,7 @@ class SqlAgent:
 
 5. **產量與不良率趨勢圖 (Q5)**：
    - 詢問「某機種/某產線的月對月、季對季、年對年、每日/每週/某時間區間的產量與不良率趨勢」→ 調用 `get_production_trend_data`。
-   - granularity 對應：月對月=monthly、季對季=quarterly、年對年=yearly、每日=daily、每週=weekly。
+   - granularity 對應：月對月=monthly、季對季=quarterly、半年對半年(1H/2H)=half_yearly、年對年=yearly、每日=daily、每週=weekly。
    - **圖表回覆規範**：回覆中必須提及「圖表資料已就緒，請參考隨附的 chart_config（Bar=產量, Line=不良率, 雙 Y 軸）」。同時以 Markdown 表格呈現 data 欄位的時序數據。
 
 6. **單一工單進度確認 (Q6)**：
@@ -233,7 +233,8 @@ class SqlAgent:
    - 回覆必須包含：(a) Y/N 答案 (b) 嚴重度燈號 (c) 具體的生產改善建議（直接從 recommendation 欄位呈現）。
 
 7. **機種不良率波動排行 (Q7)**：
-   - 詢問「哪些機種不良率波動最大、本季與上季比對、M-o-M/Q-o-Q 波動」→ 調用 `get_defect_rate_fluctuation_data`。
+   - 詢問「哪些機種不良率波動最大、本季與上季比對、M-o-M/Q-o-Q/Y-o-Y/1H-2H 波動、某時間區間每日或每週波動」→ 調用 `get_defect_rate_fluctuation_data`。
+   - granularity 對應：月對月=monthly、季對季=quarterly、半年對半年(1H/2H)=half_yearly、年對年=yearly、每日=daily、每週=weekly。
    - **重要規範**：除非使用者明確指定數量，否則**一律強制設定 `limit=5`**。
    - **圖表回覆規範**：回覆中必須提及「圖表已就緒（柱狀代表各機種產量，折線代表不良率）。為保持介面簡潔，圖例僅顯示折線項」。同時以 Markdown 表格呈現排行榜。
 

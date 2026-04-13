@@ -738,17 +738,17 @@ class FactorySqlTools:
                 [NO]                    AS [產線],
                 jz                      AS [機種],
                 SUM(ACTUAL_PRO)         AS [總產量],
-                SUM(BAD_PRO_RATE)       AS [總不良數],
+                SUM(NG_NUM)             AS [總不良數],
                 CASE
                     WHEN SUM(ACTUAL_PRO) = 0 THEN 0
                     ELSE ROUND(
-                            CAST(SUM(BAD_PRO_RATE) AS FLOAT) / SUM(ACTUAL_PRO) * 100, 2)
+                            CAST(SUM(NG_NUM) AS FLOAT) / NULLIF(SUM(ACTUAL_PRO), 0) * 100, 4)
                 END                     AS [不良率百分比],
                 {display_date_val}      AS [資料日期]
             FROM [dbo].[Daily_Status_Report]
             WHERE {time_cond}
               AND [NO] IS NOT NULL
-              AND BAD_PRO_RATE > 0
+              AND NG_NUM > 0
             GROUP BY [NO], jz
             ORDER BY [不良率百分比] DESC
         """
@@ -805,17 +805,21 @@ class FactorySqlTools:
 
         # Map granularity to SQL time-label expression
         granularity_map = {
-            'daily':     "CONVERT(VARCHAR(10), PRO_TIME, 120)",
-            'weekly':    (
+            'daily':       "CONVERT(VARCHAR(10), PRO_TIME, 120)",
+            'weekly':      (
                 "CAST(YEAR(PRO_TIME) AS VARCHAR) + '-W' + "
                 "RIGHT('0' + CAST(DATEPART(WEEK, PRO_TIME) AS VARCHAR), 2)"
             ),
-            'monthly':   "CONVERT(VARCHAR(7), PRO_TIME, 120)",
-            'quarterly': (
+            'monthly':     "CONVERT(VARCHAR(7), PRO_TIME, 120)",
+            'quarterly':   (
                 "CAST(YEAR(PRO_TIME) AS VARCHAR) + '-Q' + "
                 "CAST(DATEPART(QUARTER, PRO_TIME) AS VARCHAR)"
             ),
-            'yearly':    "CAST(YEAR(PRO_TIME) AS VARCHAR)",
+            'half_yearly': (
+                "CAST(YEAR(PRO_TIME) AS VARCHAR) + '-' + "
+                "CASE WHEN MONTH(PRO_TIME) <= 6 THEN '1H' ELSE '2H' END"
+            ),
+            'yearly':      "CAST(YEAR(PRO_TIME) AS VARCHAR)",
         }
         time_expr = granularity_map.get(granularity, granularity_map['monthly'])
 
@@ -825,7 +829,7 @@ class FactorySqlTools:
                 SELECT
                     {time_expr}   AS period_label,
                     ACTUAL_PRO,
-                    BAD_PRO_RATE
+                    NG_NUM
                 FROM [dbo].[Daily_Status_Report]
                 WHERE PRO_TIME BETWEEN '{start_date}' AND '{end_date}'
                   AND [NO] IS NOT NULL
@@ -834,9 +838,9 @@ class FactorySqlTools:
             SELECT
                 period_label          AS [時間標籤],
                 SUM(ACTUAL_PRO)       AS [總產量],
-                SUM(BAD_PRO_RATE)     AS [總不良數],
+                SUM(NG_NUM)           AS [總不良數],
                 ROUND(
-                    CAST(SUM(BAD_PRO_RATE) AS FLOAT) / NULLIF(SUM(ACTUAL_PRO), 0) * 100,
+                    CAST(SUM(NG_NUM) AS FLOAT) / NULLIF(SUM(ACTUAL_PRO), 0) * 100,
                     4
                 )                     AS [不良率百分比]
             FROM base
@@ -997,19 +1001,35 @@ class FactorySqlTools:
             end_date = datetime.date.today().isoformat()
 
         # Determine look-back window and time label SQL
-        days_per_period = {'monthly': 30, 'quarterly': 90, 'yearly': 365}
-        days            = days_per_period.get(granularity, 90) * periods
-        start_date      = (
+        days_per_period = {
+            'daily':       1,
+            'weekly':      7,
+            'monthly':     30,
+            'quarterly':   90,
+            'half_yearly': 182,
+            'yearly':      365,
+        }
+        days       = days_per_period.get(granularity, 90) * periods
+        start_date = (
             datetime.date.fromisoformat(end_date) - datetime.timedelta(days=days)
         ).isoformat()
 
         granularity_map = {
-            'monthly':   "CONVERT(VARCHAR(7), PRO_TIME, 120)",
-            'quarterly': (
+            'daily':       "CONVERT(VARCHAR(10), PRO_TIME, 120)",
+            'weekly':      (
+                "CAST(YEAR(PRO_TIME) AS VARCHAR) + '-W' + "
+                "RIGHT('0' + CAST(DATEPART(WEEK, PRO_TIME) AS VARCHAR), 2)"
+            ),
+            'monthly':     "CONVERT(VARCHAR(7), PRO_TIME, 120)",
+            'quarterly':   (
                 "CAST(YEAR(PRO_TIME) AS VARCHAR) + '-Q' + "
                 "CAST(DATEPART(QUARTER, PRO_TIME) AS VARCHAR)"
             ),
-            'yearly':    "CAST(YEAR(PRO_TIME) AS VARCHAR)",
+            'half_yearly': (
+                "CAST(YEAR(PRO_TIME) AS VARCHAR) + '-' + "
+                "CASE WHEN MONTH(PRO_TIME) <= 6 THEN '1H' ELSE '2H' END"
+            ),
+            'yearly':      "CAST(YEAR(PRO_TIME) AS VARCHAR)",
         }
         time_expr = granularity_map.get(granularity, granularity_map['quarterly'])
 
@@ -1020,7 +1040,7 @@ class FactorySqlTools:
                     jz,
                     {time_expr} AS period_label,
                     ACTUAL_PRO,
-                    BAD_PRO_RATE
+                    NG_NUM
                 FROM [dbo].[Daily_Status_Report]
                 WHERE PRO_TIME BETWEEN '{start_date}' AND '{end_date}'
                   AND [NO] IS NOT NULL
@@ -1031,9 +1051,9 @@ class FactorySqlTools:
                     jz             AS [機種],
                     period_label   AS [時間標籤],
                     SUM(ACTUAL_PRO)  AS [總產量],
-                    SUM(BAD_PRO_RATE) AS [總不良數],
+                    SUM(NG_NUM)      AS [總不良數],
                     ROUND(
-                        CAST(SUM(BAD_PRO_RATE) AS FLOAT) /
+                        CAST(SUM(NG_NUM) AS FLOAT) /
                         NULLIF(SUM(ACTUAL_PRO), 0) * 100, 4
                     ) AS [不良率百分比]
                 FROM base
@@ -1049,7 +1069,7 @@ class FactorySqlTools:
                     jz,
                     {time_expr} AS period_label,
                     ROUND(
-                        CAST(SUM(BAD_PRO_RATE) AS FLOAT) /
+                        CAST(SUM(NG_NUM) AS FLOAT) /
                         NULLIF(SUM(ACTUAL_PRO), 0) * 100, 4
                     ) AS defect_rate_pct
                 FROM [dbo].[Daily_Status_Report]
@@ -1108,7 +1128,14 @@ class FactorySqlTools:
             'rgba(199,199,199,1)',  'rgba(83,102,255,1)',
             'rgba(255,130,100,1)', 'rgba(0,200,150,1)',
         ]
-        granularity_zh = {'monthly': '\u6708\u5c0d\u6708', 'quarterly': '\u5b63\u5c0d\u5b63', 'yearly': '\u5e74\u5c0d\u5e74'}
+        granularity_zh = {
+            'daily':       '每日',
+            'weekly':      '每週',
+            'monthly':     '月對月',
+            'quarterly':   '季對季',
+            'half_yearly': '半年對半年(1H/2H)',
+            'yearly':      '年對年',
+        }
         title_zh = f"\u5404\u6a5f\u7a2e\u4e0d\u826f\u7387\u6ce2\u52d5\u5c0d\u6bd4\uff08{granularity_zh.get(granularity, granularity)}\uff09"
 
         # Step D: build per-model quantity map
