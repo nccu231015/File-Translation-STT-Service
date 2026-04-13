@@ -4,11 +4,13 @@ import datetime
 
 class EquipmentSqlAgent:
     """
-    負責處理「設備檢索」上下文的工具調用，將自然語言轉為 4 種設備分析功能：
+    負責處理「設備檢索」上下文的工具調用，將自然語言轉為 6 種設備分析功能：
       EQ-A: 各樓層設備即時稼動狀態
       EQ-B: 良率未達標設備（紅色標記）
       EQ-C: 指定樓層設備稼動燈號與稼動率
-      EQ-D: 特定設備生產機種不良率趨勢（Bar+Line）
+      EQ-D: 特定設備生産機種不良率趨勢（Bar+Line）
+      EQ-E: 停機時數異常排行 Top-N（Pareto）
+      EQ-F: 設備故障原因分布比較（兩期間對比）
     """
 
     def __init__(self, llm_service):
@@ -140,6 +142,104 @@ class EquipmentSqlAgent:
                     }
                 }
             },
+            # ── EQ-E ─────────────────────────────────────────────────────────────────────
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_downtime_anomaly_ranking",
+                    "description": (
+                        "[EQ-E] 查詢指定期間內停機時數前 N 名的設備（Pareto），"
+                        "帶有各停機原因明細（計畫停機/設備故障/換模換料/品質異常/待料停工）。"
+                        "支援迴視期間：30天/一季/半年等。"
+                        "可颓視實際停機著黄點，带楼層位置資訊。"
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "start_date": {
+                                "type": "string",
+                                "description": "查詢開始日期 YYYY-MM-DD。"
+                            },
+                            "end_date": {
+                                "type": "string",
+                                "description": "查詢結束日期 YYYY-MM-DD。"
+                            },
+                            "top_n": {
+                                "type": "integer",
+                                "description": "回傳前 N 名，預設 10。"
+                            },
+                            "floor": {
+                                "type": "string",
+                                "description": "指定樓層（如 '3F'），省略則查全廠。"
+                            },
+                            "include_chart": {
+                                "type": "boolean",
+                                "description": "是否產生 Pareto 圖表配置，預設 false。"
+                            }
+                        },
+                        "required": ["start_date", "end_date"]
+                    }
+                }
+            },
+            # ── EQ-F ─────────────────────────────────────────────────────────────────────
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_fault_pattern_comparison",
+                    "description": (
+                        "[EQ-F] 比較兩個期間的設備停機原因分佈，適用於："
+                        "【此季對上季】【上半年對下半年】等對比分析。"
+                        "可鎖定到特定設備、樓層或全廠。"
+                        "回傳各原因停機時數對比表 + 趨勢標記。"
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "period_a_start": {
+                                "type": "string",
+                                "description": "期間A 開始日 YYYY-MM-DD。"
+                            },
+                            "period_a_end": {
+                                "type": "string",
+                                "description": "期間A 結束日 YYYY-MM-DD。"
+                            },
+                            "period_b_start": {
+                                "type": "string",
+                                "description": "期間B 開始日 YYYY-MM-DD。"
+                            },
+                            "period_b_end": {
+                                "type": "string",
+                                "description": "期間B 結束日 YYYY-MM-DD。"
+                            },
+                            "period_a_label": {
+                                "type": "string",
+                                "description": "期間A 顯示名稱，如 '本季'、'2026 Q1'、'上半年'。"
+                            },
+                            "period_b_label": {
+                                "type": "string",
+                                "description": "期間B 顯示名稱，如 '上季'、'2025 Q4'、'下半年'。"
+                            },
+                            "equipment_code": {
+                                "type": "string",
+                                "description": "鎖定特定設備代碼，省略則分析全廠/指定樓層。"
+                            },
+                            "equipment_name": {
+                                "type": "string",
+                                "description": "鎖定特定設備名稱關鍵字。"
+                            },
+                            "floor": {
+                                "type": "string",
+                                "description": "鎖定樓層（如 '3F'），省略則全廠。"
+                            },
+                            "include_chart": {
+                                "type": "boolean",
+                                "description": "是否產生分組柱狀圖表配置，預設 false。"
+                            }
+                        },
+                        "required": ["period_a_start", "period_a_end", "period_b_start", "period_b_end"]
+                    }
+                }
+            },
         ]
 
     async def execute_task(self, question: str) -> Dict[str, Any]:
@@ -170,14 +270,25 @@ class EquipmentSqlAgent:
    - threshold 預設 80.0（即良率 < 80% 標記為紅色）
    - 回覆需包含 🔴/🟢 燈號說明
 
-3. 詢問「某樓層設備有幾台在稼動、設備稼動率、開工/停工狀態」→ 調用 `get_floor_equipment_status`
+3. 詢問「某樓層設備有幾台在稼動、設備稼動率、開工/停工狀態」 → 調用 `get_floor_equipment_status`
    - floor 為必填（如 '3F'）
    - 回覆需包含總台數、稼動台數、停機台數、稼動率
 
-4. 詢問「某設備今天/這段時間生產了哪些機種、機種的不良率走勢、設備生產趨勢」→ 調用 `get_equipment_model_production_trend`
+4. 詢問「某設備今天/這段時間生産了哪些機種、機種的不良率走勢、設備生産趨勢」 → 調用 `get_equipment_model_production_trend`
    - equipment_code 或 equipment_name 擇一提供
    - 時間範圍：今天 = start_date=end_date=今天；近30天 = 往前30天；本季/半年依此計算
    - granularity 對應：月對月=monthly、季對季=quarterly、每日=daily、每週=weekly、年對年=yearly
+
+5. 詢問「哪些設備停機時間异常過長、停機確 Top-N、停機主因」 → 調用 `get_downtime_anomaly_ranking`
+   - 時間範圍按個別話展開：近30天/這一季/上一季/上半年依對應計算
+   - top_n 預設 10，使用者指定則跟上
+   - 回傳結果包含：排名、樓層位置、停機時數、主要原因、各原因時數明細
+   - 停機原因代碼對照：A001=計畫停機, A006=設備故障, A007=換模/換料, A008=品質異常停線, A009=待料停工
+
+6. 詢問「設備故障原因有沒有規律/比較兩期間停機分佈」 → 調用 `get_fault_pattern_comparison`
+   - period_a 和 period_b 均為必填，常見用法：本季對上季、上半年對下半年
+   - 可鎖定設備、樓層或全廠
+   - 回傳各原因停機時數對比 + 趨勢（⬆ 惡化⼯ ⬇ 改善）
 
 【回覆格式規範】
 - **全程使用繁體中文**，絕對禁止輸出英文句子，禁止使用「產線」一詞（本模式為「設備」專區）
@@ -194,6 +305,8 @@ class EquipmentSqlAgent:
 - 將「良品數量」與「不良數量」合併為一欄「產出 (良/不良)」，例如 `100 / 2`。
 - 若詢問「稼動狀態/總數/稼動率」：絕對省略 `RUN(分)`、`DOWN(分)`、`IDEL(分)`、`SHUTDOWN(分)`，且把「當前狀態」與「狀態燈」合併為「狀態燈」。表格只需顯示：`樓層`、`設備(代碼)`、`狀態燈`、`稼動率(%)`、`產出(良/不良)`。
 - 若詢問「達標/良率」：只顯示 `樓層`、`設備(代碼)`、`產出(良/不良)`、`良率(%)`、`狀態燈`。
+- 若詢問「停機排名/EQ-E」：表格顯示 `排名`、`樓層`、`設備(代碼)`、`停機時數(h)`、`主要停機原因`；停機原因明細（各代碼小時數）可在表格下方另起一個「各原因明細」摺疊說明，不放入主表格。
+- 若詢問「故障分布比較/EQ-F」：表格顯示 `停機原因`、`{期間A}停機(h)`、`{期間B}停機(h)`、`變化(h)`、`趨勢`；趨勢欄位保留 ⬆ 惡化 / ⬇ 改善 / ─ 持平標記。
 - 「資料日期」只需在總結文字中提及一次即可，**絕對禁止**放進表格中成為獨立欄位！
 
 【稼動率計算說明】

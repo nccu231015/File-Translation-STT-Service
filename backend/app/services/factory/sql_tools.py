@@ -661,7 +661,361 @@ class FactorySqlTools:
             "chart_config":   chart_config,  # None when include_chart=False
         }
 
+    # ══════════════════════════════════════════════════════════════════════════════
+    # EQ-E: Downtime anomaly ranking (Top-N machines by total DOWN time in a period)
+    # Supports Pareto chart: bar = downtime hours desc, line = cumulative %
+    # DOWN codes: A001=計畫停機, A006=設備故障, A007=換模換料,
+    #             A008=品質異常停線, A009=待料停工
+    # ══════════════════════════════════════════════════════════════════════════════
+    def get_downtime_anomaly_ranking(
+        self,
+        start_date: str,
+        end_date: str,
+        top_n: int = 10,
+        floor: str = None,
+        include_chart: bool = False
+    ) -> Dict[str, Any]:
+        """
+        EQ-E: Rank equipment by total downtime hours in [start_date, end_date].
+        Returns Top-N list with per-code breakdown and optional Pareto chart_config.
+        """
+        # DOWN code → human-readable reason (update mapping to match factory definitions)
+        DOWN_CODE_DESC = {
+            'A001': '計畫停機',
+            'A006': '設備故障',
+            'A007': '換模/換料',
+            'A008': '品質異常停線',
+            'A009': '待料停工',
+        }
+        DOWN_CODES = list(DOWN_CODE_DESC.keys())
+        codes_sql = "','".join(DOWN_CODES)
 
+        start_ymd = start_date.replace('-', '')
+        end_ymd   = end_date.replace('-', '')
+        safe_floor = (floor or '').replace("'", "''")
+        floor_join = f'AND e."EQUIP_INSTALL_POSITION" ILIKE \'%{safe_floor}%\'' if safe_floor else ''
+
+        query = f"""
+            WITH eq_info AS (
+                SELECT DISTINCT ON ("EQUIPMENT_CODE")
+                    "EQUIPMENT_CODE", "EQUIPMENT_NAME", "TOPIC",
+                    "EQUIP_INSTALL_POSITION"
+                FROM "public"."EQUIPMENT_INFO_DICT"
+                ORDER BY "EQUIPMENT_CODE", "GDHM" DESC NULLS LAST
+            ),
+            -- LAG within each (TOPIC, YMD) to avoid cross-day bleeding
+            deltas AS (
+                SELECT
+                    "TOPIC" AS "SBMC",
+                    "YMD",
+                    LAG("CODE") OVER (PARTITION BY "TOPIC", "YMD" ORDER BY "DATETIMES") AS prev_code,
+                    (SUBSTRING("DATETIMES", 10, 2)::INT * 3600
+                     + SUBSTRING("DATETIMES", 12, 2)::INT * 60
+                     + CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT)
+                    - LAG(
+                        SUBSTRING("DATETIMES", 10, 2)::INT * 3600
+                        + SUBSTRING("DATETIMES", 12, 2)::INT * 60
+                        + CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT
+                    ) OVER (PARTITION BY "TOPIC", "YMD" ORDER BY "DATETIMES") AS duration_sec
+                FROM "public"."CIM_MQTTCOLLECT"
+                WHERE "YMD" BETWEEN '{start_ymd}' AND '{end_ymd}'
+            ),
+            -- Sum per device per DOWN code
+            down_by_code AS (
+                SELECT
+                    "SBMC",
+                    prev_code                                                       AS "CODE",
+                    ROUND(SUM(CASE WHEN duration_sec > 0 THEN duration_sec ELSE 0 END) / 3600.0, 2) AS down_hours
+                FROM deltas
+                WHERE prev_code IN ('{codes_sql}')
+                GROUP BY "SBMC", prev_code
+            ),
+            -- Total DOWN hours per device and pivot per code
+            down_totals AS (
+                SELECT
+                    "SBMC",
+                    ROUND(SUM(down_hours), 2) AS total_down_hours,
+                    ROUND(MAX(CASE WHEN "CODE" = 'A001' THEN down_hours ELSE 0 END), 2) AS "A001",
+                    ROUND(MAX(CASE WHEN "CODE" = 'A006' THEN down_hours ELSE 0 END), 2) AS "A006",
+                    ROUND(MAX(CASE WHEN "CODE" = 'A007' THEN down_hours ELSE 0 END), 2) AS "A007",
+                    ROUND(MAX(CASE WHEN "CODE" = 'A008' THEN down_hours ELSE 0 END), 2) AS "A008",
+                    ROUND(MAX(CASE WHEN "CODE" = 'A009' THEN down_hours ELSE 0 END), 2) AS "A009"
+                FROM down_by_code
+                GROUP BY "SBMC"
+            )
+            SELECT
+                COALESCE(e."EQUIP_INSTALL_POSITION", 'N/A') AS "樓層",
+                COALESCE(e."EQUIPMENT_NAME", d."SBMC")       AS "設備名稱",
+                d."SBMC"                                      AS "設備代碼",
+                d.total_down_hours                            AS "停機時數",
+                d."A001"                                      AS "計畫停機(h)",
+                d."A006"                                      AS "設備故障(h)",
+                d."A007"                                      AS "換模換料(h)",
+                d."A008"                                      AS "品質異常(h)",
+                d."A009"                                      AS "待料停工(h)"
+            FROM down_totals d
+            LEFT JOIN eq_info e ON (e."TOPIC" = d."SBMC" OR e."EQUIPMENT_CODE" = d."SBMC")
+            WHERE d.total_down_hours > 0
+            {floor_join}
+            ORDER BY d.total_down_hours DESC
+            LIMIT {int(top_n)}
+        """
+        rows = self._execute_postgres_query(query)
+        if not rows:
+            return {
+                "status": "success",
+                "period": f"{start_date} ~ {end_date}",
+                "message": "查詢期間內無停機紀錄",
+                "data": [],
+                "chart_config": None,
+            }
+
+        # Build clean output rows
+        clean_rows = []
+        for r in rows:
+            hrs = float(r.get("停機時數") or 0)
+            # Top reason = code with highest hours
+            code_hours = {
+                k: float(r.get(f"{v}(h)") or 0)
+                for k, v in {
+                    'A001': '計畫停機', 'A006': '設備故障',
+                    'A007': '換模換料', 'A008': '品質異常', 'A009': '待料停工'
+                }.items()
+            }
+            top_code = max(code_hours, key=code_hours.get) if code_hours else '-'
+            clean_rows.append({
+                "排名":       len(clean_rows) + 1,
+                "樓層":       r.get("樓層", "N/A"),
+                "設備(代碼)": f"{r.get('設備名稱')} ({r.get('設備代碼')})",
+                "停機時數(h)": hrs,
+                "主要停機原因": DOWN_CODE_DESC.get(top_code, top_code),
+                "計畫停機(h)": float(r.get("計畫停機(h)") or 0),
+                "設備故障(h)": float(r.get("設備故障(h)") or 0),
+                "換模換料(h)": float(r.get("換模換料(h)") or 0),
+                "品質異常(h)": float(r.get("品質異常(h)") or 0),
+                "待料停工(h)": float(r.get("待料停工(h)") or 0),
+            })
+
+        # Pareto chart: bars = downtime desc, line = cumulative %
+        chart_config = None
+        if include_chart and clean_rows:
+            labels     = [r["設備(代碼)"] for r in clean_rows]
+            bar_data   = [r["停機時數(h)"] for r in clean_rows]
+            total_all  = sum(bar_data)
+            cumulative = []
+            running    = 0
+            for v in bar_data:
+                running += v
+                cumulative.append(round(running / total_all * 100, 1) if total_all > 0 else 0)
+            chart_config = {
+                "chart_type": "bar_line_combo",
+                "title":      f"停機時數 Pareto（Top {top_n}）{start_date} ~ {end_date}",
+                "labels":     labels,
+                "datasets": [
+                    {
+                        "type":            "bar",
+                        "label":           "停機時數 (h)",
+                        "data":            bar_data,
+                        "yAxisID":         "y_hours",
+                        "backgroundColor": "rgba(239, 68, 68, 0.6)",
+                        "borderColor":     "rgba(239, 68, 68, 1)",
+                    },
+                    {
+                        "type":        "line",
+                        "label":       "累積百分比 (%)",
+                        "data":        cumulative,
+                        "yAxisID":     "y_pct",
+                        "borderColor": "rgba(234, 179, 8, 1)",
+                        "fill":        False,
+                        "tension":     0.2,
+                    },
+                ],
+                "yAxes": {
+                    "y_hours": {"label": "停機時數 (h)", "position": "left"},
+                    "y_pct":   {"label": "累積百分比 (%)", "position": "right", "max": 100},
+                },
+            }
+
+        # Summary: total downtime per cause across all returned devices
+        cause_summary = {}
+        for r in clean_rows:
+            for col in ["計畫停機(h)", "設備故障(h)", "換模換料(h)", "品質異常(h)", "待料停工(h)"]:
+                cause_summary[col] = round(cause_summary.get(col, 0) + r[col], 2)
+
+        return {
+            "status":        "success",
+            "period":        f"{start_date} ~ {end_date}",
+            "floor":         floor or "全廠",
+            "top_n":         top_n,
+            "data":          clean_rows,
+            "cause_summary": cause_summary,
+            "chart_config":  chart_config,
+        }
+
+    # ══════════════════════════════════════════════════════════════════════════════
+    # EQ-F: Equipment fault pattern comparison across two time periods
+    # Compares DOWN code distribution: period A vs period B
+    # e.g. this quarter vs last quarter, 1H vs 2H
+    # ══════════════════════════════════════════════════════════════════════════════
+    def get_fault_pattern_comparison(
+        self,
+        period_a_start: str,
+        period_a_end: str,
+        period_b_start: str,
+        period_b_end: str,
+        period_a_label: str = "期間A",
+        period_b_label: str = "期間B",
+        equipment_code: str = None,
+        equipment_name: str = None,
+        floor: str = None,
+        include_chart: bool = False
+    ) -> Dict[str, Any]:
+        """
+        EQ-F: Compare DOWN code distribution between two time periods.
+        Can scope to a specific device, floor, or the entire factory.
+        Returns per-code hours for both periods + delta, optional multi_line chart.
+        """
+        DOWN_CODE_DESC = {
+            'A001': '計畫停機',
+            'A006': '設備故障',
+            'A007': '換模/換料',
+            'A008': '品質異常停線',
+            'A009': '待料停工',
+        }
+        DOWN_CODES = list(DOWN_CODE_DESC.keys())
+        codes_sql  = "','".join(DOWN_CODES)
+
+        # Optional equipment filter
+        topic_filter_a = ""
+        topic_filter_b = ""
+        eq_label = floor or "全廠"
+        if equipment_code or equipment_name:
+            safe_kw = (equipment_name or equipment_code or "").replace("'", "''")
+            info_q  = f"""
+                SELECT DISTINCT "EQUIPMENT_CODE", "EQUIPMENT_NAME", "TOPIC"
+                FROM "public"."EQUIPMENT_INFO_DICT"
+                WHERE "EQUIPMENT_NAME" ILIKE '%{safe_kw}%'
+                   OR "EQUIPMENT_CODE" ILIKE '%{safe_kw}%'
+                LIMIT 1
+            """
+            info_rows = self._execute_postgres_query(info_q)
+            if info_rows:
+                eq_code = info_rows[0].get("EQUIPMENT_CODE") or safe_kw
+                eq_top  = info_rows[0].get("TOPIC") or eq_code
+                eq_label = info_rows[0].get("EQUIPMENT_NAME") or eq_code
+                topic_filter_a = f'AND ("TOPIC" = \'{eq_code}\' OR "TOPIC" = \'{eq_top}\')'
+                topic_filter_b  = topic_filter_a
+        elif floor:
+            safe_floor = floor.replace("'", "''")
+            # Filter by TOPIC values belonging to that floor via EQUIPMENT_INFO_DICT
+            topic_filter_a = f"""
+                AND "TOPIC" IN (
+                    SELECT DISTINCT "TOPIC" FROM "public"."EQUIPMENT_INFO_DICT"
+                    WHERE "EQUIP_INSTALL_POSITION" ILIKE '%{safe_floor}%'
+                )
+            """
+            topic_filter_b = topic_filter_a
+
+        def _query_period(ymd_start: str, ymd_end: str, topic_filter: str) -> Dict[str, float]:
+            """Return {code: total_hours} for a date range."""
+            q = f"""
+                WITH deltas AS (
+                    SELECT
+                        LAG("CODE") OVER (PARTITION BY "TOPIC", "YMD" ORDER BY "DATETIMES") AS prev_code,
+                        (SUBSTRING("DATETIMES", 10, 2)::INT * 3600
+                         + SUBSTRING("DATETIMES", 12, 2)::INT * 60
+                         + CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT)
+                        - LAG(
+                            SUBSTRING("DATETIMES", 10, 2)::INT * 3600
+                            + SUBSTRING("DATETIMES", 12, 2)::INT * 60
+                            + CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT
+                        ) OVER (PARTITION BY "TOPIC", "YMD" ORDER BY "DATETIMES") AS duration_sec
+                    FROM "public"."CIM_MQTTCOLLECT"
+                    WHERE "YMD" BETWEEN '{ymd_start}' AND '{ymd_end}'
+                    {topic_filter}
+                )
+                SELECT
+                    prev_code AS "CODE",
+                    ROUND(SUM(CASE WHEN duration_sec > 0 THEN duration_sec ELSE 0 END) / 3600.0, 2) AS down_hours
+                FROM deltas
+                WHERE prev_code IN ('{codes_sql}')
+                GROUP BY prev_code
+                ORDER BY down_hours DESC
+            """
+            rows = self._execute_postgres_query(q)
+            return {r.get("CODE"): float(r.get("down_hours") or 0) for r in rows if r.get("CODE")}
+
+        a_ymd_s = period_a_start.replace('-', '')
+        a_ymd_e = period_a_end.replace('-', '')
+        b_ymd_s = period_b_start.replace('-', '')
+        b_ymd_e = period_b_end.replace('-', '')
+
+        hours_a = _query_period(a_ymd_s, a_ymd_e, topic_filter_a)
+        hours_b = _query_period(b_ymd_s, b_ymd_e, topic_filter_b)
+
+        # Build comparison table (all codes present in either period)
+        all_codes = sorted(set(list(hours_a.keys()) + list(hours_b.keys()) + DOWN_CODES))
+        comparison = []
+        for code in all_codes:
+            if code not in DOWN_CODE_DESC:
+                continue
+            ha = hours_a.get(code, 0)
+            hb = hours_b.get(code, 0)
+            delta = round(ha - hb, 2)
+            comparison.append({
+                "停機原因":                       DOWN_CODE_DESC[code],
+                "代碼":                           code,
+                f"{period_a_label} 停機(h)":     ha,
+                f"{period_b_label} 停機(h)":     hb,
+                "變化(h)":                        delta,
+                "趨勢":                           "⬆ 惡化" if delta > 0 else ("⬇ 改善" if delta < 0 else "─ 持平"),
+            })
+
+        # Sort by period_a hours desc
+        comparison.sort(key=lambda x: x.get(f"{period_a_label} 停機(h)", 0), reverse=True)
+
+        chart_config = None
+        if include_chart and comparison:
+            labels    = [r["停機原因"] for r in comparison]
+            data_a    = [r[f"{period_a_label} 停機(h)"] for r in comparison]
+            data_b    = [r[f"{period_b_label} 停機(h)"] for r in comparison]
+            chart_config = {
+                "chart_type": "bar_line_combo",
+                "title":      f"停機原因分布比對：{period_a_label} vs {period_b_label}（{eq_label}）",
+                "labels":     labels,
+                "datasets": [
+                    {
+                        "type":            "bar",
+                        "label":           f"{period_a_label} 停機(h)",
+                        "data":            data_a,
+                        "yAxisID":         "y_hours",
+                        "backgroundColor": "rgba(239, 68, 68, 0.65)",
+                        "borderColor":     "rgba(239, 68, 68, 1)",
+                    },
+                    {
+                        "type":            "bar",
+                        "label":           f"{period_b_label} 停機(h)",
+                        "data":            data_b,
+                        "yAxisID":         "y_hours",
+                        "backgroundColor": "rgba(99, 102, 241, 0.55)",
+                        "borderColor":     "rgba(99, 102, 241, 1)",
+                    },
+                ],
+                "yAxes": {
+                    "y_hours": {"label": "停機時數 (h)", "position": "left"},
+                },
+            }
+
+        return {
+            "status":         "success",
+            "scope":          eq_label,
+            "period_a":       f"{period_a_start} ~ {period_a_end}",
+            "period_b":       f"{period_b_start} ~ {period_b_end}",
+            "period_a_label": period_a_label,
+            "period_b_label": period_b_label,
+            "comparison":     comparison,
+            "chart_config":   chart_config,
+        }
 
     # ──────────────────────────────────────────────────────────────────────────────
     # Q1: Real-time operation status for each floor / line
