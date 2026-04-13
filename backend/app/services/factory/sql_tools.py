@@ -493,7 +493,6 @@ class FactorySqlTools:
             FROM "public"."EQUIPMENT_INFO_DICT"
             WHERE "EQUIPMENT_NAME" ILIKE '%{safe_kw}%'
                OR "EQUIPMENT_CODE" ILIKE '%{safe_kw}%'
-            LIMIT 20
         """
         info_rows = self._execute_postgres_query(info_q)
         if not info_rows:
@@ -503,7 +502,7 @@ class FactorySqlTools:
         eq_code  = info_rows[0].get("EQUIPMENT_CODE") or safe_kw
         topic    = info_rows[0].get("TOPIC") or eq_code
 
-        # Collect all unique work order numbers (GDHM) tied to this equipment
+        # Collect ALL unique GDHMs (work orders) across every row for this equipment
         unique_gdhms = list({r.get("GDHM") for r in info_rows if r.get("GDHM")})
 
         # ── Step 2: Resolve model names via MSSQL Daily_Status_Report ────────────
@@ -532,7 +531,7 @@ class FactorySqlTools:
                 SUM(COALESCE("BLSL", 0))     AS "不良數量"
             FROM "public"."CIM_MQTT_OK_NG_QTY"
             WHERE "YMD" BETWEEN '{start_ymd}' AND '{end_ymd}'
-              AND "SBMC" = '{topic}'
+              AND ("SBMC" = '{eq_code}' OR "SBMC" = '{topic}')
             GROUP BY "YMD"
             ORDER BY "YMD"
         """
