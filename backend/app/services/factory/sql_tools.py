@@ -859,7 +859,7 @@ class FactorySqlTools:
                 ON ei."TOPIC" = c."TOPIC"
             LEFT JOIN "public"."CIM_MQTTCODEERR" err
                 ON err."PLCCODE" = c."CODE"
-                AND err."MACHINE" = ei."EQUIPMENT_CODE"
+                AND err."MACHINE" = c."TOPIC"
             WHERE c."YMD" BETWEEN '{start_ymd}' AND '{end_ymd}'
               AND c."TOPIC" IN ({sbmc_in})
               AND err."NOTE" IS NOT NULL
@@ -1013,7 +1013,7 @@ class FactorySqlTools:
                 LEFT JOIN "public"."EQUIPMENT_INFO_DICT" ei ON ei."TOPIC" = c."TOPIC"
                 LEFT JOIN "public"."CIM_MQTTCODEERR" err
                     ON err."PLCCODE" = c."CODE"
-                    AND err."MACHINE" = ei."EQUIPMENT_CODE"
+                    AND err."MACHINE" = c."TOPIC"
                 WHERE c."YMD" BETWEEN '{ymd_start}' AND '{ymd_end}'
                   AND err."NOTE" IS NOT NULL
                 {topic_filter}
@@ -1163,7 +1163,7 @@ class FactorySqlTools:
             LEFT JOIN "public"."EQUIPMENT_INFO_DICT" ei ON ei."TOPIC" = c."TOPIC"
             LEFT JOIN "public"."CIM_MQTTCODEERR" err
                 ON err."PLCCODE" = c."CODE"
-                AND err."MACHINE" = ei."EQUIPMENT_CODE"
+                AND err."MACHINE" = c."TOPIC"
             WHERE c."YMD" BETWEEN '{start_ymd}' AND '{end_ymd}'
               AND err."NOTE" IS NOT NULL
               {floor_filter}
