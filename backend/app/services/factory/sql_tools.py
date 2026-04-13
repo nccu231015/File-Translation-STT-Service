@@ -850,21 +850,19 @@ class FactorySqlTools:
 
         note_query = f"""
             SELECT
-                COALESCE(ei."EQUIPMENT_CODE", c."TOPIC") AS "設備代碼",
-                err."NOTE"                                AS "故障原因",
-                err."CATE"                                AS "異常類別",
-                COUNT(*)                                   AS "發生次數"
+                c."TOPIC"  AS "設備代碼",
+                err."NOTE" AS "故障原因",
+                err."CATE" AS "異常類別",
+                COUNT(*)   AS "發生次數"
             FROM "public"."CIM_MQTTCOLLECT" c
-            LEFT JOIN "public"."EQUIPMENT_INFO_DICT" ei
-                ON ei."TOPIC" = c."TOPIC"
             LEFT JOIN "public"."CIM_MQTTCODEERR" err
                 ON err."PLCCODE" = c."CODE"
                 AND err."MACHINE" = c."TOPIC"
             WHERE c."YMD" BETWEEN '{start_ymd}' AND '{end_ymd}'
               AND c."TOPIC" IN ({sbmc_in})
               AND err."NOTE" IS NOT NULL
-            GROUP BY COALESCE(ei."EQUIPMENT_CODE", c."TOPIC"), err."NOTE", err."CATE"
-            ORDER BY "設備代碼", "發生次數" DESC
+            GROUP BY c."TOPIC", err."NOTE", err."CATE"
+            ORDER BY c."TOPIC", "發生次數" DESC
         """
         note_rows = self._execute_postgres_query(note_query)
 
