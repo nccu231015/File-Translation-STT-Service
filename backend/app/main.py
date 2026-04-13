@@ -854,7 +854,12 @@ async def factory_chat(payload: dict, background_tasks: BackgroundTasks):
             n8n_resp.raise_for_status()
             raw = n8n_resp.text.strip()
             if not raw:
-                raise ValueError("n8n webhook returned an empty response body. Check n8n workflow logs.")
+                print("[Factory API Warning] n8n returned empty body – workflow may have an unhandled route.", flush=True)
+                return {
+                    "response": "抱歉，系統目前無法處理這個問題（後端工作流程未回傳任何資料）。請稍後再試，或換一個問法。",
+                    "session_id": str(session_id),
+                    "chart_config": None,
+                }
             result = n8n_resp.json()
 
         response_text = result.get("response", "")
