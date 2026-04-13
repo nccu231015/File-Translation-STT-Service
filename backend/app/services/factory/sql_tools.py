@@ -154,19 +154,22 @@ class FactorySqlTools:
                 GROUP BY "SBMC"
             ),
             deltas AS (
-                SELECT "TOPIC" AS "SBMC", "CODE",
-                       (SUBSTRING("DATETIMES", 10, 2)::INT * 3600 + SUBSTRING("DATETIMES", 12, 2)::INT * 60 + CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT) -
-                       LAG(SUBSTRING("DATETIMES", 10, 2)::INT * 3600 + SUBSTRING("DATETIMES", 12, 2)::INT * 60 + CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT)
-                       OVER (PARTITION BY "TOPIC" ORDER BY "DATETIMES") AS duration_sec
+                SELECT
+                    "TOPIC" AS "SBMC",
+                    -- duration belongs to the PREVIOUS state, so use LAG(CODE) for attribution
+                    LAG("CODE") OVER (PARTITION BY "TOPIC" ORDER BY "DATETIMES") AS prev_code,
+                    (SUBSTRING("DATETIMES", 10, 2)::INT * 3600 + SUBSTRING("DATETIMES", 12, 2)::INT * 60 + CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT) -
+                    LAG(SUBSTRING("DATETIMES", 10, 2)::INT * 3600 + SUBSTRING("DATETIMES", 12, 2)::INT * 60 + CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT)
+                    OVER (PARTITION BY "TOPIC" ORDER BY "DATETIMES") AS duration_sec
                 FROM "public"."CIM_MQTTCOLLECT"
                 WHERE "YMD" = '{target_ymd}'
             ),
             times AS (
                 SELECT "SBMC",
-                       ROUND(SUM(CASE WHEN "CODE" = 'A003' AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "RUN",
-                       ROUND(SUM(CASE WHEN "CODE" IN ('A001','A006','A007','A008','A009') AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "DOWN",
-                       ROUND(SUM(CASE WHEN "CODE" IN ('A002','A011','A012','A013','A014') AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "IDEL",
-                       ROUND(SUM(CASE WHEN "CODE" IN ('A004','A010') AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "SHUTDOWN"
+                       ROUND(SUM(CASE WHEN prev_code = 'A003' AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "RUN",
+                       ROUND(SUM(CASE WHEN prev_code IN ('A001','A006','A007','A008','A009') AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "DOWN",
+                       ROUND(SUM(CASE WHEN prev_code IN ('A002','A011','A012','A013','A014') AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "IDEL",
+                       ROUND(SUM(CASE WHEN prev_code IN ('A004','A010') AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "SHUTDOWN"
                 FROM deltas GROUP BY "SBMC"
             )
             SELECT
@@ -335,19 +338,22 @@ class FactorySqlTools:
                 GROUP BY "SBMC"
             ),
             deltas AS (
-                SELECT "TOPIC" AS "SBMC", "CODE",
-                       (SUBSTRING("DATETIMES", 10, 2)::INT * 3600 + SUBSTRING("DATETIMES", 12, 2)::INT * 60 + CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT) -
-                       LAG(SUBSTRING("DATETIMES", 10, 2)::INT * 3600 + SUBSTRING("DATETIMES", 12, 2)::INT * 60 + CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT)
-                       OVER (PARTITION BY "TOPIC" ORDER BY "DATETIMES") AS duration_sec
+                SELECT
+                    "TOPIC" AS "SBMC",
+                    -- duration belongs to the PREVIOUS state, so use LAG(CODE) for attribution
+                    LAG("CODE") OVER (PARTITION BY "TOPIC" ORDER BY "DATETIMES") AS prev_code,
+                    (SUBSTRING("DATETIMES", 10, 2)::INT * 3600 + SUBSTRING("DATETIMES", 12, 2)::INT * 60 + CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT) -
+                    LAG(SUBSTRING("DATETIMES", 10, 2)::INT * 3600 + SUBSTRING("DATETIMES", 12, 2)::INT * 60 + CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT)
+                    OVER (PARTITION BY "TOPIC" ORDER BY "DATETIMES") AS duration_sec
                 FROM "public"."CIM_MQTTCOLLECT"
                 WHERE "YMD" = '{target_ymd}'
             ),
             times AS (
                 SELECT "SBMC",
-                       ROUND(SUM(CASE WHEN "CODE" = 'A003' AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "RUN",
-                       ROUND(SUM(CASE WHEN "CODE" IN ('A001','A006','A007','A008','A009') AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "DOWN",
-                       ROUND(SUM(CASE WHEN "CODE" IN ('A002','A011','A012','A013','A014') AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "IDEL",
-                       ROUND(SUM(CASE WHEN "CODE" IN ('A004','A010') AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "SHUTDOWN"
+                       ROUND(SUM(CASE WHEN prev_code = 'A003' AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "RUN",
+                       ROUND(SUM(CASE WHEN prev_code IN ('A001','A006','A007','A008','A009') AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "DOWN",
+                       ROUND(SUM(CASE WHEN prev_code IN ('A002','A011','A012','A013','A014') AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "IDEL",
+                       ROUND(SUM(CASE WHEN prev_code IN ('A004','A010') AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "SHUTDOWN"
                 FROM deltas GROUP BY "SBMC"
             )
             SELECT
