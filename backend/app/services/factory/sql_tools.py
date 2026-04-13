@@ -718,9 +718,10 @@ class FactorySqlTools:
         self, target_date: str = None, lookback_days: int = 1, limit: int = 15
     ) -> Dict[str, Any]:
         """
-        Q4: Rank production lines by defect rate (BAD_PRO_RATE / ACTUAL_PRO).
+        Q4: Rank production lines by defect rate (NG_NUM / ACTUAL_PRO).
         lookback_days=1: today only.  lookback_days>1: rolling N-day window.
         Returns top-N lines sorted by defect rate descending.
+        Only includes lines with ACTUAL_PRO > 0 (has production records).
         """
         if not target_date:
             target_date = datetime.date.today().isoformat()
@@ -750,7 +751,7 @@ class FactorySqlTools:
             FROM [dbo].[Daily_Status_Report]
             WHERE {time_cond}
               AND [NO] IS NOT NULL
-              AND NG_NUM > 0
+              AND ACTUAL_PRO > 0
             GROUP BY [NO], jz
             ORDER BY [不良率百分比] DESC
         """
