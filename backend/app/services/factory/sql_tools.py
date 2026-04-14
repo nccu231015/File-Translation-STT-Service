@@ -689,11 +689,12 @@ class FactorySqlTools:
         end_date: str,
         top_n: int = 10,
         floor: str = None,
-        include_chart: bool = False
+        include_chart: bool = False,
+        include_cause: bool = False
     ) -> Dict[str, Any]:
         """
         EQ-E: Rank equipment by total downtime hours in [start_date, end_date].
-        Returns Top-N list with per-code breakdown and optional Pareto chart_config.
+        Returns Top-N list. include_cause=True adds 主要停機原因 via B-code co-occurrence.
         """
         start_ymd = start_date.replace('-', '')
         end_ymd   = end_date.replace('-', '')
@@ -762,51 +763,55 @@ class FactorySqlTools:
                 "chart_config": None,
             }
 
-        # Secondary query: fetch the most frequent fault NOTE (停機原因) per device
-        # from CIM_MQTTCOLLECT_AM_PM JOIN CIM_MQTTCODEERR using CODETYPE='B' + PLCCODE match
+        # Secondary query: fetch 主要停機原因 only when requested
+        # Strategy: B-codes appear within the same second as A001/A006-A009 (co-occurrence)
+        # B-code PLCCODE maps to CIM_MQTTCODEERR.NOTE for fault description
         topic_list = [r.get("設備代碼") for r in rows if r.get("設備代碼")]
         cause_map: Dict[str, str] = {}
-        if topic_list:
+        if include_cause and topic_list:
             topics_in = ",".join(f"'{t}'" for t in topic_list)
             cause_query = f"""
                 SELECT * FROM (
                     SELECT
-                        am."TOPIC",
+                        b."TOPIC",
                         err."NOTE",
-                        COUNT(0) AS "CS",
+                        COUNT(*) AS "CS",
                         ROW_NUMBER() OVER (
-                            PARTITION BY am."TOPIC"
-                            ORDER BY COUNT(0) DESC
+                            PARTITION BY b."TOPIC"
+                            ORDER BY COUNT(*) DESC
                         ) AS "RN"
-                    FROM "public"."CIM_MQTTCOLLECT_AM_PM" am
-                    LEFT JOIN "public"."CIM_MQTTCODEERR" err
-                        ON am."TOPIC" = err."MACHINE"
-                        AND am."CODE" = err."PLCCODE"
-                    WHERE err."CODETYPE" = 'B'
-                      AND am."CODE" IN (
-                          SELECT "PLCCODE" FROM "public"."CIM_MQTTCODEERR"
+                    FROM "public"."CIM_MQTTCOLLECT_AM_PM" b
+                    JOIN "public"."CIM_MQTTCODEERR" err ON b."CODE" = err."PLCCODE"
+                    WHERE b."CODE" LIKE 'B%'
+                      AND SUBSTRING(b."DATETIMES", 1, 8) BETWEEN '{start_ymd}' AND '{end_ymd}'
+                      AND b."TOPIC" IN ({topics_in})
+                      AND EXISTS (
+                          SELECT 1 FROM "public"."CIM_MQTTCOLLECT_AM_PM" a
+                          WHERE a."TOPIC" = b."TOPIC"
+                            AND a."CODE" IN ('A001','A006','A007','A008','A009')
+                            AND SUBSTRING(a."DATETIMES", 1, 15) = SUBSTRING(b."DATETIMES", 1, 15)
                       )
-                      AND SUBSTRING(am."DATETIMES", 1, 8) BETWEEN '{start_ymd}' AND '{end_ymd}'
-                      AND am."TOPIC" IN ({topics_in})
-                    GROUP BY am."TOPIC", err."NOTE"
+                    GROUP BY b."TOPIC", err."NOTE"
                 ) "S"
                 WHERE "S"."RN" = 1
             """
             cause_rows = self._execute_postgres_query(cause_query)
             cause_map = {r["TOPIC"]: r.get("NOTE") or "-" for r in cause_rows if r.get("TOPIC")}
 
-        # Build clean output rows with 主要停機原因
+        # Build clean output rows
         clean_rows = []
         for r in rows:
             hrs   = float(r.get("停機時數(h)") or 0)
             topic = r.get("設備代碼", "")
-            clean_rows.append({
-                "排名":         len(clean_rows) + 1,
-                "樓層":         r.get("樓層", "N/A"),
-                "設備(代碼)":   f"{r.get('設備名稱')} ({topic})",
-                "停機時數(h)":  hrs,
-                "主要停機原因": cause_map.get(topic, "-"),
-            })
+            row = {
+                "排名":        len(clean_rows) + 1,
+                "樓層":        r.get("樓層", "N/A"),
+                "設備(代碼)":  f"{r.get('設備名稱')} ({topic})",
+                "停機時數(h)": hrs,
+            }
+            if include_cause:
+                row["主要停機原因"] = cause_map.get(topic, "-")
+            clean_rows.append(row)
 
         # Pareto chart: bars = total hours desc, line = cumulative %
         chart_config = None
@@ -1020,28 +1025,30 @@ class FactorySqlTools:
             if safe_floor else ''
         )
 
-        # Join CIM_MQTTCOLLECT_AM_PM (actual occurrences with SJ timestamp) with
-        # CIM_MQTTCODEERR (fault reference) to get real occurrence counts in the date range.
-        # SJ format is YYYYMMDDHHMMSS; SUBSTRING(SJ, 1, 8) gives YYYYMMDD for date filter.
+        # Join B-codes (fault reason) with co-occurring DOWN events (A001/A006-A009)
+        # B-codes appear within the same second as DOWN A-codes (co-occurrence pattern confirmed)
+        # No CATE filter needed - B-code CATE is mostly IDEL/IDEL1, not DOWN
         query = f"""
             SELECT
-                COALESCE(ei."EQUIPMENT_NAME", am."TOPIC") AS "設備名稱",
-                err."NOTE"                                 AS "故障原因",
-                err."CATE"                                 AS "異常類別",
-                COUNT(*)                                   AS "發生次數"
-            FROM "public"."CIM_MQTTCOLLECT_AM_PM" am
-            JOIN "public"."CIM_MQTTCODEERR" err
-                ON am."TOPIC" = err."MACHINE"
-                AND am."CODE" = err."PLCCODE"
-            LEFT JOIN "public"."EQUIPMENT_INFO_DICT" ei ON ei."TOPIC" = am."TOPIC"
-            WHERE err."CODETYPE" = 'B'
+                COALESCE(ei."EQUIPMENT_NAME", b."TOPIC") AS "設備名稱",
+                err."NOTE"                                AS "故障原因",
+                COUNT(*)                                  AS "發生次數"
+            FROM "public"."CIM_MQTTCOLLECT_AM_PM" b
+            JOIN "public"."CIM_MQTTCODEERR" err ON b."CODE" = err."PLCCODE"
+            LEFT JOIN "public"."EQUIPMENT_INFO_DICT" ei ON ei."TOPIC" = b."TOPIC"
+            WHERE b."CODE" LIKE 'B%'
               AND err."NOTE" IS NOT NULL
-              AND err."CATE" = 'DOWN'
-              AND SUBSTRING(am."DATETIMES", 1, 8) BETWEEN '{start_ymd}' AND '{end_ymd}'
+              AND SUBSTRING(b."DATETIMES", 1, 8) BETWEEN '{start_ymd}' AND '{end_ymd}'
+              AND EXISTS (
+                  SELECT 1 FROM "public"."CIM_MQTTCOLLECT_AM_PM" a
+                  WHERE a."TOPIC" = b."TOPIC"
+                    AND a."CODE" IN ('A001','A006','A007','A008','A009')
+                    AND SUBSTRING(a."DATETIMES", 1, 15) = SUBSTRING(b."DATETIMES", 1, 15)
+              )
               {floor_filter}
             GROUP BY
-                COALESCE(ei."EQUIPMENT_NAME", am."TOPIC"),
-                err."NOTE", err."CATE"
+                COALESCE(ei."EQUIPMENT_NAME", b."TOPIC"),
+                err."NOTE"
             ORDER BY "發生次數" DESC
         """
         rows = self._execute_postgres_query(query)
@@ -1067,7 +1074,6 @@ class FactorySqlTools:
                 continue
             eq_totals[equip]   = eq_totals.get(equip, 0) + cnt
             note_totals[note]  = note_totals.get(note, 0) + cnt
-            note_cate[note]    = r.get("異常類別") or "未分類"
             if note not in matrix_raw:
                 matrix_raw[note] = {}
             matrix_raw[note][equip] = matrix_raw[note].get(equip, 0) + cnt
