@@ -153,21 +153,21 @@ class FactorySqlTools:
             ),
             deltas AS (
                 -- Compute duration per state interval using LAG within (TOPIC, date)
-                -- Source: CIM_MQTTCOLLECT_AM_PM; SJ format = YYYYMMDDHHMMSS
+                -- Source: CIM_MQTTCOLLECT_AM_PM; DATETIMES format = YYYYMMDDTHHMMSS.xxxxx
                 SELECT
                     "TOPIC" AS "SBMC",
-                    LAG("CODE") OVER (PARTITION BY "TOPIC", SUBSTRING("SJ", 1, 8) ORDER BY "SJ") AS prev_code,
-                    (SUBSTRING("SJ", 9, 2)::INT * 3600
-                     + SUBSTRING("SJ", 11, 2)::INT * 60
-                     + SUBSTRING("SJ", 13, 2)::INT)
+                    LAG("CODE") OVER (PARTITION BY "TOPIC", SUBSTRING("DATETIMES", 1, 8) ORDER BY "DATETIMES") AS prev_code,
+                    (SUBSTRING("DATETIMES", 10, 2)::INT * 3600
+                     + SUBSTRING("DATETIMES", 12, 2)::INT * 60
+                     + SUBSTRING("DATETIMES", 14, 2)::INT)
                     - LAG(
-                        SUBSTRING("SJ", 9, 2)::INT * 3600
-                        + SUBSTRING("SJ", 11, 2)::INT * 60
-                        + SUBSTRING("SJ", 13, 2)::INT
-                    ) OVER (PARTITION BY "TOPIC", SUBSTRING("SJ", 1, 8) ORDER BY "SJ") AS duration_sec
+                        SUBSTRING("DATETIMES", 10, 2)::INT * 3600
+                        + SUBSTRING("DATETIMES", 12, 2)::INT * 60
+                        + SUBSTRING("DATETIMES", 14, 2)::INT
+                    ) OVER (PARTITION BY "TOPIC", SUBSTRING("DATETIMES", 1, 8) ORDER BY "DATETIMES") AS duration_sec
                 FROM "public"."CIM_MQTTCOLLECT_AM_PM"
-                WHERE SUBSTRING("SJ", 1, 8) = '{target_ymd}'
-                  AND LENGTH("SJ") >= 14
+                WHERE SUBSTRING("DATETIMES", 1, 8) = '{target_ymd}'
+                  AND LENGTH("DATETIMES") >= 14
             ),
             times AS (
                 -- Classify each interval into RUN/DOWN/IDEL/SHUTDOWN using confirmed code mapping
@@ -344,21 +344,21 @@ class FactorySqlTools:
             ),
             deltas AS (
                 -- LAG-based duration within each (TOPIC, date) to avoid cross-day bleeding
-                -- Source: CIM_MQTTCOLLECT_AM_PM; SJ format = YYYYMMDDHHMMSS
+                -- Source: CIM_MQTTCOLLECT_AM_PM; DATETIMES format = YYYYMMDDTHHMMSS.xxxxx
                 SELECT
                     "TOPIC" AS "SBMC",
-                    LAG("CODE") OVER (PARTITION BY "TOPIC", SUBSTRING("SJ", 1, 8) ORDER BY "SJ") AS prev_code,
-                    (SUBSTRING("SJ", 9, 2)::INT * 3600
-                     + SUBSTRING("SJ", 11, 2)::INT * 60
-                     + SUBSTRING("SJ", 13, 2)::INT)
+                    LAG("CODE") OVER (PARTITION BY "TOPIC", SUBSTRING("DATETIMES", 1, 8) ORDER BY "DATETIMES") AS prev_code,
+                    (SUBSTRING("DATETIMES", 10, 2)::INT * 3600
+                     + SUBSTRING("DATETIMES", 12, 2)::INT * 60
+                     + SUBSTRING("DATETIMES", 14, 2)::INT)
                     - LAG(
-                        SUBSTRING("SJ", 9, 2)::INT * 3600
-                        + SUBSTRING("SJ", 11, 2)::INT * 60
-                        + SUBSTRING("SJ", 13, 2)::INT
-                    ) OVER (PARTITION BY "TOPIC", SUBSTRING("SJ", 1, 8) ORDER BY "SJ") AS duration_sec
+                        SUBSTRING("DATETIMES", 10, 2)::INT * 3600
+                        + SUBSTRING("DATETIMES", 12, 2)::INT * 60
+                        + SUBSTRING("DATETIMES", 14, 2)::INT
+                    ) OVER (PARTITION BY "TOPIC", SUBSTRING("DATETIMES", 1, 8) ORDER BY "DATETIMES") AS duration_sec
                 FROM "public"."CIM_MQTTCOLLECT_AM_PM"
-                WHERE SUBSTRING("SJ", 1, 8) = '{target_ymd}'
-                  AND LENGTH("SJ") >= 14
+                WHERE SUBSTRING("DATETIMES", 1, 8) = '{target_ymd}'
+                  AND LENGTH("DATETIMES") >= 14
             ),
             times AS (
                 -- Aggregate minutes per state category using confirmed code mapping
@@ -400,7 +400,7 @@ class FactorySqlTools:
         from datetime import datetime as dt, timedelta
 
         # Current state: classify latest CODE per device using confirmed code mapping
-        # Source: CIM_MQTTCOLLECT_AM_PM; SJ format = YYYYMMDDHHMMSS
+        # Source: CIM_MQTTCOLLECT_AM_PM; DATETIMES format = YYYYMMDDTHHMMSS.xxxxx
         seven_days_ago_ymd = (dt.strptime(target_date, "%Y-%m-%d") - timedelta(days=7)).strftime("%Y%m%d")
         query_state = f"""
             SELECT
@@ -417,11 +417,11 @@ class FactorySqlTools:
                 SELECT "TOPIC", "CODE",
                        ROW_NUMBER() OVER (
                            PARTITION BY "TOPIC"
-                           ORDER BY "SJ" DESC
+                           ORDER BY "DATETIMES" DESC
                        ) AS rn
                 FROM "public"."CIM_MQTTCOLLECT_AM_PM"
-                WHERE SUBSTRING("SJ", 1, 8) >= '{seven_days_ago_ymd}'
-                  AND LENGTH("SJ") >= 14
+                WHERE SUBSTRING("DATETIMES", 1, 8) >= '{seven_days_ago_ymd}'
+                  AND LENGTH("DATETIMES") >= 14
                   AND "CODE" IN ('A001','A002','A003','A004','A006','A007','A008','A009','A010','A011','A012','A013','A014')
             ) sub
             LEFT JOIN "public"."EQUIPMENT_INFO_DICT" e ON e."TOPIC" = sub."TOPIC"
@@ -707,23 +707,23 @@ class FactorySqlTools:
                 ORDER BY "EQUIPMENT_CODE", "GDHM" DESC NULLS LAST
             ),
             -- LAG within each (TOPIC, date) to avoid cross-day bleeding
-            -- Source: CIM_MQTTCOLLECT_AM_PM; SJ format = YYYYMMDDHHMMSS
+            -- Source: CIM_MQTTCOLLECT_AM_PM; DATETIMES format = YYYYMMDDTHHMMSS.xxxxx
             deltas AS (
                 SELECT
                     "TOPIC" AS "SBMC",
-                    SUBSTRING("SJ", 1, 8) AS "YMD",
-                    LAG("CODE") OVER (PARTITION BY "TOPIC", SUBSTRING("SJ", 1, 8) ORDER BY "SJ") AS prev_code,
-                    (SUBSTRING("SJ", 9, 2)::INT * 3600
-                     + SUBSTRING("SJ", 11, 2)::INT * 60
-                     + SUBSTRING("SJ", 13, 2)::INT)
+                    SUBSTRING("DATETIMES", 1, 8) AS "YMD",
+                    LAG("CODE") OVER (PARTITION BY "TOPIC", SUBSTRING("DATETIMES", 1, 8) ORDER BY "DATETIMES") AS prev_code,
+                    (SUBSTRING("DATETIMES", 10, 2)::INT * 3600
+                     + SUBSTRING("DATETIMES", 12, 2)::INT * 60
+                     + SUBSTRING("DATETIMES", 14, 2)::INT)
                     - LAG(
-                        SUBSTRING("SJ", 9, 2)::INT * 3600
-                        + SUBSTRING("SJ", 11, 2)::INT * 60
-                        + SUBSTRING("SJ", 13, 2)::INT
-                    ) OVER (PARTITION BY "TOPIC", SUBSTRING("SJ", 1, 8) ORDER BY "SJ") AS duration_sec
+                        SUBSTRING("DATETIMES", 10, 2)::INT * 3600
+                        + SUBSTRING("DATETIMES", 12, 2)::INT * 60
+                        + SUBSTRING("DATETIMES", 14, 2)::INT
+                    ) OVER (PARTITION BY "TOPIC", SUBSTRING("DATETIMES", 1, 8) ORDER BY "DATETIMES") AS duration_sec
                 FROM "public"."CIM_MQTTCOLLECT_AM_PM"
-                WHERE SUBSTRING("SJ", 1, 8) BETWEEN '{start_ymd}' AND '{end_ymd}'
-                  AND LENGTH("SJ") >= 14
+                WHERE SUBSTRING("DATETIMES", 1, 8) BETWEEN '{start_ymd}' AND '{end_ymd}'
+                  AND LENGTH("DATETIMES") >= 14
             ),
             -- Sum DOWN-only intervals: A001/A006-A009
             down_totals AS (
@@ -780,7 +780,7 @@ class FactorySqlTools:
                       AND am."CODE" IN (
                           SELECT "PLCCODE" FROM "public"."CIM_MQTTCODEERR"
                       )
-                      AND SUBSTRING(am."SJ", 1, 8) BETWEEN '{start_ymd}' AND '{end_ymd}'
+                      AND SUBSTRING(am."DATETIMES", 1, 8) BETWEEN '{start_ymd}' AND '{end_ymd}'
                       AND am."TOPIC" IN ({topics_in})
                     GROUP BY am."TOPIC", err."NOTE"
                 ) "S"
@@ -906,22 +906,22 @@ class FactorySqlTools:
 
         def _query_period(ymd_start: str, ymd_end: str, topic_filter: str) -> float:
             """Return total DOWN-state duration (h) for a date range (A001/A006-A009 only).
-            Source: CIM_MQTTCOLLECT_AM_PM; SJ format = YYYYMMDDHHMMSS."""
+            Source: CIM_MQTTCOLLECT_AM_PM; DATETIMES format = YYYYMMDDTHHMMSS.xxxxx."""
             q = f"""
                 WITH deltas AS (
                     SELECT
-                        LAG("CODE") OVER (PARTITION BY "TOPIC", SUBSTRING("SJ", 1, 8) ORDER BY "SJ") AS prev_code,
-                        (SUBSTRING("SJ", 9, 2)::INT * 3600
-                         + SUBSTRING("SJ", 11, 2)::INT * 60
-                         + SUBSTRING("SJ", 13, 2)::INT)
+                        LAG("CODE") OVER (PARTITION BY "TOPIC", SUBSTRING("DATETIMES", 1, 8) ORDER BY "DATETIMES") AS prev_code,
+                        (SUBSTRING("DATETIMES", 10, 2)::INT * 3600
+                         + SUBSTRING("DATETIMES", 12, 2)::INT * 60
+                         + SUBSTRING("DATETIMES", 14, 2)::INT)
                         - LAG(
-                            SUBSTRING("SJ", 9, 2)::INT * 3600
-                            + SUBSTRING("SJ", 11, 2)::INT * 60
-                            + SUBSTRING("SJ", 13, 2)::INT
-                        ) OVER (PARTITION BY "TOPIC", SUBSTRING("SJ", 1, 8) ORDER BY "SJ") AS duration_sec
+                            SUBSTRING("DATETIMES", 10, 2)::INT * 3600
+                            + SUBSTRING("DATETIMES", 12, 2)::INT * 60
+                            + SUBSTRING("DATETIMES", 14, 2)::INT
+                        ) OVER (PARTITION BY "TOPIC", SUBSTRING("DATETIMES", 1, 8) ORDER BY "DATETIMES") AS duration_sec
                     FROM "public"."CIM_MQTTCOLLECT_AM_PM"
-                    WHERE SUBSTRING("SJ", 1, 8) BETWEEN '{ymd_start}' AND '{ymd_end}'
-                      AND LENGTH("SJ") >= 14
+                    WHERE SUBSTRING("DATETIMES", 1, 8) BETWEEN '{ymd_start}' AND '{ymd_end}'
+                      AND LENGTH("DATETIMES") >= 14
                     {topic_filter}
                 )
                 SELECT
@@ -1031,7 +1031,7 @@ class FactorySqlTools:
             WHERE err."CODETYPE" = 'B'
               AND err."NOTE" IS NOT NULL
               AND err."CATE" = 'DOWN'
-              AND SUBSTRING(am."SJ", 1, 8) BETWEEN '{start_ymd}' AND '{end_ymd}'
+              AND SUBSTRING(am."DATETIMES", 1, 8) BETWEEN '{start_ymd}' AND '{end_ymd}'
               {floor_filter}
             GROUP BY
                 COALESCE(ei."EQUIPMENT_NAME", am."TOPIC"),
