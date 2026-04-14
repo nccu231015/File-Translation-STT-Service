@@ -132,13 +132,9 @@ class FactorySqlTools:
         target_date: str = None
     ) -> Dict[str, Any]:
         """
-        EQ-A: Real-time equipment operation status grouped by floor.
-        稼動率 via LAG-based state-transition timing from CIM_MQTTCOLLECT:
-          - A003            -> RUN
-          - A001,A006-A009  -> DOWN
-          - A002,A011-A014  -> IDEL
-          - A004,A010       -> SHUTDOWN
-        良率 from CIM_MQTT_OK_NG_QTY LPSL/BLSL.
+        EQ-A: Equipment production summary grouped by floor.
+        Returns RUN/DOWN/IDEL/SHUTDOWN minutes, 稼動率, and 良品數/不良數/良率 per device.
+        Code classification: RUN=A003, DOWN=A001/A006-A009, IDEL=A002/A011-A014, SHUTDOWN=A004/A010.
         """
         if not target_date:
             target_date = datetime.date.today().isoformat()
@@ -155,30 +151,38 @@ class FactorySqlTools:
                 FROM "public"."EQUIPMENT_INFO_DICT"
                 ORDER BY "EQUIPMENT_CODE", "GDHM" DESC NULLS LAST
             ),
+            deltas AS (
+                -- Compute duration per state interval using LAG within (TOPIC, YMD)
+                SELECT
+                    "TOPIC" AS "SBMC",
+                    LAG("CODE") OVER (PARTITION BY "TOPIC", "YMD" ORDER BY "DATETIMES") AS prev_code,
+                    (SUBSTRING("DATETIMES", 10, 2)::INT * 3600
+                     + SUBSTRING("DATETIMES", 12, 2)::INT * 60
+                     + CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT)
+                    - LAG(
+                        SUBSTRING("DATETIMES", 10, 2)::INT * 3600
+                        + SUBSTRING("DATETIMES", 12, 2)::INT * 60
+                        + CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT
+                    ) OVER (PARTITION BY "TOPIC", "YMD" ORDER BY "DATETIMES") AS duration_sec
+                FROM "public"."CIM_MQTTCOLLECT"
+                WHERE "YMD" = '{target_ymd}'
+            ),
+            times AS (
+                -- Classify each interval into RUN/DOWN/IDEL/SHUTDOWN using confirmed code mapping
+                SELECT "SBMC",
+                    ROUND(SUM(CASE WHEN prev_code = 'A003' AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "RUN",
+                    ROUND(SUM(CASE WHEN prev_code IN ('A001','A006','A007','A008','A009') AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "DOWN",
+                    ROUND(SUM(CASE WHEN prev_code IN ('A002','A011','A012','A013','A014') AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "IDEL",
+                    ROUND(SUM(CASE WHEN prev_code IN ('A004','A010') AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "SHUTDOWN"
+                FROM deltas
+                WHERE prev_code IS NOT NULL
+                GROUP BY "SBMC"
+            ),
             daily_qty AS (
                 SELECT "SBMC", SUM("LPSL") AS "LPSL", SUM("BLSL") AS "BLSL"
                 FROM "public"."CIM_MQTT_OK_NG_QTY"
                 WHERE "YMD" = '{target_ymd}'
                 GROUP BY "SBMC"
-            ),
-            deltas AS (
-                SELECT
-                    "TOPIC" AS "SBMC",
-                    -- duration belongs to the PREVIOUS state, so use LAG(CODE) for attribution
-                    LAG("CODE") OVER (PARTITION BY "TOPIC" ORDER BY "DATETIMES") AS prev_code,
-                    (SUBSTRING("DATETIMES", 10, 2)::INT * 3600 + SUBSTRING("DATETIMES", 12, 2)::INT * 60 + CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT) -
-                    LAG(SUBSTRING("DATETIMES", 10, 2)::INT * 3600 + SUBSTRING("DATETIMES", 12, 2)::INT * 60 + CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT)
-                    OVER (PARTITION BY "TOPIC" ORDER BY "DATETIMES") AS duration_sec
-                FROM "public"."CIM_MQTTCOLLECT"
-                WHERE "YMD" = '{target_ymd}'
-            ),
-            times AS (
-                SELECT "SBMC",
-                       ROUND(SUM(CASE WHEN prev_code = 'A003' AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "RUN",
-                       ROUND(SUM(CASE WHEN prev_code IN ('A001','A006','A007','A008','A009') AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "DOWN",
-                       ROUND(SUM(CASE WHEN prev_code IN ('A002','A011','A012','A013','A014') AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "IDEL",
-                       ROUND(SUM(CASE WHEN prev_code IN ('A004','A010') AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "SHUTDOWN"
-                FROM deltas GROUP BY "SBMC"
             )
             SELECT
                 COALESCE(e."EQUIP_INSTALL_POSITION", 'N/A')  AS "樓層",
@@ -186,17 +190,19 @@ class FactorySqlTools:
                 e."EQUIPMENT_NAME"                            AS "設備名稱",
                 COALESCE(t."RUN", 0)                          AS "RUN(分)",
                 COALESCE(t."DOWN", 0)                         AS "DOWN(分)",
+                COALESCE(t."IDEL", 0)                         AS "IDEL(分)",
+                COALESCE(t."SHUTDOWN", 0)                     AS "SHUTDOWN(分)",
                 CASE WHEN (COALESCE(t."RUN", 0) + COALESCE(t."DOWN", 0)) > 0
-                     THEN ROUND((COALESCE(t."RUN", 0)::FLOAT / (COALESCE(t."RUN", 0) + COALESCE(t."DOWN", 0)) * 100)::NUMERIC, 1)
-                     ELSE 0 END                               AS "稼動率(%)",
+                     THEN ROUND((COALESCE(t."RUN", 0)::FLOAT / (COALESCE(t."RUN", 0) + COALESCE(t."DOWN", 0)) * 100)::NUMERIC, 2)
+                     ELSE NULL END                            AS "稼動率(%)",
                 COALESCE(q."LPSL", 0)                         AS "良品數量",
                 COALESCE(q."BLSL", 0)                         AS "不良數量",
                 CASE WHEN (COALESCE(q."LPSL", 0) + COALESCE(q."BLSL", 0)) > 0
                      THEN ROUND((COALESCE(q."LPSL", 0)::FLOAT / (COALESCE(q."LPSL", 0) + COALESCE(q."BLSL", 0)) * 100)::NUMERIC, 2)
                      ELSE NULL END                            AS "良率(%)"
             FROM eq_info e
-            LEFT JOIN daily_qty q ON (q."SBMC" = e."TOPIC" OR q."SBMC" = e."EQUIPMENT_CODE")
             LEFT JOIN times t ON (t."SBMC" = e."TOPIC" OR t."SBMC" = e."EQUIPMENT_CODE")
+            LEFT JOIN daily_qty q ON (q."SBMC" = e."TOPIC" OR q."SBMC" = e."EQUIPMENT_CODE")
             WHERE 1=1
             {floor_filter}
             ORDER BY "樓層", "設備名稱", "設備代碼"
@@ -217,34 +223,23 @@ class FactorySqlTools:
                 return m.group(1).strip()
             return name[:4].strip() if len(name) >= 4 else name
 
-        # Determine status light from RUN/DOWN minutes
-        # ASCII codes used to avoid LLM garbling; LLM converts to emoji per system prompt
-        def _eq_status(run, down):
-            if run and float(run) > 0:
-                return 'RUN'
-            if down and float(down) > 0:
-                return 'DOWN'
-            return 'STOP'
-
         clean_rows = []
         for r in rows:
-            run  = r.get('RUN(分)') or 0
-            down = r.get('DOWN(分)') or 0
-            util = r.get('稼動率(%)')
-            yld  = r.get('良率(%)')
-            good = r.get('良品數量', 0) or 0
-            bad  = r.get('不良數量', 0) or 0
+            yld     = r.get('良率(%)')
+            util    = r.get('稼動率(%)')
+            good    = r.get('良品數量', 0) or 0
+            bad     = r.get('不良數量', 0) or 0
             eq_name = r.get('設備名稱') or ''
-
             clean_rows.append({
-                '樓層':        r.get('樓層', 'N/A'),
-                '機型':        _derive_type(eq_name),
-                '設備(代碼)':  f"{eq_name} ({r.get('設備代碼', '')})",
-                '稼動狀態':    _eq_status(run, down),
-                '稼動率(%)':  f"{util}%" if (util and float(util) > 0) else '-',
-                '生產數':      int(good),
-                '不良數':      int(bad),
-                '良率(%)':    round(float(yld), 2) if yld is not None else '-',
+                '樓層':       r.get('樓層', 'N/A'),
+                '機型':       _derive_type(eq_name),
+                '設備(代碼)': f"{eq_name} ({r.get('設備代碼', '')})",
+                'RUN(分)':    int(r.get('RUN(分)', 0) or 0),
+                'DOWN(分)':   int(r.get('DOWN(分)', 0) or 0),
+                '稼動率(%)':  round(float(util), 2) if util is not None else '-',
+                '生產數':     int(good),
+                '不良數':     int(bad),
+                '良率(%)':   round(float(yld), 2) if yld is not None else '-',
             })
 
         return {
@@ -318,8 +313,8 @@ class FactorySqlTools:
         }
 
     # ══════════════════════════════════════════════════════════════════════════════
-    # EQ-C: Floor equipment status with current state (green/red) + utilization rate
-    # Req 3: grouped by device type, 稼動率 = RUN/(RUN+DOWN)
+    # EQ-C: Floor equipment status with latest raw signal code and daily yield
+    # Returns latest CODE per device (no hardcoded classification) + 良率 from DB
     # ══════════════════════════════════════════════════════════════════════════════
     def get_floor_equipment_status(
         self,
@@ -327,12 +322,10 @@ class FactorySqlTools:
         target_date: str = None
     ) -> Dict[str, Any]:
         """
-        EQ-C: For a specific floor, show each equipment's:
-          - Device type (EQUIP_TYPE), name, code
-          - Daily RUN / DOWN / IDEL / SHUTDOWN minutes
-          - 稼動率 = RUN / (RUN + DOWN)
-          - Current real-time STATE (RUN / DOWN / IDEL / SHUTDOWN)
-          - Green / Red light indicator
+        EQ-C: Per-floor equipment status with RUN/DOWN/IDEL/SHUTDOWN minutes, 稼動率, and 良率.
+          - State classification: RUN=A003, DOWN=A001/A006-A009, IDEL=A002/A011-A014, SHUTDOWN=A004/A010
+          - Daily state time from CIM_MQTTCOLLECT LAG computation
+          - 良率 from CIM_MQTT_OK_NG_QTY LPSL/BLSL
         """
         if not target_date:
             target_date = datetime.date.today().isoformat()
@@ -347,44 +340,55 @@ class FactorySqlTools:
                 FROM "public"."EQUIPMENT_INFO_DICT"
                 ORDER BY "EQUIPMENT_CODE", "GDHM" DESC NULLS LAST
             ),
+            deltas AS (
+                -- LAG-based duration within each (TOPIC, YMD) to avoid cross-day bleeding
+                SELECT
+                    "TOPIC" AS "SBMC",
+                    LAG("CODE") OVER (PARTITION BY "TOPIC", "YMD" ORDER BY "DATETIMES") AS prev_code,
+                    (SUBSTRING("DATETIMES", 10, 2)::INT * 3600
+                     + SUBSTRING("DATETIMES", 12, 2)::INT * 60
+                     + CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT)
+                    - LAG(
+                        SUBSTRING("DATETIMES", 10, 2)::INT * 3600
+                        + SUBSTRING("DATETIMES", 12, 2)::INT * 60
+                        + CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT
+                    ) OVER (PARTITION BY "TOPIC", "YMD" ORDER BY "DATETIMES") AS duration_sec
+                FROM "public"."CIM_MQTTCOLLECT"
+                WHERE "YMD" = '{target_ymd}'
+            ),
+            times AS (
+                -- Aggregate minutes per state category using confirmed code mapping
+                SELECT "SBMC",
+                    ROUND(SUM(CASE WHEN prev_code = 'A003' AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "RUN",
+                    ROUND(SUM(CASE WHEN prev_code IN ('A001','A006','A007','A008','A009') AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "DOWN",
+                    ROUND(SUM(CASE WHEN prev_code IN ('A002','A011','A012','A013','A014') AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "IDEL",
+                    ROUND(SUM(CASE WHEN prev_code IN ('A004','A010') AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "SHUTDOWN"
+                FROM deltas
+                WHERE prev_code IS NOT NULL
+                GROUP BY "SBMC"
+            ),
             daily_qty AS (
                 SELECT "SBMC", SUM("LPSL") AS "LPSL", SUM("BLSL") AS "BLSL"
                 FROM "public"."CIM_MQTT_OK_NG_QTY"
                 WHERE "YMD" = '{target_ymd}'
                 GROUP BY "SBMC"
-            ),
-            deltas AS (
-                SELECT
-                    "TOPIC" AS "SBMC",
-                    -- duration belongs to the PREVIOUS state, so use LAG(CODE) for attribution
-                    LAG("CODE") OVER (PARTITION BY "TOPIC" ORDER BY "DATETIMES") AS prev_code,
-                    (SUBSTRING("DATETIMES", 10, 2)::INT * 3600 + SUBSTRING("DATETIMES", 12, 2)::INT * 60 + CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT) -
-                    LAG(SUBSTRING("DATETIMES", 10, 2)::INT * 3600 + SUBSTRING("DATETIMES", 12, 2)::INT * 60 + CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT)
-                    OVER (PARTITION BY "TOPIC" ORDER BY "DATETIMES") AS duration_sec
-                FROM "public"."CIM_MQTTCOLLECT"
-                WHERE "YMD" = '{target_ymd}'
-            ),
-            times AS (
-                SELECT "SBMC",
-                       ROUND(SUM(CASE WHEN prev_code = 'A003' AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "RUN",
-                       ROUND(SUM(CASE WHEN prev_code IN ('A001','A006','A007','A008','A009') AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "DOWN",
-                       ROUND(SUM(CASE WHEN prev_code IN ('A002','A011','A012','A013','A014') AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "IDEL",
-                       ROUND(SUM(CASE WHEN prev_code IN ('A004','A010') AND duration_sec > 0 THEN duration_sec ELSE 0 END) / 60.0) AS "SHUTDOWN"
-                FROM deltas GROUP BY "SBMC"
             )
             SELECT
                 COALESCE(e."EQUIPMENT_CODE", e."TOPIC") AS "設備代碼",
-                e."EQUIPMENT_NAME" AS "設備名稱",
-                COALESCE(t."RUN", 0) AS "RUN(分)",
-                COALESCE(t."DOWN", 0) AS "DOWN(分)",
-                COALESCE(t."IDEL", 0) AS "IDEL(分)",
-                COALESCE(t."SHUTDOWN", 0) AS "SHUTDOWN(分)",
-                COALESCE(q."LPSL", 0) AS "良品數量",
-                COALESCE(q."BLSL", 0) AS "不良數量",
-                '{target_date}' AS "資料日期"
+                e."EQUIPMENT_NAME"                      AS "設備名稱",
+                COALESCE(t."RUN", 0)                    AS "RUN(分)",
+                COALESCE(t."DOWN", 0)                   AS "DOWN(分)",
+                COALESCE(t."IDEL", 0)                   AS "IDEL(分)",
+                COALESCE(t."SHUTDOWN", 0)               AS "SHUTDOWN(分)",
+                CASE WHEN (COALESCE(t."RUN", 0) + COALESCE(t."DOWN", 0)) > 0
+                     THEN ROUND((COALESCE(t."RUN", 0)::FLOAT / (COALESCE(t."RUN", 0) + COALESCE(t."DOWN", 0)) * 100)::NUMERIC, 2)
+                     ELSE NULL END                      AS "稼動率(%)",
+                COALESCE(q."LPSL", 0)                   AS "良品數量",
+                COALESCE(q."BLSL", 0)                   AS "不良數量",
+                '{target_date}'                         AS "資料日期"
             FROM eq_info e
-            LEFT JOIN daily_qty q ON (q."SBMC" = e."TOPIC" OR q."SBMC" = e."EQUIPMENT_CODE")
             LEFT JOIN times t ON (t."SBMC" = e."TOPIC" OR t."SBMC" = e."EQUIPMENT_CODE")
+            LEFT JOIN daily_qty q ON (q."SBMC" = e."TOPIC" OR q."SBMC" = e."EQUIPMENT_CODE")
             WHERE e."EQUIP_INSTALL_POSITION" ILIKE '%{safe_floor[0] if safe_floor else ''}%'
             ORDER BY "設備名稱", "設備代碼"
         """
@@ -392,17 +396,18 @@ class FactorySqlTools:
         from datetime import datetime as dt, timedelta
         seven_days_ago = (dt.strptime(target_date, "%Y-%m-%d") - timedelta(days=7)).strftime("%Y%m%d") + "00"
 
-        # Current state query: latest signal code per device within the last 7 days
+        # Current state: classify latest CODE per device using confirmed code mapping
         query_state = f"""
             SELECT
                 COALESCE(e."EQUIPMENT_CODE", sub."TOPIC") AS "設備代碼",
                 CASE
-                    WHEN sub."CODE" IN ('A003')                              THEN 'RUN'
+                    WHEN sub."CODE" = 'A003' THEN 'RUN'
                     WHEN sub."CODE" IN ('A001','A006','A007','A008','A009') THEN 'DOWN'
                     WHEN sub."CODE" IN ('A002','A011','A012','A013','A014') THEN 'IDEL'
-                    WHEN sub."CODE" IN ('A004','A010')                      THEN 'SHUTDOWN'
-                    ELSE 'UNKNOWN'
-                END AS "當前狀態"
+                    WHEN sub."CODE" IN ('A004','A010') THEN 'SHUTDOWN'
+                    ELSE sub."CODE"
+                END AS "稼動狀態",
+                sub."CODE" AS "最新狀態碼"
             FROM (
                 SELECT "TOPIC", "CODE",
                        ROW_NUMBER() OVER (
@@ -411,55 +416,59 @@ class FactorySqlTools:
                        ) AS rn
                 FROM "public"."CIM_MQTTCOLLECT"
                 WHERE "DATEHOUR" >= '{seven_days_ago}'
-                  AND "CODE" IN (
-                      'A001','A002','A003','A004',
-                      'A006','A007','A008','A009',
-                      'A010','A011','A012','A013','A014'
-                  )
+                  AND "CODE" IN ('A001','A002','A003','A004','A006','A007','A008','A009','A010','A011','A012','A013','A014')
             ) sub
             LEFT JOIN "public"."EQUIPMENT_INFO_DICT" e ON e."TOPIC" = sub."TOPIC"
             WHERE sub.rn = 1
         """
 
-        daily_rows  = self._execute_postgres_query(query_daily)
-        state_rows  = self._execute_postgres_query(query_state)
-        state_map   = {r['設備代碼']: r['當前狀態'] for r in state_rows}
+        daily_rows = self._execute_postgres_query(query_daily)
+        state_rows = self._execute_postgres_query(query_state)
+        # Map device code to (稼動狀態, 最新狀態碼)
+        state_map  = {r['設備代碼']: (r.get('稼動狀態', '-'), r.get('最新狀態碼', '-')) for r in state_rows}
 
-        STATE_ICON = {
-            'RUN':      '🟢 稼動中',
-            'DOWN':     '🔴 停機',
-            'IDEL':     '🟡 閒置',
-            'SHUTDOWN': '⚫ 關機',
-            'UNKNOWN':  '❓ 未知',
-        }
-        total_eq = len(daily_rows)
-        running  = 0
+        STATE_ICON = {'RUN': '🟢', 'DOWN': '🔴', 'IDEL': '🟡', 'SHUTDOWN': '⚫'}
+
+        running_count = 0
+        stopped_count = 0
         clean_rows = []
         for row in daily_rows:
-            code  = row.get('設備代碼', '')
-            state = state_map.get(code, 'UNKNOWN')
-            run   = float(row.get('RUN(分)') or 0)
-            down  = float(row.get('DOWN(分)') or 0)
-            
+            code       = row.get('設備代碼', '')
+            state_pair = state_map.get(code, ('-', '-'))
+            state      = state_pair[0]
+            raw_code   = state_pair[1]
+            icon       = STATE_ICON.get(state, '⚪')
+            good       = int(row.get('良品數量', 0) or 0)
+            bad        = int(row.get('不良數量', 0) or 0)
+            util_raw   = row.get('稼動率(%)')
+            util       = round(float(util_raw), 2) if util_raw is not None else '-'
+            yld        = round(good / (good + bad) * 100, 2) if (good + bad) > 0 else '-'
             if state == 'RUN':
-                running += 1
-
-            rate = round(run / (run + down) * 100, 1) if (run + down) > 0 else '-'
+                running_count += 1
+            elif state == 'DOWN':
+                stopped_count += 1
             clean_rows.append({
-                '設備(代碼)': f"{row.get('設備名稱')} ({code})",
-                '狀態燈': STATE_ICON.get(state, '❓ 未知'),
-                '稼動率(%)': rate
+                '設備(代碼)':  f"{row.get('設備名稱')} ({code})",
+                '稼動狀態':    f"{icon} {state}",
+                '最新狀態碼':  raw_code,
+                'RUN(分)':     int(row.get('RUN(分)', 0) or 0),
+                'DOWN(分)':    int(row.get('DOWN(分)', 0) or 0),
+                '稼動率(%)':   util,
+                '生產數':      good,
+                '不良數':      bad,
+                '良率(%)':    yld,
             })
 
+        floor_utilization = round(running_count / len(daily_rows) * 100, 1) if daily_rows else 0
         return {
-            "status":            "success",
-            "floor":             floor,
-            "query_date":        target_date,
-            "total_equipment":   total_eq,
-            "running_count":     running,
-            "stopped_count":     total_eq - running,
-            "floor_utilization": round(running / total_eq * 100, 1) if total_eq > 0 else 0,
-            "data":              clean_rows
+            "status":                "success",
+            "floor":                 floor,
+            "query_date":            target_date,
+            "total_equipment":       len(daily_rows),
+            "running_count":         running_count,
+            "stopped_count":         stopped_count,
+            "floor_utilization_pct": floor_utilization,
+            "data":                  clean_rows,
         }
 
     # ══════════════════════════════════════════════════════════════════════════════
@@ -664,8 +673,7 @@ class FactorySqlTools:
     # ══════════════════════════════════════════════════════════════════════════════
     # EQ-E: Downtime anomaly ranking (Top-N machines by total DOWN time in a period)
     # Supports Pareto chart: bar = downtime hours desc, line = cumulative %
-    # DOWN codes: A001=計畫停機, A006=設備故障, A007=換模換料,
-    #             A008=品質異常停線, A009=待料停工
+    # DOWN codes: A001, A006, A007, A008, A009 (actual names stored in CIM_MQTTCODEERR.NOTE)
     # ══════════════════════════════════════════════════════════════════════════════
     def get_downtime_anomaly_ranking(
         self,
@@ -679,11 +687,6 @@ class FactorySqlTools:
         EQ-E: Rank equipment by total downtime hours in [start_date, end_date].
         Returns Top-N list with per-code breakdown and optional Pareto chart_config.
         """
-        # DOWN code → human-readable reason (update mapping to match factory definitions)
-        # Downtime codes to track - actual meaning should come from DB, not hardcoded
-        DOWN_CODES = ['A001', 'A006', 'A007', 'A008', 'A009']
-        codes_sql = "','".join(DOWN_CODES)
-
         start_ymd = start_date.replace('-', '')
         end_ymd   = end_date.replace('-', '')
         safe_floor = (floor or '').replace("'", "''")
@@ -714,44 +717,25 @@ class FactorySqlTools:
                 FROM "public"."CIM_MQTTCOLLECT"
                 WHERE "YMD" BETWEEN '{start_ymd}' AND '{end_ymd}'
             ),
-            -- Sum per device per DOWN code
-            down_by_code AS (
-                SELECT
-                    "SBMC",
-                    prev_code                                                       AS "CODE",
-                    ROUND(SUM(CASE WHEN duration_sec > 0 THEN duration_sec ELSE 0 END) / 3600.0, 2) AS down_hours
-                FROM deltas
-                WHERE prev_code IN ('{codes_sql}')
-                GROUP BY "SBMC", prev_code
-            ),
-            -- Total DOWN hours per device and pivot per code
+            -- Sum DOWN-only intervals: A001/A006-A009
             down_totals AS (
                 SELECT
                     "SBMC",
-                    ROUND(SUM(down_hours), 2) AS total_down_hours,
-                    ROUND(MAX(CASE WHEN "CODE" = 'A001' THEN down_hours ELSE 0 END), 2) AS "A001",
-                    ROUND(MAX(CASE WHEN "CODE" = 'A006' THEN down_hours ELSE 0 END), 2) AS "A006",
-                    ROUND(MAX(CASE WHEN "CODE" = 'A007' THEN down_hours ELSE 0 END), 2) AS "A007",
-                    ROUND(MAX(CASE WHEN "CODE" = 'A008' THEN down_hours ELSE 0 END), 2) AS "A008",
-                    ROUND(MAX(CASE WHEN "CODE" = 'A009' THEN down_hours ELSE 0 END), 2) AS "A009"
-                FROM down_by_code
+                    ROUND(SUM(CASE WHEN duration_sec > 0 THEN duration_sec ELSE 0 END) / 3600.0, 2) AS total_hours
+                FROM deltas
+                WHERE prev_code IN ('A001','A006','A007','A008','A009')
                 GROUP BY "SBMC"
             )
             SELECT
                 COALESCE(e."EQUIP_INSTALL_POSITION", 'N/A') AS "樓層",
                 COALESCE(e."EQUIPMENT_NAME", d."SBMC")       AS "設備名稱",
                 d."SBMC"                                      AS "設備代碼",
-                d.total_down_hours                            AS "停機時數",
-                d."A001"                                      AS "A001(h)",
-                d."A006"                                      AS "A006(h)",
-                d."A007"                                      AS "A007(h)",
-                d."A008"                                      AS "A008(h)",
-                d."A009"                                      AS "A009(h)"
+                d.total_hours                                 AS "停機時數(h)"
             FROM down_totals d
             LEFT JOIN eq_info e ON (e."TOPIC" = d."SBMC" OR e."EQUIPMENT_CODE" = d."SBMC")
-            WHERE d.total_down_hours > 0
+            WHERE d.total_hours > 0
             {floor_join}
-            ORDER BY d.total_down_hours DESC
+            ORDER BY d.total_hours DESC
             LIMIT {int(top_n)}
         """
         rows = self._execute_postgres_query(query)
@@ -767,20 +751,15 @@ class FactorySqlTools:
         # Build clean output rows
         clean_rows = []
         for r in rows:
-            hrs = float(r.get("停機時數") or 0)
-            # Top reason = code with highest hours
-            code_hours = {code: float(r.get(f"{code}(h)") or 0) for code in DOWN_CODES}
-            top_code = max(code_hours, key=code_hours.get) if any(code_hours.values()) else '-'
+            hrs = float(r.get("停機時數(h)") or 0)
             clean_rows.append({
                 "排名":       len(clean_rows) + 1,
                 "樓層":       r.get("樓層", "N/A"),
                 "設備(代碼)": f"{r.get('設備名稱')} ({r.get('設備代碼')})",
                 "停機時數(h)": hrs,
-                "主要停機原因": top_code,
-                **{f"{code}(h)": float(r.get(f"{code}(h)") or 0) for code in DOWN_CODES},
             })
 
-        # Pareto chart: bars = downtime desc, line = cumulative %
+        # Pareto chart: bars = total hours desc, line = cumulative %
         chart_config = None
         if include_chart and clean_rows:
             labels     = [r["設備(代碼)"] for r in clean_rows]
@@ -815,26 +794,18 @@ class FactorySqlTools:
                     },
                 ],
                 "yAxes": {
-                    "y_hours": {"label": "停機時數 (h)", "position": "left"},
+                    "y_hours": {"label": "總時數 (h)", "position": "left"},
                     "y_pct":   {"label": "累積百分比 (%)", "position": "right", "max": 100},
                 },
             }
 
-        # Summary: total downtime per code across all returned devices
-        cause_summary = {}
-        for r in clean_rows:
-            for code in DOWN_CODES:
-                col = f"{code}(h)"
-                cause_summary[col] = round(cause_summary.get(col, 0) + r.get(col, 0), 2)
-
         return {
-            "status":        "success",
-            "period":        f"{start_date} ~ {end_date}",
-            "floor":         floor or "全廠",
-            "top_n":         top_n,
-            "data":          clean_rows,
-            "cause_summary": cause_summary,
-            "chart_config":  chart_config,
+            "status":       "success",
+            "period":       f"{start_date} ~ {end_date}",
+            "floor":        floor or "全廠",
+            "top_n":        top_n,
+            "data":         clean_rows,
+            "chart_config": chart_config,
         }
 
     # ══════════════════════════════════════════════════════════════════════════════
@@ -856,14 +827,10 @@ class FactorySqlTools:
         include_chart: bool = False
     ) -> Dict[str, Any]:
         """
-        EQ-F: Compare DOWN code distribution between two time periods.
+        EQ-F: Compare total state duration between two time periods.
         Can scope to a specific device, floor, or the entire factory.
-        Returns per-code hours for both periods + delta, optional multi_line chart.
+        Returns total hours for both periods + delta, optional bar chart.
         """
-        # Downtime codes to track - actual meaning should come from DB, not hardcoded
-        DOWN_CODES = ['A001', 'A006', 'A007', 'A008', 'A009']
-        codes_sql  = "','".join(DOWN_CODES)
-
         # Optional equipment filter
         topic_filter_a = ""
         topic_filter_b = ""
@@ -894,8 +861,8 @@ class FactorySqlTools:
             """
             topic_filter_b = topic_filter_a
 
-        def _query_period(ymd_start: str, ymd_end: str, topic_filter: str) -> Dict[str, float]:
-            """Return {state_code: total_hours} for a date range (coarse-grained by A001-A009)."""
+        def _query_period(ymd_start: str, ymd_end: str, topic_filter: str) -> float:
+            """Return total DOWN-state duration (h) for a date range (A001/A006-A009 only)."""
             q = f"""
                 WITH deltas AS (
                     SELECT
@@ -913,73 +880,55 @@ class FactorySqlTools:
                     {topic_filter}
                 )
                 SELECT
-                    prev_code AS "CODE",
-                    ROUND(SUM(CASE WHEN duration_sec > 0 THEN duration_sec ELSE 0 END) / 3600.0, 2) AS down_hours
+                    ROUND(SUM(CASE WHEN duration_sec > 0 THEN duration_sec ELSE 0 END) / 3600.0, 2) AS total_hours
                 FROM deltas
-                WHERE prev_code IN ('{codes_sql}')
-                GROUP BY prev_code
-                ORDER BY down_hours DESC
+                WHERE prev_code IN ('A001','A006','A007','A008','A009')
             """
             rows = self._execute_postgres_query(q)
-            return {r.get("CODE"): float(r.get("down_hours") or 0) for r in rows if r.get("CODE")}
+            if rows:
+                return float(rows[0].get("total_hours") or 0)
+            return 0.0
 
         a_ymd_s = period_a_start.replace('-', '')
         a_ymd_e = period_a_end.replace('-', '')
         b_ymd_s = period_b_start.replace('-', '')
         b_ymd_e = period_b_end.replace('-', '')
 
-        hours_a = _query_period(a_ymd_s, a_ymd_e, topic_filter_a)
-        hours_b = _query_period(b_ymd_s, b_ymd_e, topic_filter_b)
+        ha = _query_period(a_ymd_s, a_ymd_e, topic_filter_a)
+        hb = _query_period(b_ymd_s, b_ymd_e, topic_filter_b)
+        delta = round(ha - hb, 2)
 
-        # Build comparison table (all codes seen in either period)
-        all_codes = sorted(set(list(hours_a.keys()) + list(hours_b.keys()) + DOWN_CODES))
-        comparison = []
-        for code in all_codes:
-            if code not in DOWN_CODES:
-                continue
-            ha = hours_a.get(code, 0)
-            hb = hours_b.get(code, 0)
-            delta = round(ha - hb, 2)
-            comparison.append({
-                "代碼":                           code,
-                f"{period_a_label} 停機(h)":     ha,
-                f"{period_b_label} 停機(h)":     hb,
-                "變化(h)":                        delta,
-                "趨勢":                           "⬆ 惡化" if delta > 0 else ("⬇ 改善" if delta < 0 else "─ 持平"),
-            })
-
-        # Sort by period_a hours desc
-        comparison.sort(key=lambda x: x.get(f"{period_a_label} 停機(h)", 0), reverse=True)
+        comparison = [{
+            f"{period_a_label} 總時數(h)": ha,
+            f"{period_b_label} 總時數(h)": hb,
+            "變化(h)":                     delta,
+            "趨勢":                        "⬆ 惡化" if delta > 0 else ("⬇ 改善" if delta < 0 else "─ 持平"),
+        }]
 
         chart_config = None
-        if include_chart and comparison:
-            labels    = [r["停機原因"] for r in comparison]
-            data_a    = [r[f"{period_a_label} 停機(h)"] for r in comparison]
-            data_b    = [r[f"{period_b_label} 停機(h)"] for r in comparison]
+        if include_chart:
             chart_config = {
-                "chart_type": "bar_line_combo",
-                "title":      f"停機原因分布比對：{period_a_label} vs {period_b_label}（{eq_label}）",
-                "labels":     labels,
+                "chart_type": "bar",
+                "title":      f"狀態時數比對：{period_a_label} vs {period_b_label}（{eq_label}）",
+                "labels":     [eq_label],
                 "datasets": [
                     {
                         "type":            "bar",
-                        "label":           f"{period_a_label} 停機(h)",
-                        "data":            data_a,
-                        "yAxisID":         "y_hours",
+                        "label":           f"{period_a_label} 總時數(h)",
+                        "data":            [ha],
                         "backgroundColor": "rgba(239, 68, 68, 0.65)",
                         "borderColor":     "rgba(239, 68, 68, 1)",
                     },
                     {
                         "type":            "bar",
-                        "label":           f"{period_b_label} 停機(h)",
-                        "data":            data_b,
-                        "yAxisID":         "y_hours",
+                        "label":           f"{period_b_label} 總時數(h)",
+                        "data":            [hb],
                         "backgroundColor": "rgba(99, 102, 241, 0.55)",
                         "borderColor":     "rgba(99, 102, 241, 1)",
                     },
                 ],
                 "yAxes": {
-                    "y_hours": {"label": "停機時數 (h)", "position": "left"},
+                    "y_hours": {"label": "總時數 (h)", "position": "left"},
                 },
             }
 
@@ -1020,19 +969,27 @@ class FactorySqlTools:
             if safe_floor else ''
         )
 
-        # CIM_MQTTCODEERR is a static reference table; query directly by MACHINE (= TOPIC)
+        # Join CIM_MQTTCOLLECT_AM_PM (actual occurrences with SJ timestamp) with
+        # CIM_MQTTCODEERR (fault reference) to get real occurrence counts in the date range.
+        # SJ format is YYYYMMDDHHMMSS; SUBSTRING(SJ, 1, 8) gives YYYYMMDD for date filter.
         query = f"""
             SELECT
-                COALESCE(ei."EQUIPMENT_NAME", err."MACHINE") AS "設備名稱",
-                err."NOTE"                                    AS "故障原因",
-                err."CATE"                                    AS "異常類別",
-                COUNT(*)                                      AS "發生次數"
-            FROM "public"."CIM_MQTTCODEERR" err
-            LEFT JOIN "public"."EQUIPMENT_INFO_DICT" ei ON ei."TOPIC" = err."MACHINE"
-            WHERE 1=1
+                COALESCE(ei."EQUIPMENT_NAME", am."TOPIC") AS "設備名稱",
+                err."NOTE"                                 AS "故障原因",
+                err."CATE"                                 AS "異常類別",
+                COUNT(*)                                   AS "發生次數"
+            FROM "public"."CIM_MQTTCOLLECT_AM_PM" am
+            JOIN "public"."CIM_MQTTCODEERR" err
+                ON am."TOPIC" = err."MACHINE"
+                AND am."CODE" = err."PLCCODE"
+            LEFT JOIN "public"."EQUIPMENT_INFO_DICT" ei ON ei."TOPIC" = am."TOPIC"
+            WHERE err."CODETYPE" = 'B'
+              AND err."NOTE" IS NOT NULL
+              AND err."CATE" = 'DOWN'
+              AND SUBSTRING(am."SJ", 1, 8) BETWEEN '{start_ymd}' AND '{end_ymd}'
               {floor_filter}
             GROUP BY
-                COALESCE(ei."EQUIPMENT_NAME", err."MACHINE"),
+                COALESCE(ei."EQUIPMENT_NAME", am."TOPIC"),
                 err."NOTE", err."CATE"
             ORDER BY "發生次數" DESC
         """
@@ -1041,7 +998,7 @@ class FactorySqlTools:
             return {
                 "status":  "success",
                 "period":  f"{start_date} ~ {end_date}",
-                "message": "查詢期間內無故障紀錄，無法建立熱點圖",
+                "message": "查詢期間內無符合條件的故障記錄，熱點圖無資料",
                 "chart_config": None,
             }
 
@@ -1076,7 +1033,7 @@ class FactorySqlTools:
             return {
                 "status":  "success",
                 "period":  f"{start_date} ~ {end_date}",
-                "message": "該期間內 CIM_MQTTCODEERR 中無符合設備的故障代碼對照，熱點圖無資料",
+                "message": "該期間內無符合停機代碼的故障記錄，熱點圖無資料",
                 "chart_config": None,
             }
 
