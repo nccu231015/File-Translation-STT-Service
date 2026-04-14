@@ -748,15 +748,50 @@ class FactorySqlTools:
                 "chart_config": None,
             }
 
-        # Build clean output rows
+        # Secondary query: fetch the most frequent fault NOTE (停機原因) per device
+        # from CIM_MQTTCOLLECT_AM_PM JOIN CIM_MQTTCODEERR using CODETYPE='B' + PLCCODE match
+        topic_list = [r.get("設備代碼") for r in rows if r.get("設備代碼")]
+        cause_map: Dict[str, str] = {}
+        if topic_list:
+            topics_in = ",".join(f"'{t}'" for t in topic_list)
+            cause_query = f"""
+                SELECT * FROM (
+                    SELECT
+                        am."TOPIC",
+                        err."NOTE",
+                        COUNT(0) AS "CS",
+                        ROW_NUMBER() OVER (
+                            PARTITION BY am."TOPIC"
+                            ORDER BY COUNT(0) DESC
+                        ) AS "RN"
+                    FROM "public"."CIM_MQTTCOLLECT_AM_PM" am
+                    LEFT JOIN "public"."CIM_MQTTCODEERR" err
+                        ON am."TOPIC" = err."MACHINE"
+                        AND am."CODE" = err."PLCCODE"
+                    WHERE err."CODETYPE" = 'B'
+                      AND am."CODE" IN (
+                          SELECT "PLCCODE" FROM "public"."CIM_MQTTCODEERR"
+                      )
+                      AND SUBSTRING(am."SJ", 1, 8) BETWEEN '{start_ymd}' AND '{end_ymd}'
+                      AND am."TOPIC" IN ({topics_in})
+                    GROUP BY am."TOPIC", err."NOTE"
+                ) "S"
+                WHERE "S"."RN" = 1
+            """
+            cause_rows = self._execute_postgres_query(cause_query)
+            cause_map = {r["TOPIC"]: r.get("NOTE") or "-" for r in cause_rows if r.get("TOPIC")}
+
+        # Build clean output rows with 主要停機原因
         clean_rows = []
         for r in rows:
-            hrs = float(r.get("停機時數(h)") or 0)
+            hrs   = float(r.get("停機時數(h)") or 0)
+            topic = r.get("設備代碼", "")
             clean_rows.append({
-                "排名":       len(clean_rows) + 1,
-                "樓層":       r.get("樓層", "N/A"),
-                "設備(代碼)": f"{r.get('設備名稱')} ({r.get('設備代碼')})",
-                "停機時數(h)": hrs,
+                "排名":         len(clean_rows) + 1,
+                "樓層":         r.get("樓層", "N/A"),
+                "設備(代碼)":   f"{r.get('設備名稱')} ({topic})",
+                "停機時數(h)":  hrs,
+                "主要停機原因": cause_map.get(topic, "-"),
             })
 
         # Pareto chart: bars = total hours desc, line = cumulative %
@@ -772,7 +807,7 @@ class FactorySqlTools:
                 cumulative.append(round(running / total_all * 100, 1) if total_all > 0 else 0)
             chart_config = {
                 "chart_type": "bar_line_combo",
-                "title":      f"停機時數 Pareto（Top {top_n}）{start_date} ~ {end_date}",
+                "title":      f"停機時數 Pareto —主要停機原因（Top {top_n}）{start_date} ~ {end_date}",
                 "labels":     labels,
                 "datasets": [
                     {
