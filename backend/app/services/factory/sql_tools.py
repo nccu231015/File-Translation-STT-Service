@@ -167,6 +167,7 @@ class FactorySqlTools:
                     ) OVER (PARTITION BY "TOPIC", SUBSTRING("SJ", 1, 8) ORDER BY "SJ") AS duration_sec
                 FROM "public"."CIM_MQTTCOLLECT_AM_PM"
                 WHERE SUBSTRING("SJ", 1, 8) = '{target_ymd}'
+                  AND LENGTH("SJ") >= 14
             ),
             times AS (
                 -- Classify each interval into RUN/DOWN/IDEL/SHUTDOWN using confirmed code mapping
@@ -357,6 +358,7 @@ class FactorySqlTools:
                     ) OVER (PARTITION BY "TOPIC", SUBSTRING("SJ", 1, 8) ORDER BY "SJ") AS duration_sec
                 FROM "public"."CIM_MQTTCOLLECT_AM_PM"
                 WHERE SUBSTRING("SJ", 1, 8) = '{target_ymd}'
+                  AND LENGTH("SJ") >= 14
             ),
             times AS (
                 -- Aggregate minutes per state category using confirmed code mapping
@@ -419,6 +421,7 @@ class FactorySqlTools:
                        ) AS rn
                 FROM "public"."CIM_MQTTCOLLECT_AM_PM"
                 WHERE SUBSTRING("SJ", 1, 8) >= '{seven_days_ago_ymd}'
+                  AND LENGTH("SJ") >= 14
                   AND "CODE" IN ('A001','A002','A003','A004','A006','A007','A008','A009','A010','A011','A012','A013','A014')
             ) sub
             LEFT JOIN "public"."EQUIPMENT_INFO_DICT" e ON e."TOPIC" = sub."TOPIC"
@@ -720,6 +723,7 @@ class FactorySqlTools:
                     ) OVER (PARTITION BY "TOPIC", SUBSTRING("SJ", 1, 8) ORDER BY "SJ") AS duration_sec
                 FROM "public"."CIM_MQTTCOLLECT_AM_PM"
                 WHERE SUBSTRING("SJ", 1, 8) BETWEEN '{start_ymd}' AND '{end_ymd}'
+                  AND LENGTH("SJ") >= 14
             ),
             -- Sum DOWN-only intervals: A001/A006-A009
             down_totals AS (
@@ -917,6 +921,7 @@ class FactorySqlTools:
                         ) OVER (PARTITION BY "TOPIC", SUBSTRING("SJ", 1, 8) ORDER BY "SJ") AS duration_sec
                     FROM "public"."CIM_MQTTCOLLECT_AM_PM"
                     WHERE SUBSTRING("SJ", 1, 8) BETWEEN '{ymd_start}' AND '{ymd_end}'
+                      AND LENGTH("SJ") >= 14
                     {topic_filter}
                 )
                 SELECT
