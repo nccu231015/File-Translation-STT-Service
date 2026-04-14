@@ -690,7 +690,7 @@ class FactorySqlTools:
         top_n: int = 10,
         floor: str = None,
         include_chart: bool = False,
-        include_cause: bool = False
+        include_cause: bool = True
     ) -> Dict[str, Any]:
         """
         EQ-E: Rank equipment by total downtime hours in [start_date, end_date].
