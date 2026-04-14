@@ -777,14 +777,14 @@ class FactorySqlTools:
                 SELECT * FROM (
                     SELECT
                         b."TOPIC",
-                        COALESCE(err."NOTE", b."CODE") AS "NOTE",
+                        err."NOTE",
                         COUNT(*) AS "CS",
                         ROW_NUMBER() OVER (
                             PARTITION BY b."TOPIC"
                             ORDER BY COUNT(*) DESC
                         ) AS "RN"
                     FROM "public"."CIM_MQTTCOLLECT_AM_PM" b
-                    LEFT JOIN "public"."CIM_MQTTCODEERR" err ON b."CODE" = err."PLCCODE"
+                    JOIN "public"."CIM_MQTTCODEERR" err ON b."CODE" = err."PLCCODE"
                     WHERE b."CODE" LIKE 'B%'
                       AND SUBSTRING(b."DATETIMES", 1, 8) BETWEEN '{start_ymd}' AND '{end_ymd}'
                       AND b."TOPIC" IN ({topics_in})
@@ -794,7 +794,7 @@ class FactorySqlTools:
                             AND a."CODE" IN ('A001','A006','A007','A008','A009')
                             AND SUBSTRING(a."DATETIMES", 1, 15) = SUBSTRING(b."DATETIMES", 1, 15)
                       )
-                    GROUP BY b."TOPIC", b."CODE", err."NOTE"
+                    GROUP BY b."TOPIC", err."NOTE"
                 ) "S"
                 WHERE "S"."RN" = 1
             """
@@ -809,14 +809,14 @@ class FactorySqlTools:
                     SELECT * FROM (
                         SELECT
                             b."TOPIC",
-                            COALESCE(err."NOTE", b."CODE") AS "NOTE",
+                            err."NOTE",
                             COUNT(*) AS "CS",
                             ROW_NUMBER() OVER (
                                 PARTITION BY b."TOPIC"
                                 ORDER BY COUNT(*) DESC
                             ) AS "RN"
                         FROM "public"."CIM_MQTTCOLLECT_AM_PM" b
-                        LEFT JOIN "public"."CIM_MQTTCODEERR" err ON b."CODE" = err."PLCCODE"
+                        JOIN "public"."CIM_MQTTCODEERR" err ON b."CODE" = err."PLCCODE"
                         WHERE b."CODE" LIKE 'B%'
                           AND SUBSTRING(b."DATETIMES", 1, 8) BETWEEN '{start_ymd}' AND '{end_ymd}'
                           AND b."TOPIC" IN ({missing_in})
@@ -826,7 +826,7 @@ class FactorySqlTools:
                                 AND a."CODE" IN ('A001','A006','A007','A008','A009')
                                 AND SUBSTRING(a."DATETIMES", 1, 13) = SUBSTRING(b."DATETIMES", 1, 13)
                           )
-                        GROUP BY b."TOPIC", b."CODE", err."NOTE"
+                        GROUP BY b."TOPIC", err."NOTE"
                     ) "S"
                     WHERE "S"."RN" = 1
                 """
