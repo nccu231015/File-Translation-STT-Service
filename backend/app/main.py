@@ -846,7 +846,8 @@ async def factory_chat(payload: dict, background_tasks: BackgroundTasks):
 
         # Forward to n8n Router webhook; n8n will call the sub-agent
         # endpoints above and return { response, chart_config }
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        # Use longer read timeout to accommodate slow LLM + SQL round-trips via n8n
+        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=10.0)) as client:
             n8n_resp = await client.post(
                 N8N_FACTORY_WEBHOOK,
                 json={"question": user_text, "history": history}
