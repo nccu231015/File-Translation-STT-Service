@@ -250,7 +250,8 @@ class EquipmentSqlAgent:
                         "[EQ-G] 產生設備故障原因熱點圖（Heat Map），"
                         "X 軸 = 設備名稱，Y 軸 = 具體故障原因（NOTE），"
                         "儲格色階 = 發生次數（白→深紅）。"
-                        "適用於：「哪台設備跟哪種故障最相關」「故障熱點圖」。"
+                        "適用於：「哪台設備跟哪種故障最相關」「故障熱點圖」「特定設備的故障原因分佈」。"
+                        "查詢特定設備時必須傳 equipment_code 或 equipment_name。"
                     ),
                     "parameters": {
                         "type": "object",
@@ -263,17 +264,25 @@ class EquipmentSqlAgent:
                                 "type": "string",
                                 "description": "結束日期 YYYY-MM-DD。"
                             },
+                            "equipment_code": {
+                                "type": "string",
+                                "description": "設備代碼（如 '64008A'）或設備編號（如 '401'）。查詢特定設備時必填，填此參數就不要填 floor。"
+                            },
+                            "equipment_name": {
+                                "type": "string",
+                                "description": "設備名稱關鍵字（如 '焊接機501'）。查詢特定設備時可用，填此參數就不要填 floor。"
+                            },
                             "floor": {
                                 "type": "string",
-                                "description": "樓層篩選（如 '3F'），省略則全廠。"
+                                "description": "樓層篩選（如 '3F'），僅在使用者問整層樓時使用；查詢特定設備請勿填此欄位。"
                             },
                             "top_n_equipment": {
                                 "type": "integer",
-                                "description": "X 軸顯示的設備數，預設 8。"
+                                "description": "X 軸顯示的設備數，全廠查詢時預設 8；指定設備時自動忽略。"
                             },
                             "top_m_notes": {
                                 "type": "integer",
-                                "description": "Y 軸顯示的故障原因數，預設 10。"
+                                "description": "Y 軸顯示的故障原因數，全廠查詢時預設 10；指定設備時自動擴展。"
                             }
                         },
                         "required": ["start_date", "end_date"]
