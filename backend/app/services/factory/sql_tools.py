@@ -1135,6 +1135,8 @@ class FactorySqlTools:
         # Join B-codes (fault reason) with co-occurring DOWN events (A001/A006-A009)
         # B-codes appear within the same second as DOWN A-codes (co-occurrence pattern confirmed)
         # No CATE filter needed - B-code CATE is mostly IDEL/IDEL1, not DOWN
+        # IMPORTANT: LEFT JOIN EQUIPMENT_INFO_DICT must use deduplicated subquery (DISTINCT ON TOPIC)
+        # to avoid COUNT inflation when one TOPIC has multiple rows (different GDHM versions etc.)
         query = f"""
             SELECT
                 COALESCE(ei."EQUIPMENT_NAME", b."TOPIC") AS "設備名稱",
@@ -1143,7 +1145,14 @@ class FactorySqlTools:
             FROM "public"."CIM_MQTTCOLLECT_AM_PM" b
             JOIN "public"."CIM_MQTTCODEERR" err
                 ON b."CODE" = err."PLCCODE"
-            LEFT JOIN "public"."EQUIPMENT_INFO_DICT" ei ON ei."TOPIC" = b."TOPIC"
+            LEFT JOIN (
+                SELECT DISTINCT ON ("TOPIC")
+                    "TOPIC", "EQUIPMENT_NAME", "EQUIPMENT_CODE"
+                FROM "public"."EQUIPMENT_INFO_DICT"
+                WHERE "TOPIC" IS NOT NULL
+                ORDER BY "TOPIC",
+                    CASE WHEN "EQUIPMENT_NAME" IS NOT NULL THEN 0 ELSE 1 END
+            ) ei ON ei."TOPIC" = b."TOPIC"
             WHERE b."CODE" LIKE 'B%'
               AND err."NOTE" IS NOT NULL
               AND SUBSTRING(b."DATETIMES", 1, 8) BETWEEN '{start_ymd}' AND '{end_ymd}'
