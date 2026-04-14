@@ -152,20 +152,21 @@ class FactorySqlTools:
                 ORDER BY "EQUIPMENT_CODE", "GDHM" DESC NULLS LAST
             ),
             deltas AS (
-                -- Compute duration per state interval using LAG within (TOPIC, YMD)
+                -- Compute duration per state interval using LAG within (TOPIC, date)
+                -- Source: CIM_MQTTCOLLECT_AM_PM; SJ format = YYYYMMDDHHMMSS
                 SELECT
                     "TOPIC" AS "SBMC",
-                    LAG("CODE") OVER (PARTITION BY "TOPIC", "YMD" ORDER BY "DATETIMES") AS prev_code,
-                    (SUBSTRING("DATETIMES", 10, 2)::INT * 3600
-                     + SUBSTRING("DATETIMES", 12, 2)::INT * 60
-                     + CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT)
+                    LAG("CODE") OVER (PARTITION BY "TOPIC", SUBSTRING("SJ", 1, 8) ORDER BY "SJ") AS prev_code,
+                    (SUBSTRING("SJ", 9, 2)::INT * 3600
+                     + SUBSTRING("SJ", 11, 2)::INT * 60
+                     + SUBSTRING("SJ", 13, 2)::INT)
                     - LAG(
-                        SUBSTRING("DATETIMES", 10, 2)::INT * 3600
-                        + SUBSTRING("DATETIMES", 12, 2)::INT * 60
-                        + CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT
-                    ) OVER (PARTITION BY "TOPIC", "YMD" ORDER BY "DATETIMES") AS duration_sec
-                FROM "public"."CIM_MQTTCOLLECT"
-                WHERE "YMD" = '{target_ymd}'
+                        SUBSTRING("SJ", 9, 2)::INT * 3600
+                        + SUBSTRING("SJ", 11, 2)::INT * 60
+                        + SUBSTRING("SJ", 13, 2)::INT
+                    ) OVER (PARTITION BY "TOPIC", SUBSTRING("SJ", 1, 8) ORDER BY "SJ") AS duration_sec
+                FROM "public"."CIM_MQTTCOLLECT_AM_PM"
+                WHERE SUBSTRING("SJ", 1, 8) = '{target_ymd}'
             ),
             times AS (
                 -- Classify each interval into RUN/DOWN/IDEL/SHUTDOWN using confirmed code mapping
@@ -341,20 +342,21 @@ class FactorySqlTools:
                 ORDER BY "EQUIPMENT_CODE", "GDHM" DESC NULLS LAST
             ),
             deltas AS (
-                -- LAG-based duration within each (TOPIC, YMD) to avoid cross-day bleeding
+                -- LAG-based duration within each (TOPIC, date) to avoid cross-day bleeding
+                -- Source: CIM_MQTTCOLLECT_AM_PM; SJ format = YYYYMMDDHHMMSS
                 SELECT
                     "TOPIC" AS "SBMC",
-                    LAG("CODE") OVER (PARTITION BY "TOPIC", "YMD" ORDER BY "DATETIMES") AS prev_code,
-                    (SUBSTRING("DATETIMES", 10, 2)::INT * 3600
-                     + SUBSTRING("DATETIMES", 12, 2)::INT * 60
-                     + CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT)
+                    LAG("CODE") OVER (PARTITION BY "TOPIC", SUBSTRING("SJ", 1, 8) ORDER BY "SJ") AS prev_code,
+                    (SUBSTRING("SJ", 9, 2)::INT * 3600
+                     + SUBSTRING("SJ", 11, 2)::INT * 60
+                     + SUBSTRING("SJ", 13, 2)::INT)
                     - LAG(
-                        SUBSTRING("DATETIMES", 10, 2)::INT * 3600
-                        + SUBSTRING("DATETIMES", 12, 2)::INT * 60
-                        + CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT
-                    ) OVER (PARTITION BY "TOPIC", "YMD" ORDER BY "DATETIMES") AS duration_sec
-                FROM "public"."CIM_MQTTCOLLECT"
-                WHERE "YMD" = '{target_ymd}'
+                        SUBSTRING("SJ", 9, 2)::INT * 3600
+                        + SUBSTRING("SJ", 11, 2)::INT * 60
+                        + SUBSTRING("SJ", 13, 2)::INT
+                    ) OVER (PARTITION BY "TOPIC", SUBSTRING("SJ", 1, 8) ORDER BY "SJ") AS duration_sec
+                FROM "public"."CIM_MQTTCOLLECT_AM_PM"
+                WHERE SUBSTRING("SJ", 1, 8) = '{target_ymd}'
             ),
             times AS (
                 -- Aggregate minutes per state category using confirmed code mapping
@@ -394,9 +396,10 @@ class FactorySqlTools:
         """
 
         from datetime import datetime as dt, timedelta
-        seven_days_ago = (dt.strptime(target_date, "%Y-%m-%d") - timedelta(days=7)).strftime("%Y%m%d") + "00"
 
         # Current state: classify latest CODE per device using confirmed code mapping
+        # Source: CIM_MQTTCOLLECT_AM_PM; SJ format = YYYYMMDDHHMMSS
+        seven_days_ago_ymd = (dt.strptime(target_date, "%Y-%m-%d") - timedelta(days=7)).strftime("%Y%m%d")
         query_state = f"""
             SELECT
                 COALESCE(e."EQUIPMENT_CODE", sub."TOPIC") AS "設備代碼",
@@ -412,10 +415,10 @@ class FactorySqlTools:
                 SELECT "TOPIC", "CODE",
                        ROW_NUMBER() OVER (
                            PARTITION BY "TOPIC"
-                           ORDER BY "DATETIMES" DESC
+                           ORDER BY "SJ" DESC
                        ) AS rn
-                FROM "public"."CIM_MQTTCOLLECT"
-                WHERE "DATEHOUR" >= '{seven_days_ago}'
+                FROM "public"."CIM_MQTTCOLLECT_AM_PM"
+                WHERE SUBSTRING("SJ", 1, 8) >= '{seven_days_ago_ymd}'
                   AND "CODE" IN ('A001','A002','A003','A004','A006','A007','A008','A009','A010','A011','A012','A013','A014')
             ) sub
             LEFT JOIN "public"."EQUIPMENT_INFO_DICT" e ON e."TOPIC" = sub."TOPIC"
@@ -700,22 +703,23 @@ class FactorySqlTools:
                 FROM "public"."EQUIPMENT_INFO_DICT"
                 ORDER BY "EQUIPMENT_CODE", "GDHM" DESC NULLS LAST
             ),
-            -- LAG within each (TOPIC, YMD) to avoid cross-day bleeding
+            -- LAG within each (TOPIC, date) to avoid cross-day bleeding
+            -- Source: CIM_MQTTCOLLECT_AM_PM; SJ format = YYYYMMDDHHMMSS
             deltas AS (
                 SELECT
                     "TOPIC" AS "SBMC",
-                    "YMD",
-                    LAG("CODE") OVER (PARTITION BY "TOPIC", "YMD" ORDER BY "DATETIMES") AS prev_code,
-                    (SUBSTRING("DATETIMES", 10, 2)::INT * 3600
-                     + SUBSTRING("DATETIMES", 12, 2)::INT * 60
-                     + CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT)
+                    SUBSTRING("SJ", 1, 8) AS "YMD",
+                    LAG("CODE") OVER (PARTITION BY "TOPIC", SUBSTRING("SJ", 1, 8) ORDER BY "SJ") AS prev_code,
+                    (SUBSTRING("SJ", 9, 2)::INT * 3600
+                     + SUBSTRING("SJ", 11, 2)::INT * 60
+                     + SUBSTRING("SJ", 13, 2)::INT)
                     - LAG(
-                        SUBSTRING("DATETIMES", 10, 2)::INT * 3600
-                        + SUBSTRING("DATETIMES", 12, 2)::INT * 60
-                        + CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT
-                    ) OVER (PARTITION BY "TOPIC", "YMD" ORDER BY "DATETIMES") AS duration_sec
-                FROM "public"."CIM_MQTTCOLLECT"
-                WHERE "YMD" BETWEEN '{start_ymd}' AND '{end_ymd}'
+                        SUBSTRING("SJ", 9, 2)::INT * 3600
+                        + SUBSTRING("SJ", 11, 2)::INT * 60
+                        + SUBSTRING("SJ", 13, 2)::INT
+                    ) OVER (PARTITION BY "TOPIC", SUBSTRING("SJ", 1, 8) ORDER BY "SJ") AS duration_sec
+                FROM "public"."CIM_MQTTCOLLECT_AM_PM"
+                WHERE SUBSTRING("SJ", 1, 8) BETWEEN '{start_ymd}' AND '{end_ymd}'
             ),
             -- Sum DOWN-only intervals: A001/A006-A009
             down_totals AS (
@@ -897,21 +901,22 @@ class FactorySqlTools:
             topic_filter_b = topic_filter_a
 
         def _query_period(ymd_start: str, ymd_end: str, topic_filter: str) -> float:
-            """Return total DOWN-state duration (h) for a date range (A001/A006-A009 only)."""
+            """Return total DOWN-state duration (h) for a date range (A001/A006-A009 only).
+            Source: CIM_MQTTCOLLECT_AM_PM; SJ format = YYYYMMDDHHMMSS."""
             q = f"""
                 WITH deltas AS (
                     SELECT
-                        LAG("CODE") OVER (PARTITION BY "TOPIC", "YMD" ORDER BY "DATETIMES") AS prev_code,
-                        (SUBSTRING("DATETIMES", 10, 2)::INT * 3600
-                         + SUBSTRING("DATETIMES", 12, 2)::INT * 60
-                         + CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT)
+                        LAG("CODE") OVER (PARTITION BY "TOPIC", SUBSTRING("SJ", 1, 8) ORDER BY "SJ") AS prev_code,
+                        (SUBSTRING("SJ", 9, 2)::INT * 3600
+                         + SUBSTRING("SJ", 11, 2)::INT * 60
+                         + SUBSTRING("SJ", 13, 2)::INT)
                         - LAG(
-                            SUBSTRING("DATETIMES", 10, 2)::INT * 3600
-                            + SUBSTRING("DATETIMES", 12, 2)::INT * 60
-                            + CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT
-                        ) OVER (PARTITION BY "TOPIC", "YMD" ORDER BY "DATETIMES") AS duration_sec
-                    FROM "public"."CIM_MQTTCOLLECT"
-                    WHERE "YMD" BETWEEN '{ymd_start}' AND '{ymd_end}'
+                            SUBSTRING("SJ", 9, 2)::INT * 3600
+                            + SUBSTRING("SJ", 11, 2)::INT * 60
+                            + SUBSTRING("SJ", 13, 2)::INT
+                        ) OVER (PARTITION BY "TOPIC", SUBSTRING("SJ", 1, 8) ORDER BY "SJ") AS duration_sec
+                    FROM "public"."CIM_MQTTCOLLECT_AM_PM"
+                    WHERE SUBSTRING("SJ", 1, 8) BETWEEN '{ymd_start}' AND '{ymd_end}'
                     {topic_filter}
                 )
                 SELECT
