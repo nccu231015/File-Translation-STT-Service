@@ -1225,6 +1225,15 @@ class FactorySqlTools:
             "max_value":  max_val,
         }
 
+        # Build a flat summary table for LLM text analysis (fault reason + count per equipment)
+        summary_table = []
+        for note in top_notes:
+            row_entry = {"故障原因": note}
+            for eq in top_equips:
+                row_entry[eq] = matrix_raw.get(note, {}).get(eq, 0)
+            row_entry["合計次數"] = note_totals.get(note, 0)
+            summary_table.append(row_entry)
+
         return {
             "status":          "success",
             "period":          f"{start_date} ~ {end_date}",
@@ -1233,6 +1242,7 @@ class FactorySqlTools:
             "top_m_notes":     top_m_notes,
             "equipment_list":  top_equips,
             "note_list":       top_notes,
+            "summary_table":   summary_table,   # flat table for LLM analysis: [{故障原因, equip_name, 合計次數}]
             "chart_config":    chart_config,
         }
 
