@@ -335,7 +335,7 @@ class EquipmentSqlAgent:
    - period_a 和 period_b 均為必填，常見用法：本季對上季、上半年對下半年
    - 可鎖定設備（equipment_code/equipment_name）、樓層（floor）或全廠
    - **`include_chart` 預設 True**，工具會回傳分組長條圖（`chart_type='bar_line_combo'`），X 軸為故障原因，紅色 = 期間A、藍色 = 期間B
-   - 回傳 `comparison` 表格：`故障原因`、`{期間A}(次)`、`{期間B}(次)`、`變化(次)`、`趨勢`；有工具回傳 chart_config 時前端會自動渲染，你只需說明「紅色長條為期間A、藍色長條為期間B，高度代表故障發生次數」
+   - 回傳 `comparison` 表格：`故障原因`、`{{期間A}}(次)`、`{{期間B}}(次)`、`變化(次)`、`趨勢`；有工具回傳 chart_config 時前端會自動渲染，你只需說明「紅色長條為期間A、藍色長條為期間B，高度代表故障發生次數」
    - top_n 預設 15，可依使用者需求調整
 
 7. 詢問「故障熱點圖/heat map/哪台設備跟哪種故障最相關」，或**未明確指定兩個期間對比**的「故障原因分布/故障有沒有規律/哪種故障最多/單一期間故障模式分析」→ 調用 `get_fault_heatmap`
