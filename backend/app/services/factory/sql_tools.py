@@ -786,7 +786,7 @@ class FactorySqlTools:
                     FROM "public"."CIM_MQTTCOLLECT_AM_PM" b
                     JOIN "public"."CIM_MQTTCODEERR" err
                         ON b."TOPIC" = err."MACHINE" AND b."CODE" = err."PLCCODE"
-                    WHERE err."CODETYPE" = 'B'
+                    WHERE b."CODETYPE" = 'B'
                       AND SUBSTRING(b."DATETIMES", 1, 8) BETWEEN '{start_ymd}' AND '{end_ymd}'
                       AND b."TOPIC" IN ({topics_in})
                       AND EXISTS (
@@ -819,7 +819,7 @@ class FactorySqlTools:
                         FROM "public"."CIM_MQTTCOLLECT_AM_PM" b
                         JOIN "public"."CIM_MQTTCODEERR" err
                             ON b."TOPIC" = err."MACHINE" AND b."CODE" = err."PLCCODE"
-                        WHERE err."CODETYPE" = 'B'
+                        WHERE b."CODETYPE" = 'B'
                           AND SUBSTRING(b."DATETIMES", 1, 8) BETWEEN '{start_ymd}' AND '{end_ymd}'
                           AND b."TOPIC" IN ({missing_in})
                           AND EXISTS (
@@ -965,7 +965,7 @@ class FactorySqlTools:
                 FROM "public"."CIM_MQTTCOLLECT_AM_PM" b
                 JOIN "public"."CIM_MQTTCODEERR" err
                     ON b."TOPIC" = err."MACHINE" AND b."CODE" = err."PLCCODE"
-                WHERE err."CODETYPE" = 'B'
+                WHERE b."CODETYPE" = 'B'
                   AND SUBSTRING(b."DATETIMES", 1, 8) BETWEEN '{ymd_start}' AND '{ymd_end}'
                   AND LENGTH(b."DATETIMES") >= 14
                   {topic_filter}
@@ -1089,7 +1089,7 @@ class FactorySqlTools:
             JOIN "public"."CIM_MQTTCODEERR" err
                 ON b."TOPIC" = err."MACHINE" AND b."CODE" = err."PLCCODE"
             LEFT JOIN "public"."EQUIPMENT_INFO_DICT" ei ON ei."TOPIC" = b."TOPIC"
-            WHERE err."CODETYPE" = 'B'
+            WHERE b."CODETYPE" = 'B'
               AND err."NOTE" IS NOT NULL
               AND SUBSTRING(b."DATETIMES", 1, 8) BETWEEN '{start_ymd}' AND '{end_ymd}'
               AND EXISTS (
