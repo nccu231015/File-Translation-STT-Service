@@ -764,12 +764,15 @@ class FactorySqlTools:
             }
 
         # Secondary query: fetch 主要停機原因 only when requested
-        # Strategy: B-codes appear within the same second as A001/A006-A009 (co-occurrence)
+        # Strategy 1 (same-second): B-codes co-occur within same second as DOWN A-codes
+        # Strategy 2 (same-minute fallback): widen window to same minute for devices with no same-second match
         # B-code PLCCODE maps to CIM_MQTTCODEERR.NOTE for fault description
         topic_list = [r.get("設備代碼") for r in rows if r.get("設備代碼")]
         cause_map: Dict[str, str] = {}
         if include_cause and topic_list:
             topics_in = ",".join(f"'{t}'" for t in topic_list)
+
+            # --- Pass 1: same-second co-occurrence (SUBSTRING 1→15) ---
             cause_query = f"""
                 SELECT * FROM (
                     SELECT
@@ -796,7 +799,42 @@ class FactorySqlTools:
                 WHERE "S"."RN" = 1
             """
             cause_rows = self._execute_postgres_query(cause_query)
-            cause_map = {r["TOPIC"]: r.get("NOTE") or "-" for r in cause_rows if r.get("TOPIC")}
+            cause_map = {r["TOPIC"]: r.get("NOTE") or "" for r in cause_rows if r.get("TOPIC")}
+
+            # --- Pass 2: same-minute fallback for devices with no same-second result ---
+            missing_topics = [t for t in topic_list if not cause_map.get(t)]
+            if missing_topics:
+                missing_in = ",".join(f"'{t}'" for t in missing_topics)
+                fallback_query = f"""
+                    SELECT * FROM (
+                        SELECT
+                            b."TOPIC",
+                            err."NOTE",
+                            COUNT(*) AS "CS",
+                            ROW_NUMBER() OVER (
+                                PARTITION BY b."TOPIC"
+                                ORDER BY COUNT(*) DESC
+                            ) AS "RN"
+                        FROM "public"."CIM_MQTTCOLLECT_AM_PM" b
+                        JOIN "public"."CIM_MQTTCODEERR" err ON b."CODE" = err."PLCCODE"
+                        WHERE b."CODE" LIKE 'B%'
+                          AND SUBSTRING(b."DATETIMES", 1, 8) BETWEEN '{start_ymd}' AND '{end_ymd}'
+                          AND b."TOPIC" IN ({missing_in})
+                          AND EXISTS (
+                              SELECT 1 FROM "public"."CIM_MQTTCOLLECT_AM_PM" a
+                              WHERE a."TOPIC" = b."TOPIC"
+                                AND a."CODE" IN ('A001','A006','A007','A008','A009')
+                                AND SUBSTRING(a."DATETIMES", 1, 13) = SUBSTRING(b."DATETIMES", 1, 13)
+                          )
+                        GROUP BY b."TOPIC", err."NOTE"
+                    ) "S"
+                    WHERE "S"."RN" = 1
+                """
+                fallback_rows = self._execute_postgres_query(fallback_query)
+                for r in fallback_rows:
+                    t = r.get("TOPIC")
+                    if t and not cause_map.get(t):
+                        cause_map[t] = r.get("NOTE") or ""
 
         # Build clean output rows
         clean_rows = []
@@ -810,7 +848,7 @@ class FactorySqlTools:
                 "停機時數(h)": hrs,
             }
             if include_cause:
-                row["主要停機原因"] = cause_map.get(topic, "-")
+                row["主要停機原因"] = cause_map.get(topic) or "無對應故障代碼記錄"
             clean_rows.append(row)
 
         # Pareto chart: bars = total hours desc, line = cumulative %
