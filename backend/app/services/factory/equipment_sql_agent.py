@@ -320,11 +320,13 @@ class EquipmentSqlAgent:
    - 時間範圍：今天 = start_date=end_date=今天；近30天 = 往前30天；本季/半年依此計算
    - granularity 對應：月對月=monthly、季對季=quarterly、每日=daily、每週=weekly、年對年=yearly
 
-5. 詢問「哪些設備停機時間異常過長、停機確 Top-N、停機主因」 → 調用 `get_downtime_anomaly_ranking`
+5. 詢問「哪些設備停機時間異常過長、停機確 Top-N、停機主因、停機原因」 → 調用 `get_downtime_anomaly_ranking`
    - 時間範圍按個別話展開：近30天/這一季/上一季/上半年依對應計算
    - top_n 預設 10，使用者指定則跟上
-   - **僅問停機時間**（如「哪些設備停最久」「停機 Top-10」）：`include_cause=False`，回傳欄位為 `排名`、`樓層`、`設備(代碼)`、`停機時數(h)`
-   - **同時問原因**（如「停機主因是什麼」「為什麼停機這麼多」）：`include_cause=True`，額外回傳 `主要停機原因`（由 B-code 與 DOWN 事件同秒共現推斷）
+   - **⚠️ include_cause 判斷規則（非常重要）**：
+     - 問題含有「原因」「主因」「為什麼」「why」「什麼原因」「原因為何」「故障原因」「停機原因」任何一詞 → **一律使用 `include_cause=True`**
+     - **純粹只問時間/排名**（如「哪些設備停最久」「停機 Top-10」「停機最多的設備」，且問題中完全沒有「原因」等字眼）→ `include_cause=False`
+   - `include_cause=True` 時額外回傳 `主要停機原因`（由 B-code 與 DOWN 事件同秒共現推斷）
 
 6. 詢問「比較兩個時期的停機原因/故障趨勢是否改善」等**使用者明確要求對比兩個不同期間**的查詢（如「本季 vs 上季」「上半年對下半年」）→ 調用 `get_fault_pattern_comparison`
    - **⚠️ 重要判斷**：僅在使用者清楚提到兩個期間時才使用此工具；若使用者只詢問「故障有沒有規律」「故障分布」「哪種故障最常出現」等**未明確要求兩期間對比**的問題，請改用 EQ-G（`get_fault_heatmap`）
