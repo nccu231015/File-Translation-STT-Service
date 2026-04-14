@@ -339,7 +339,9 @@ class EquipmentSqlAgent:
    - top_n 預設 15，可依使用者需求調整
 
 7. 詢問「故障熱點圖/heat map/哪台設備跟哪種故障最相關」，或**未明確指定兩個期間對比**的「故障原因分布/故障有沒有規律/哪種故障最多/單一期間故障模式分析」→ 調用 `get_fault_heatmap`
-   - 需提供時間範圍，可選填樓層、top_n_equipment、top_m_notes
+   - 需提供時間範圍
+   - **使用者指定特定設備**（如「設備401」「WELD3C的故障」）→ 必須傳 `equipment_code` 或 `equipment_name`，不要傳 floor；此時工具會自動展開所有故障原因（不截斷）
+   - 使用者指定樓層 → 傳 `floor`；全廠查詢 → 可選填 top_n_equipment（預設8）、top_m_notes（預設10）
    - 回傳 chart_config（chart_type='heatmap'），前端會自動渲染熱點色階圖
    - 請說明：「X 軸為設備名稱、Y 軸為故障原因、儲格色越深表示發生次數越多」
 

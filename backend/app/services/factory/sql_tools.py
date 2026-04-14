@@ -1062,20 +1062,49 @@ class FactorySqlTools:
         start_date: str,
         end_date: str,
         floor: str = None,
+        equipment_code: str = None,
+        equipment_name: str = None,
         top_n_equipment: int = 8,
         top_m_notes: int = 10,
     ) -> Dict[str, Any]:
         """
         EQ-G: Build a heat map of fault reasons (NOTE) × equipment for a period.
+        Can scope to a single device (equipment_code/equipment_name), a floor, or the whole factory.
         Returns chart_type='heatmap' compatible with ChartConfig.
         """
         start_ymd = start_date.replace('-', '')
         end_ymd   = end_date.replace('-', '')
-        safe_floor = (floor or '').replace("'", "''")
-        floor_filter = (
-            f'AND ei."EQUIP_INSTALL_POSITION" ILIKE \'%{safe_floor}%\''
-            if safe_floor else ''
-        )
+
+        # Build scope filter: single equipment > floor > factory-wide
+        scope_filter = ""
+        scope_label  = floor or "全廠"
+        if equipment_code or equipment_name:
+            safe_kw = (equipment_name or equipment_code or "").replace("'", "''")
+            info_q = f"""
+                SELECT DISTINCT "EQUIPMENT_CODE", "EQUIPMENT_NAME", "TOPIC"
+                FROM "public"."EQUIPMENT_INFO_DICT"
+                WHERE "EQUIPMENT_NAME" ILIKE '%{safe_kw}%'
+                   OR "EQUIPMENT_CODE" ILIKE '%{safe_kw}%'
+                LIMIT 1
+            """
+            info_rows = self._execute_postgres_query(info_q)
+            if info_rows:
+                eq_code   = info_rows[0].get("EQUIPMENT_CODE") or safe_kw
+                eq_top    = info_rows[0].get("TOPIC") or eq_code
+                scope_label = info_rows[0].get("EQUIPMENT_NAME") or eq_code
+                scope_filter = f'AND (b."TOPIC" = \'{eq_code}\' OR b."TOPIC" = \'{eq_top}\')'
+                # When scoped to single equipment, expand top_n so nothing is truncated
+                top_n_equipment = 1
+                top_m_notes = 30
+            else:
+                # Fallback: try matching TOPIC directly
+                safe_kw2 = safe_kw
+                scope_filter = f'AND b."TOPIC" ILIKE \'%{safe_kw2}%\''
+                top_n_equipment = 1
+                top_m_notes = 30
+        elif floor:
+            safe_floor = floor.replace("'", "''")
+            scope_filter = f'AND ei."EQUIP_INSTALL_POSITION" ILIKE \'%{safe_floor}%\''
 
         # Join B-codes (fault reason) with co-occurring DOWN events (A001/A006-A009)
         # B-codes appear within the same second as DOWN A-codes (co-occurrence pattern confirmed)
@@ -1098,7 +1127,7 @@ class FactorySqlTools:
                     AND a."CODE" IN ('A001','A006','A007','A008','A009')
                     AND SUBSTRING(a."DATETIMES", 1, 15) = SUBSTRING(b."DATETIMES", 1, 15)
               )
-              {floor_filter}
+              {scope_filter}
             GROUP BY
                 COALESCE(ei."EQUIPMENT_NAME", b."TOPIC"),
                 err."NOTE"
@@ -1164,7 +1193,7 @@ class FactorySqlTools:
 
         chart_config = {
             "chart_type": "heatmap",
-            "title":      f"故障原因熱點圖（{floor or '全廠'}） {start_date} ~ {end_date}",
+            "title":      f"故障原因熱點圖（{scope_label}） {start_date} ~ {end_date}",
             "labels":     top_equips,           # X-axis: equipment
             "datasets":   datasets,             # Y-axis: one row per fault note
             "max_value":  max_val,
@@ -1173,7 +1202,7 @@ class FactorySqlTools:
         return {
             "status":          "success",
             "period":          f"{start_date} ~ {end_date}",
-            "floor":           floor or "全廠",
+            "scope":           scope_label,
             "top_n_equipment": top_n_equipment,
             "top_m_notes":     top_m_notes,
             "equipment_list":  top_equips,
