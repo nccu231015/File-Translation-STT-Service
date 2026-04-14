@@ -149,7 +149,11 @@ class FactorySqlTools:
                     "EQUIPMENT_CODE", "EQUIPMENT_NAME", "TOPIC",
                     "EQUIP_INSTALL_POSITION", "GDHM"
                 FROM "public"."EQUIPMENT_INFO_DICT"
-                ORDER BY "EQUIPMENT_CODE", "GDHM" DESC NULLS LAST
+                -- Prefer rows with floor and topic populated, then latest GDHM
+                ORDER BY "EQUIPMENT_CODE",
+                    CASE WHEN "EQUIP_INSTALL_POSITION" IS NOT NULL AND "EQUIP_INSTALL_POSITION" != '' THEN 0 ELSE 1 END,
+                    CASE WHEN "TOPIC" IS NOT NULL AND "TOPIC" != '' THEN 0 ELSE 1 END,
+                    "GDHM" DESC NULLS LAST
             ),
             deltas AS (
                 -- Compute duration per state interval using LAG within (TOPIC, date)
@@ -227,10 +231,7 @@ class FactorySqlTools:
 
         clean_rows = []
         for r in rows:
-            yld     = r.get('良率(%)')
             util    = r.get('稼動率(%)')
-            good    = r.get('良品數量', 0) or 0
-            bad     = r.get('不良數量', 0) or 0
             eq_name = r.get('設備名稱') or ''
             clean_rows.append({
                 '樓層':       r.get('樓層', 'N/A'),
@@ -239,9 +240,6 @@ class FactorySqlTools:
                 'RUN(分)':    int(r.get('RUN(分)', 0) or 0),
                 'DOWN(分)':   int(r.get('DOWN(分)', 0) or 0),
                 '稼動率(%)':  round(float(util), 2) if util is not None else '-',
-                '生產數':     int(good),
-                '不良數':     int(bad),
-                '良率(%)':   round(float(yld), 2) if yld is not None else '-',
             })
 
         return {
@@ -340,7 +338,11 @@ class FactorySqlTools:
                     "EQUIPMENT_CODE", "EQUIPMENT_NAME", "TOPIC",
                     "EQUIP_INSTALL_POSITION", "GDHM"
                 FROM "public"."EQUIPMENT_INFO_DICT"
-                ORDER BY "EQUIPMENT_CODE", "GDHM" DESC NULLS LAST
+                -- Prefer rows with floor and topic populated, then latest GDHM
+                ORDER BY "EQUIPMENT_CODE",
+                    CASE WHEN "EQUIP_INSTALL_POSITION" IS NOT NULL AND "EQUIP_INSTALL_POSITION" != '' THEN 0 ELSE 1 END,
+                    CASE WHEN "TOPIC" IS NOT NULL AND "TOPIC" != '' THEN 0 ELSE 1 END,
+                    "GDHM" DESC NULLS LAST
             ),
             deltas AS (
                 -- LAG-based duration within each (TOPIC, date) to avoid cross-day bleeding
@@ -704,7 +706,11 @@ class FactorySqlTools:
                     "EQUIPMENT_CODE", "EQUIPMENT_NAME", "TOPIC",
                     "EQUIP_INSTALL_POSITION"
                 FROM "public"."EQUIPMENT_INFO_DICT"
-                ORDER BY "EQUIPMENT_CODE", "GDHM" DESC NULLS LAST
+                -- Prefer rows with floor and topic populated, then latest GDHM
+                ORDER BY "EQUIPMENT_CODE",
+                    CASE WHEN "EQUIP_INSTALL_POSITION" IS NOT NULL AND "EQUIP_INSTALL_POSITION" != '' THEN 0 ELSE 1 END,
+                    CASE WHEN "TOPIC" IS NOT NULL AND "TOPIC" != '' THEN 0 ELSE 1 END,
+                    "GDHM" DESC NULLS LAST
             ),
             -- LAG within each (TOPIC, date) to avoid cross-day bleeding
             -- Source: CIM_MQTTCOLLECT_AM_PM; DATETIMES format = YYYYMMDDTHHMMSS.xxxxx
