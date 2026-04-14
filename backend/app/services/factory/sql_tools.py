@@ -916,20 +916,22 @@ class FactorySqlTools:
         equipment_code: str = None,
         equipment_name: str = None,
         floor: str = None,
-        include_chart: bool = False
+        top_n: int = 15,
+        include_chart: bool = True
     ) -> Dict[str, Any]:
         """
-        EQ-F: Compare total state duration between two time periods.
-        Can scope to a specific device, floor, or the entire factory.
-        Returns total hours for both periods + delta, optional bar chart.
+        EQ-F: Compare fault reason distribution between two time periods.
+        Strategy: B-codes co-occurring within same second as A001/A006-A009 DOWN events,
+        joined with CIM_MQTTCODEERR for fault description (NOTE).
+        Returns top-N fault reasons ranked by combined occurrence count,
+        with grouped bar chart (period A vs period B) and comparison table.
         """
-        # Optional equipment filter
-        topic_filter_a = ""
-        topic_filter_b = ""
+        # Build optional topic filter based on equipment or floor scope
+        topic_filter = ""
         eq_label = floor or "全廠"
         if equipment_code or equipment_name:
             safe_kw = (equipment_name or equipment_code or "").replace("'", "''")
-            info_q  = f"""
+            info_q = f"""
                 SELECT DISTINCT "EQUIPMENT_CODE", "EQUIPMENT_NAME", "TOPIC"
                 FROM "public"."EQUIPMENT_INFO_DICT"
                 WHERE "EQUIPMENT_NAME" ILIKE '%{safe_kw}%'
@@ -938,103 +940,112 @@ class FactorySqlTools:
             """
             info_rows = self._execute_postgres_query(info_q)
             if info_rows:
-                eq_code = info_rows[0].get("EQUIPMENT_CODE") or safe_kw
-                eq_top  = info_rows[0].get("TOPIC") or eq_code
+                eq_code  = info_rows[0].get("EQUIPMENT_CODE") or safe_kw
+                eq_top   = info_rows[0].get("TOPIC") or eq_code
                 eq_label = info_rows[0].get("EQUIPMENT_NAME") or eq_code
-                topic_filter_a = f'AND ("TOPIC" = \'{eq_code}\' OR "TOPIC" = \'{eq_top}\')'
-                topic_filter_b  = topic_filter_a
+                topic_filter = f'AND (b."TOPIC" = \'{eq_code}\' OR b."TOPIC" = \'{eq_top}\')'
         elif floor:
             safe_floor = floor.replace("'", "''")
-            topic_filter_a = f"""
-                AND "TOPIC" IN (
+            topic_filter = f"""
+                AND b."TOPIC" IN (
                     SELECT DISTINCT "TOPIC" FROM "public"."EQUIPMENT_INFO_DICT"
                     WHERE "EQUIP_INSTALL_POSITION" ILIKE '%{safe_floor}%'
                 )
             """
-            topic_filter_b = topic_filter_a
 
-        def _query_period(ymd_start: str, ymd_end: str, topic_filter: str) -> float:
-            """Return total DOWN-state duration (h) for a date range (A001/A006-A009 only).
-            Source: CIM_MQTTCOLLECT_AM_PM; DATETIMES format = YYYYMMDDTHHMMSS.xxxxx."""
+        def _query_fault_counts(ymd_start: str, ymd_end: str) -> Dict[str, int]:
+            """Query B-code fault occurrences co-occurring within same second as DOWN events.
+            Returns dict of {NOTE: count} for the given date range."""
             q = f"""
-                WITH deltas AS (
-                    SELECT
-                        LAG("CODE") OVER (PARTITION BY "TOPIC", SUBSTRING("DATETIMES", 1, 8) ORDER BY "DATETIMES") AS prev_code,
-                        (SUBSTRING("DATETIMES", 10, 2)::INT * 3600
-                         + SUBSTRING("DATETIMES", 12, 2)::INT * 60
-                         + SUBSTRING("DATETIMES", 14, 2)::INT)
-                        - LAG(
-                            SUBSTRING("DATETIMES", 10, 2)::INT * 3600
-                            + SUBSTRING("DATETIMES", 12, 2)::INT * 60
-                            + SUBSTRING("DATETIMES", 14, 2)::INT
-                        ) OVER (PARTITION BY "TOPIC", SUBSTRING("DATETIMES", 1, 8) ORDER BY "DATETIMES") AS duration_sec
-                    FROM "public"."CIM_MQTTCOLLECT_AM_PM"
-                    WHERE SUBSTRING("DATETIMES", 1, 8) BETWEEN '{ymd_start}' AND '{ymd_end}'
-                      AND LENGTH("DATETIMES") >= 14
-                    {topic_filter}
-                )
                 SELECT
-                    ROUND(SUM(CASE WHEN duration_sec > 0 THEN duration_sec ELSE 0 END) / 3600.0, 2) AS total_hours
-                FROM deltas
-                WHERE prev_code IN ('A001','A006','A007','A008','A009')
+                    err."NOTE",
+                    COUNT(*) AS cnt
+                FROM "public"."CIM_MQTTCOLLECT_AM_PM" b
+                JOIN "public"."CIM_MQTTCODEERR" err ON b."CODE" = err."PLCCODE"
+                WHERE b."CODE" LIKE 'B%'
+                  AND SUBSTRING(b."DATETIMES", 1, 8) BETWEEN '{ymd_start}' AND '{ymd_end}'
+                  AND LENGTH(b."DATETIMES") >= 14
+                  {topic_filter}
+                  AND EXISTS (
+                      SELECT 1 FROM "public"."CIM_MQTTCOLLECT_AM_PM" a
+                      WHERE a."TOPIC" = b."TOPIC"
+                        AND a."CODE" IN ('A001','A006','A007','A008','A009')
+                        AND SUBSTRING(a."DATETIMES", 1, 15) = SUBSTRING(b."DATETIMES", 1, 15)
+                  )
+                GROUP BY err."NOTE"
+                ORDER BY cnt DESC
             """
             rows = self._execute_postgres_query(q)
-            if rows:
-                return float(rows[0].get("total_hours") or 0)
-            return 0.0
+            return {r["NOTE"]: int(r["cnt"]) for r in rows if r.get("NOTE")}
 
         a_ymd_s = period_a_start.replace('-', '')
         a_ymd_e = period_a_end.replace('-', '')
         b_ymd_s = period_b_start.replace('-', '')
         b_ymd_e = period_b_end.replace('-', '')
 
-        ha = _query_period(a_ymd_s, a_ymd_e, topic_filter_a)
-        hb = _query_period(b_ymd_s, b_ymd_e, topic_filter_b)
-        delta = round(ha - hb, 2)
+        counts_a = _query_fault_counts(a_ymd_s, a_ymd_e)
+        counts_b = _query_fault_counts(b_ymd_s, b_ymd_e)
 
-        comparison = [{
-            f"{period_a_label} 總時數(h)": ha,
-            f"{period_b_label} 總時數(h)": hb,
-            "變化(h)":                     delta,
-            "趨勢":                        "⬆ 惡化" if delta > 0 else ("⬇ 改善" if delta < 0 else "─ 持平"),
-        }]
+        # Merge all fault reasons from both periods, rank by combined count
+        all_notes = sorted(
+            set(counts_a) | set(counts_b),
+            key=lambda n: (counts_a.get(n, 0) + counts_b.get(n, 0)),
+            reverse=True
+        )[:top_n]
 
+        # Build comparison table
+        comparison = []
+        for note in all_notes:
+            ca = counts_a.get(note, 0)
+            cb = counts_b.get(note, 0)
+            delta = ca - cb
+            comparison.append({
+                "故障原因":                note,
+                f"{period_a_label}(次)":  ca,
+                f"{period_b_label}(次)":  cb,
+                "變化(次)":               delta,
+                "趨勢":                   "⬆ 惡化" if delta > 0 else ("⬇ 改善" if delta < 0 else "─ 持平"),
+            })
+
+        # Build grouped bar chart: X = fault reason, two bars per reason (A vs B)
         chart_config = None
-        if include_chart:
+        if include_chart and all_notes:
             chart_config = {
-                "chart_type": "bar",
-                "title":      f"狀態時數比對：{period_a_label} vs {period_b_label}（{eq_label}）",
-                "labels":     [eq_label],
+                "chart_type": "bar_line_combo",
+                "title":      f"故障原因分佈比對：{period_a_label} vs {period_b_label}（{eq_label}）",
+                "labels":     all_notes,
                 "datasets": [
                     {
                         "type":            "bar",
-                        "label":           f"{period_a_label} 總時數(h)",
-                        "data":            [ha],
+                        "label":           f"{period_a_label}(次)",
+                        "data":            [counts_a.get(n, 0) for n in all_notes],
+                        "yAxisID":         "y_count",
                         "backgroundColor": "rgba(239, 68, 68, 0.65)",
                         "borderColor":     "rgba(239, 68, 68, 1)",
                     },
                     {
                         "type":            "bar",
-                        "label":           f"{period_b_label} 總時數(h)",
-                        "data":            [hb],
+                        "label":           f"{period_b_label}(次)",
+                        "data":            [counts_b.get(n, 0) for n in all_notes],
+                        "yAxisID":         "y_count",
                         "backgroundColor": "rgba(99, 102, 241, 0.55)",
                         "borderColor":     "rgba(99, 102, 241, 1)",
                     },
                 ],
                 "yAxes": {
-                    "y_hours": {"label": "總時數 (h)", "position": "left"},
+                    "y_count": {"label": "發生次數", "position": "left"},
                 },
             }
 
         return {
-            "status":          "success",
-            "scope":           eq_label,
-            "period_a":        f"{period_a_start} ~ {period_a_end}",
-            "period_b":        f"{period_b_start} ~ {period_b_end}",
-            "period_a_label":  period_a_label,
-            "period_b_label":  period_b_label,
-            "comparison":   comparison,
-            "chart_config": chart_config,
+            "status":         "success",
+            "scope":          eq_label,
+            "period_a":       f"{period_a_start} ~ {period_a_end}",
+            "period_b":       f"{period_b_start} ~ {period_b_end}",
+            "period_a_label": period_a_label,
+            "period_b_label": period_b_label,
+            "comparison":     comparison,
+            "chart_config":   chart_config,
         }
 
     # ══════════════════════════════════════════════════════════════════════════════
