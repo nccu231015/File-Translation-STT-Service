@@ -933,19 +933,35 @@ class FactorySqlTools:
         eq_label = floor or "全廠"
         if equipment_code or equipment_name:
             safe_kw = (equipment_name or equipment_code or "").replace("'", "''")
+            # Fetch display name from EQUIPMENT_INFO_DICT (prefer row with non-NULL TOPIC)
             info_q = f"""
-                SELECT DISTINCT "EQUIPMENT_CODE", "EQUIPMENT_NAME", "TOPIC"
+                SELECT "EQUIPMENT_CODE", "EQUIPMENT_NAME", "TOPIC"
                 FROM "public"."EQUIPMENT_INFO_DICT"
                 WHERE "EQUIPMENT_NAME" ILIKE '%{safe_kw}%'
                    OR "EQUIPMENT_CODE" ILIKE '%{safe_kw}%'
+                ORDER BY CASE WHEN "TOPIC" IS NOT NULL THEN 0 ELSE 1 END
                 LIMIT 1
             """
             info_rows = self._execute_postgres_query(info_q)
             if info_rows:
-                eq_code  = info_rows[0].get("EQUIPMENT_CODE") or safe_kw
-                eq_top   = info_rows[0].get("TOPIC") or eq_code
-                eq_label = info_rows[0].get("EQUIPMENT_NAME") or eq_code
-                topic_filter = f'AND (b."TOPIC" = \'{eq_code}\' OR b."TOPIC" = \'{eq_top}\')'
+                eq_label = info_rows[0].get("EQUIPMENT_NAME") or info_rows[0].get("EQUIPMENT_CODE") or safe_kw
+            else:
+                eq_label = safe_kw
+            # Multi-strategy filter: EQUIPMENT_INFO_DICT TOPIC values + EQUIPMENT_CODE as TOPIC
+            # + direct ILIKE on AM_PM.TOPIC to handle format mismatches (e.g. 'DATA/4F/64008A/' vs 'Sonic_401')
+            topic_filter = f"""AND (
+                b."TOPIC" IN (
+                    SELECT "TOPIC" FROM "public"."EQUIPMENT_INFO_DICT"
+                    WHERE ("EQUIPMENT_NAME" ILIKE '%{safe_kw}%' OR "EQUIPMENT_CODE" ILIKE '%{safe_kw}%')
+                      AND "TOPIC" IS NOT NULL
+                )
+                OR b."TOPIC" IN (
+                    SELECT "EQUIPMENT_CODE" FROM "public"."EQUIPMENT_INFO_DICT"
+                    WHERE ("EQUIPMENT_NAME" ILIKE '%{safe_kw}%' OR "EQUIPMENT_CODE" ILIKE '%{safe_kw}%')
+                      AND "EQUIPMENT_CODE" IS NOT NULL
+                )
+                OR b."TOPIC" ILIKE '%{safe_kw}%'
+            )"""
         elif floor:
             safe_floor = floor.replace("'", "''")
             topic_filter = f"""
@@ -1080,7 +1096,7 @@ class FactorySqlTools:
         scope_label  = floor or "全廠"
         if equipment_code or equipment_name:
             safe_kw = (equipment_name or equipment_code or "").replace("'", "''")
-            # Prefer rows where TOPIC is not NULL so the join to AM_PM actually works
+            # Fetch display name from EQUIPMENT_INFO_DICT (prefer row with non-NULL TOPIC)
             info_q = f"""
                 SELECT "EQUIPMENT_CODE", "EQUIPMENT_NAME", "TOPIC"
                 FROM "public"."EQUIPMENT_INFO_DICT"
@@ -1091,24 +1107,27 @@ class FactorySqlTools:
             """
             info_rows = self._execute_postgres_query(info_q)
             if info_rows:
-                eq_code     = info_rows[0].get("EQUIPMENT_CODE") or safe_kw
-                eq_top      = info_rows[0].get("TOPIC")   # keep None if NULL
-                scope_label = info_rows[0].get("EQUIPMENT_NAME") or eq_code
-                if eq_top:
-                    # Exact TOPIC match from EQUIPMENT_INFO_DICT
-                    scope_filter = f'AND b."TOPIC" = \'{eq_top}\''
-                else:
-                    # TOPIC is NULL in all matching rows → search AM_PM TOPIC by keyword
-                    # e.g. '401' may appear as 'Sonic_401', 'MACHINE_401', etc.
-                    scope_filter = f'AND b."TOPIC" ILIKE \'%{safe_kw}%\''
-                # When scoped to single equipment, expand top_m so nothing is truncated
-                top_n_equipment = 1
-                top_m_notes = 30
+                scope_label = info_rows[0].get("EQUIPMENT_NAME") or info_rows[0].get("EQUIPMENT_CODE") or safe_kw
             else:
-                # No record in EQUIPMENT_INFO_DICT → search AM_PM TOPIC directly
-                scope_filter = f'AND b."TOPIC" ILIKE \'%{safe_kw}%\''
-                top_n_equipment = 1
-                top_m_notes = 30
+                scope_label = safe_kw
+            # Multi-strategy filter: EQUIPMENT_INFO_DICT TOPIC values + EQUIPMENT_CODE as TOPIC
+            # + direct ILIKE on AM_PM.TOPIC to handle format mismatches (e.g. 'DATA/4F/64008A/' vs 'Sonic_401')
+            scope_filter = f"""AND (
+                b."TOPIC" IN (
+                    SELECT "TOPIC" FROM "public"."EQUIPMENT_INFO_DICT"
+                    WHERE ("EQUIPMENT_NAME" ILIKE '%{safe_kw}%' OR "EQUIPMENT_CODE" ILIKE '%{safe_kw}%')
+                      AND "TOPIC" IS NOT NULL
+                )
+                OR b."TOPIC" IN (
+                    SELECT "EQUIPMENT_CODE" FROM "public"."EQUIPMENT_INFO_DICT"
+                    WHERE ("EQUIPMENT_NAME" ILIKE '%{safe_kw}%' OR "EQUIPMENT_CODE" ILIKE '%{safe_kw}%')
+                      AND "EQUIPMENT_CODE" IS NOT NULL
+                )
+                OR b."TOPIC" ILIKE '%{safe_kw}%'
+            )"""
+            # When scoped to single equipment, expand top_m so nothing is truncated
+            top_n_equipment = 1
+            top_m_notes = 30
         elif floor:
             safe_floor = floor.replace("'", "''")
             scope_filter = f'AND ei."EQUIP_INSTALL_POSITION" ILIKE \'%{safe_floor}%\''
