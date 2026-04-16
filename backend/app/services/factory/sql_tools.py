@@ -2002,20 +2002,40 @@ class FactorySqlTools:
             ).isoformat()
 
         # Build WHERE filters (at least one of line_no / model expected)
+        # NOTE: blpjl_new only has [NO], PRO_TIME, bllt, blsl — no jz column.
+        # So model/work-order filters must be resolved to [NO] values via Daily_Status_Report first.
         filters: List[str] = [f"PRO_TIME BETWEEN '{start_date}' AND '{end_date}'"]
-        bl_filters: List[str] = [f"PRO_TIME BETWEEN '{start_date}' AND '{end_date}'"]
         if line_no:
-            # _build_line_filter handles both numeric IDs (e.g. '302') and
-            # human-readable names (e.g. 'SMT B') via Scx_base lookup
             filters.append(self._build_line_filter(line_no))
-            bl_filters.append(self._build_line_filter(line_no))
         if model:
             safe_model = str(model).replace("'", "''")
             filters.append(f"jz = '{safe_model}'")
-            bl_filters.append(f"jz = '{safe_model}'")
 
         where_dsr = " AND ".join(filters)
-        where_bl  = " AND ".join(bl_filters)
+
+        # ── Resolve [NO] values for blpjl_new filter ─────────────────────────
+        # blpjl_new has no jz column, so we resolve NO list from Daily_Status_Report.
+        # This also handles the case where line_no is actually a work-order number
+        # (e.g. '9RT94135-1T') that doesn't match Scx_base.scx_value.
+        no_resolve_q = f"""
+            SELECT DISTINCT CAST([NO] AS VARCHAR(50)) AS [LINE_NO]
+            FROM [dbo].[Daily_Status_Report]
+            WHERE {where_dsr} AND [NO] IS NOT NULL
+        """
+        no_rows = self._execute_mssql_query(no_resolve_q)
+        if no_rows and not (len(no_rows) == 1 and no_rows[0].get("error")):
+            no_values = [str(r["LINE_NO"]) for r in no_rows if r.get("LINE_NO")]
+            if no_values:
+                no_in = ", ".join(f"'{v}'" for v in no_values)
+                where_bl = f"PRO_TIME BETWEEN '{start_date}' AND '{end_date}' AND CAST([NO] AS VARCHAR(50)) IN ({no_in})"
+            else:
+                where_bl = f"PRO_TIME BETWEEN '{start_date}' AND '{end_date}' AND 1=0"
+        else:
+            # Fallback: apply line filter directly; model filter skipped (no jz in blpjl_new)
+            bl_filters: List[str] = [f"PRO_TIME BETWEEN '{start_date}' AND '{end_date}'"]
+            if line_no:
+                bl_filters.append(self._build_line_filter(line_no))
+            where_bl = " AND ".join(bl_filters)
 
         # Granularity time label for trend grouping
         granularity_map = {
