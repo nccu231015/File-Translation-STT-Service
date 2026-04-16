@@ -199,8 +199,8 @@ class SqlAgent:
                         "properties": {
                             "start_date":  {"type": "string", "description": "查詢起始日期，例如 '2026-03-01'。不傳預設為 end_date 往前 30 天。"},
                             "end_date":    {"type": "string", "description": "查詢截止日期，例如 '2026-04-13'。不傳預設今天。"},
-                            "line_no":     {"type": "string", "description": "產線號，例如 '302'。與 model 至少擇一傳入。"},
-                            "model":       {"type": "string", "description": "機種名稱，例如 'M3820'。與 line_no 至少擇一傳入。"},
+                            "line_no":     {"type": "string", "description": "產線號，僅限純數字或已知產線名稱，例如 '302'、'SMT B'。若使用者提供的是機種代號（含英數字混合，如 '9RT94135-1T'、'M3820'）請勿填此欄位，應填 model。"},
+                            "model":       {"type": "string", "description": "機種名稱或機種代號，例如 'M3820'、'9RT94135-1T'。只要使用者提到的識別碼不是純數字產線號，就填這裡。與 line_no 至少擇一傳入。"},
                             "granularity": {
                                 "type": "string",
                                 "enum": ["daily", "weekly", "monthly"],

@@ -2004,19 +2004,39 @@ class FactorySqlTools:
         # Build WHERE filters (at least one of line_no / model expected)
         # NOTE: blpjl_new only has [NO], PRO_TIME, bllt, blsl — no jz column.
         # So model/work-order filters must be resolved to [NO] values via Daily_Status_Report first.
+        import re as _re
+
+        def _line_or_wo_filter(val: str) -> str:
+            """
+            Return a WHERE fragment for Daily_Status_Report that handles:
+            - Pure digits          -> [NO] = '302'
+            - Work order (has '-') -> WORK_ORDER_NO = '9RT94135-1T'
+            - Line name            -> [NO] IN (SELECT scx_no FROM Scx_base WHERE ...)
+            """
+            safe = str(val).replace("'", "''")
+            if safe.strip().isdigit():
+                return f"CAST([NO] AS VARCHAR(50)) = '{safe}'"
+            if '-' in safe:
+                # Likely a work order number — match WORK_ORDER_NO directly
+                return f"WORK_ORDER_NO = '{safe}'"
+            # Line name — look up via Scx_base
+            return (
+                f"CAST([NO] AS VARCHAR(50)) IN ("
+                f"SELECT CAST(scx_no AS VARCHAR(50)) FROM [dbo].[Scx_base] "
+                f"WHERE scx_value LIKE '%{safe}%')"
+            )
+
         filters: List[str] = [f"PRO_TIME BETWEEN '{start_date}' AND '{end_date}'"]
         if line_no:
-            filters.append(self._build_line_filter(line_no))
+            filters.append(_line_or_wo_filter(line_no))
         if model:
             safe_model = str(model).replace("'", "''")
             filters.append(f"jz = '{safe_model}'")
 
         where_dsr = " AND ".join(filters)
 
-        # ── Resolve [NO] values for blpjl_new filter ─────────────────────────
-        # blpjl_new has no jz column, so we resolve NO list from Daily_Status_Report.
-        # This also handles the case where line_no is actually a work-order number
-        # (e.g. '9RT94135-1T') that doesn't match Scx_base.scx_value.
+        # ── Resolve actual [NO] values for blpjl_new filter ──────────────────
+        # blpjl_new has no jz/WORK_ORDER_NO column, so we resolve [NO] from DSR first.
         no_resolve_q = f"""
             SELECT DISTINCT CAST([NO] AS VARCHAR(50)) AS [LINE_NO]
             FROM [dbo].[Daily_Status_Report]
@@ -2031,11 +2051,11 @@ class FactorySqlTools:
             else:
                 where_bl = f"PRO_TIME BETWEEN '{start_date}' AND '{end_date}' AND 1=0"
         else:
-            # Fallback: apply line filter directly; model filter skipped (no jz in blpjl_new)
-            bl_filters: List[str] = [f"PRO_TIME BETWEEN '{start_date}' AND '{end_date}'"]
-            if line_no:
-                bl_filters.append(self._build_line_filter(line_no))
-            where_bl = " AND ".join(bl_filters)
+            # Fallback: apply line filter only (model/work-order can't be applied to blpjl_new)
+            bl_parts: List[str] = [f"PRO_TIME BETWEEN '{start_date}' AND '{end_date}'"]
+            if line_no and '-' not in str(line_no):
+                bl_parts.append(self._build_line_filter(line_no))
+            where_bl = " AND ".join(bl_parts)
 
         # Granularity time label for trend grouping
         granularity_map = {
