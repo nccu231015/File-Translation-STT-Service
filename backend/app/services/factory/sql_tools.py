@@ -481,14 +481,8 @@ class FactorySqlTools:
 
     # ══════════════════════════════════════════════════════════════════════════════
     # EQ-D: Equipment model production trend (cross-DB PG → MSSQL)
-    # Data flow:
-    #   EQUIPMENT_INFO_DICT (PG)
-    #     └─ TOPIC / EQUIPMENT_CODE → CIM_MQTT_OK_NG_QTY.SBMC  (daily LPSL/BLSL)
-    #   CIM_WORK_GD_NUM_GLW (PG)
-    #     └─ NO contained in eq_name/eq_code (reverse ILIKE)
-    #          → WORK_ORDER_NO (date-filtered)
-    #          → MSSQL Daily_Status_Report.WORK_ORDER_NO → jz (model name)
-    #   NOTE: EQUIPMENT_INFO_DICT.GDHM is deprecated; never used.
+    # Primary:  Daily_Status_Report (MSSQL) via work orders → PRO_TIME × jz (daily per model)
+    # Fallback: CIM_MQTT_OK_NG_QTY (PG) for IoT-only devices with no work order records
     # ══════════════════════════════════════════════════════════════════════════════
     def get_equipment_model_production_trend(
         self,
@@ -529,8 +523,7 @@ class FactorySqlTools:
         eq_code  = primary_row.get("EQUIPMENT_CODE") or safe_kw
         topic    = primary_row.get("TOPIC") or eq_code
 
-        # Resolve model names via CIM_WORK_GD_NUM_GLW (line codes) -> Daily_Status_Report (machine model)
-        model_names: List[str] = []
+        # Step 2: Resolve work orders from CIM_WORK_GD_NUM_GLW via reverse ILIKE on NO
         safe_eq_name = eq_name.replace("'", "''")
         safe_eq_code = eq_code.replace("'", "''")
         wo_q = f"""
@@ -543,130 +536,141 @@ class FactorySqlTools:
               AND "WORK_ORDER_NO" IS NOT NULL
               AND CAST("PRO_TIME" AS DATE) BETWEEN '{start_date}' AND '{end_date}'
         """
-        wo_rows = self._execute_postgres_query(wo_q)
+        wo_rows    = self._execute_postgres_query(wo_q)
         work_orders = [r.get("WORK_ORDER_NO") for r in wo_rows if r.get("WORK_ORDER_NO")]
+
+        # Step 3: PRIMARY - Daily_Status_Report grouped by PRO_TIME + jz (daily per model)
+        # Fallback to CIM_MQTT_OK_NG_QTY for IoT-only devices with no work orders.
+        ds_rows:  List[Dict[str, Any]] = []
+        qty_rows: List[Dict[str, Any]] = []
 
         if work_orders:
             wo_in = ",".join(f"'{w}'" for w in work_orders)
-            ms_q = f"""
-                SELECT DISTINCT jz AS [機種名稱]
-                FROM [dbo].[Daily_Status_Report]
-                WHERE [WORK_ORDER_NO] IN ({wo_in})
-                  AND jz IS NOT NULL AND jz <> ''
-            """
-            ms_rows = self._execute_mssql_query(ms_q)
-            model_names = [r.get("機種名稱") for r in ms_rows if r.get("機種名稱")]
-
-        # fetch daily LPSL / BLSL from CIM_MQTT_OK_NG_QTY
-        # SBMC matches EQUIPMENT_CODE (short name, e.g. 'Sonic_501').
-        # Use eq_code / topic resolved in Step 1 as direct literals; ILIKE on eq_name as fallback.
-        start_ymd    = start_date.replace('-', '')
-        end_ymd      = end_date.replace('-', '')
-        safe_eq_code_qty = eq_code.replace("'", "''")
-        safe_topic_qty   = topic.replace("'", "''")
-        safe_kw_qty      = safe_kw.replace("'", "''")
-
-        qty_q = f"""
-            SELECT
-                "YMD"                        AS "日期碼",
-                SUM(COALESCE("LPSL", 0))     AS "良品數量",
-                SUM(COALESCE("BLSL", 0))     AS "不良數量"
-            FROM "public"."CIM_MQTT_OK_NG_QTY"
-            WHERE "YMD" BETWEEN '{start_ymd}' AND '{end_ymd}'
-              AND (
-                "SBMC" = '{safe_eq_code_qty}'
-                OR "SBMC" = '{safe_topic_qty}'
-                OR "SBMC" ILIKE '%{safe_kw_qty}%'
-              )
-            GROUP BY "YMD"
-            ORDER BY "YMD"
-        """
-        qty_rows = self._execute_postgres_query(qty_q)
-
-        # Fallback: when CIM_MQTT_OK_NG_QTY has no data, query MSSQL Daily_Status_Report
-        # grouped by jz (model name) using the work orders resolved in Step 2.
-        # Columns used: ACTUAL_PRO (total produced), NG_NUM (defect count).
-        model_qty_data: List[Dict[str, Any]] = []
-        if not qty_rows and work_orders:
-            wo_in_qty = ",".join(f"'{w}'" for w in work_orders)
-            ms_qty_q = f"""
+            ds_q = f"""
                 SELECT
-                    jz                        AS [機種名稱],
-                    SUM(ACTUAL_PRO)           AS [總產量],
-                    SUM(NG_NUM)               AS [不良數量]
+                    CONVERT(varchar(10), PRO_TIME, 120)  AS [日期],
+                    jz                                    AS [機種名稱],
+                    SUM(ISNULL(ACTUAL_PRO, 0))            AS [總產量],
+                    SUM(ISNULL(NG_NUM, 0))                AS [不良數量]
                 FROM [dbo].[Daily_Status_Report]
-                WHERE WORK_ORDER_NO IN ({wo_in_qty})
+                WHERE WORK_ORDER_NO IN ({wo_in})
+                  AND PRO_TIME BETWEEN '{start_date}' AND '{end_date}'
                   AND jz IS NOT NULL AND jz <> ''
-                GROUP BY jz
-                ORDER BY SUM(ACTUAL_PRO) DESC
+                GROUP BY PRO_TIME, jz
+                ORDER BY PRO_TIME, jz
             """
-            ms_qty_rows = self._execute_mssql_query(ms_qty_q)
-            for r in ms_qty_rows:
+            ds_rows = self._execute_mssql_query(ds_q)
+
+        if not ds_rows:
+            # Fallback: IoT-only device not covered by Daily_Status_Report
+            start_ymd        = start_date.replace('-', '')
+            end_ymd          = end_date.replace('-', '')
+            safe_eq_code_qty = eq_code.replace("'", "''")
+            safe_topic_qty   = topic.replace("'", "''")
+            safe_kw_qty      = safe_kw.replace("'", "''")
+            qty_q = f"""
+                SELECT
+                    "YMD"                        AS "日期碼",
+                    SUM(COALESCE("LPSL", 0))     AS "良品數量",
+                    SUM(COALESCE("BLSL", 0))     AS "不良數量"
+                FROM "public"."CIM_MQTT_OK_NG_QTY"
+                WHERE "YMD" BETWEEN '{start_ymd}' AND '{end_ymd}'
+                  AND (
+                    "SBMC" = '{safe_eq_code_qty}'
+                    OR "SBMC" = '{safe_topic_qty}'
+                    OR "SBMC" ILIKE '%{safe_kw_qty}%'
+                  )
+                GROUP BY "YMD"
+                ORDER BY "YMD"
+            """
+            qty_rows = self._execute_postgres_query(qty_q)
+
+        # Derive model_names and per-model totals from Daily_Status_Report rows
+        model_names:    List[str]           = []
+        model_qty_data: List[Dict[str, Any]] = []
+        if ds_rows:
+            model_qty_map: Dict[str, Dict[str, int]] = {}
+            for r in ds_rows:
+                jz = r.get("機種名稱")
+                if not jz:
+                    continue
+                entry = model_qty_map.setdefault(jz, {"total": 0, "ng": 0})
+                entry["total"] += int(r.get("總產量") or 0)
+                entry["ng"]    += int(r.get("不良數量") or 0)
+            model_names = sorted(model_qty_map.keys())
+            for jz, vals in sorted(model_qty_map.items(), key=lambda x: x[1]["total"], reverse=True):
+                t = vals["total"]
+                b = vals["ng"]
+                g = max(t - b, 0)
+                model_qty_data.append({
+                    "機種名稱":   jz,
+                    "總產量":     t,
+                    "良品數量":   g,
+                    "不良數量":   b,
+                    "良率(%)":   round(g / t * 100, 2) if t > 0 else 0,
+                    "不良率(%)": round(b / t * 100, 4) if t > 0 else 0,
+                })
+
+        # Step 4: Convert date to period label, then aggregate totals
+        def _to_period(date_str: str, gran: str) -> str:
+            """Convert ISO date ('YYYY-MM-DD') to period label."""
+            try:
+                dt = datetime.date.fromisoformat(date_str[:10])
+                y, m = dt.year, dt.month
+                if gran == 'daily':       return dt.isoformat()
+                if gran == 'weekly':      return f"{y}-W{dt.isocalendar()[1]:02d}"
+                if gran == 'monthly':     return f"{y}-{m:02d}"
+                if gran == 'quarterly':   return f"{y}-Q{(m - 1) // 3 + 1}"
+                if gran == 'half_yearly': return f"{y}-{'1H' if m <= 6 else '2H'}"
+                if gran == 'yearly':      return str(y)
+            except Exception:
+                pass
+            return date_str
+
+        def _ymd_to_period(ymd: str, gran: str) -> str:
+            """Convert YYYYMMDD string to period label (CIM_MQTT_OK_NG_QTY fallback)."""
+            try:
+                dt = datetime.date(int(ymd[:4]), int(ymd[4:6]), int(ymd[6:8]))
+                return _to_period(dt.isoformat(), gran)
+            except Exception:
+                return ymd
+
+        period_good: Dict[str, float] = {}
+        period_bad:  Dict[str, float] = {}
+        if ds_rows:
+            for r in ds_rows:
+                p     = _to_period(str(r.get("日期") or ""), granularity)
                 total = int(r.get("總產量") or 0)
                 bad   = int(r.get("不良數量") or 0)
                 good  = max(total - bad, 0)
-                model_qty_data.append({
-                    "機種名稱":   r.get("機種名稱"),
-                    "總產量":     total,
-                    "良品數量":   good,
-                    "不良數量":   bad,
-                    "良率(%)":   round(good / total * 100, 2) if total > 0 else 0,
-                    "不良率(%)": round(bad  / total * 100, 4) if total > 0 else 0,
-                })
-
-        # ── Step 4: Convert YMD (YYYYMMDD) to period label by granularity ────────
-        def ymd_to_period(ymd: str, gran: str) -> str:
-            """Convert YYYYMMDD string to a period label for the given granularity."""
-            try:
-                y, m, d = int(ymd[:4]), int(ymd[4:6]), int(ymd[6:8])
-                dt = datetime.date(y, m, d)
-                if gran == 'daily':
-                    return dt.isoformat()
-                elif gran == 'weekly':
-                    return f"{y}-W{dt.isocalendar()[1]:02d}"
-                elif gran == 'monthly':
-                    return f"{y}-{m:02d}"
-                elif gran == 'quarterly':
-                    return f"{y}-Q{(m - 1) // 3 + 1}"
-                elif gran == 'half_yearly':
-                    return f"{y}-{'1H' if m <= 6 else '2H'}"
-                elif gran == 'yearly':
-                    return str(y)
-            except Exception:
-                pass
-            return ymd  # fallback
-
-        # Aggregate by period
-        period_good: Dict[str, float] = {}
-        period_bad:  Dict[str, float] = {}
-        for row in qty_rows:
-            ymd  = str(row.get("日期碼") or "")
-            good = float(row.get("良品數量") or 0)
-            bad  = float(row.get("不良數量") or 0)
-            p    = ymd_to_period(ymd, granularity)
-            period_good[p] = period_good.get(p, 0) + good
-            period_bad[p]  = period_bad.get(p,  0) + bad
+                period_good[p] = period_good.get(p, 0) + good
+                period_bad[p]  = period_bad.get(p, 0)  + bad
+        else:
+            for r in qty_rows:
+                p    = _ymd_to_period(str(r.get("日期碼") or ""), granularity)
+                good = float(r.get("良品數量") or 0)
+                bad  = float(r.get("不良數量") or 0)
+                period_good[p] = period_good.get(p, 0) + good
+                period_bad[p]  = period_bad.get(p, 0)  + bad
 
         periods = sorted(period_good.keys())
 
         # Build trend table
         trend_data = []
         for p in periods:
-            good = period_good[p]
-            bad  = period_bad[p]
+            good  = period_good[p]
+            bad   = period_bad[p]
             total = good + bad
-            defect_rate = round(bad / total * 100, 4) if total > 0 else 0
-            yield_rate  = round(good / total * 100, 2) if total > 0 else 0
             trend_data.append({
-                "時間標籤":    p,
-                "良品數量":    int(good),
-                "不良數量":    int(bad),
-                "總產量":      int(total),
-                "不良率(%)":  defect_rate,
-                "良率(%)":    yield_rate,
+                "時間標籤":   p,
+                "良品數量":   int(good),
+                "不良數量":   int(bad),
+                "總產量":     int(total),
+                "不良率(%)": round(bad / total * 100, 4) if total > 0 else 0,
+                "良率(%)":   round(good / total * 100, 2) if total > 0 else 0,
             })
 
-        # ── Step 5: Build chart_config (bar_line_combo) if requested ─────────────
+        # Step 5: Build chart_config if requested
         chart_config = None
         if include_chart and periods:
             qty_data  = [int(period_good[p] + period_bad[p]) for p in periods]
