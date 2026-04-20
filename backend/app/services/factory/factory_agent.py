@@ -26,6 +26,8 @@ class FactoryAgentService:
         """
         print(f"\n[Factory Agent] Received new question: '{user_question}'")
 
+        # Routing context (follow-up handling) is managed by n8n;
+        # Python router is used as a local fallback only.
         route_decision = await self.router.route_question(user_question)
         route_type = route_decision.get("route", "SQL_PROD")
         print(f"[Factory Agent] Router decision -> {route_type}")

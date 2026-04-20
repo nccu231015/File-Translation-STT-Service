@@ -17,9 +17,11 @@ class FactoryRouterAgent:
         """
         Decide which agent should handle the question.
         Returns JSON: {"route": "SQL_EQ" | "SQL_PROD", "reason": "..."}
+        Note: conversation-context routing is handled by n8n; this method
+        is kept as a fallback / local test entry point only.
         """
         system_prompt = """你是一個製造業智能問答系統的請求路由器。
-請分析使用者的問題，決定應交由哪一個子 Agent 處理：
+請根據使用者的問題，決定應交由哪一個子 Agent 處理。
 
 1. 設備 Agent (route: "SQL_EQ")：
    負責處理一切與「設備本身」相關的問題。例如：
@@ -49,9 +51,9 @@ class FactoryRouterAgent:
     "route": "SQL_EQ" 或 "SQL_PROD",
     "reason": "你的判斷理由"
 }"""
-        
+
         try:
-            messages = [{"role": "user", "content": f"問題：{question}"}]
+            messages = [{"role": "user", "content": f"目前問題：{question}"}]
             result = await self.llm.chat_json(messages, system_prompt=system_prompt)
             
             # 確保回傳結構完整
