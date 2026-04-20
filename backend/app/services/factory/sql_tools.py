@@ -583,6 +583,37 @@ class FactorySqlTools:
         """
         qty_rows = self._execute_postgres_query(qty_q)
 
+        # Fallback: when CIM_MQTT_OK_NG_QTY has no data, query MSSQL Daily_Status_Report
+        # grouped by jz (model name) using the work orders resolved in Step 2.
+        # Columns used: ACTUAL_PRO (total produced), NG_NUM (defect count).
+        model_qty_data: List[Dict[str, Any]] = []
+        if not qty_rows and work_orders:
+            wo_in_qty = ",".join(f"'{w}'" for w in work_orders)
+            ms_qty_q = f"""
+                SELECT
+                    jz                        AS [機種名稱],
+                    SUM(ACTUAL_PRO)           AS [總產量],
+                    SUM(NG_NUM)               AS [不良數量]
+                FROM [dbo].[Daily_Status_Report]
+                WHERE WORK_ORDER_NO IN ({wo_in_qty})
+                  AND jz IS NOT NULL AND jz <> ''
+                GROUP BY jz
+                ORDER BY SUM(ACTUAL_PRO) DESC
+            """
+            ms_qty_rows = self._execute_mssql_query(ms_qty_q)
+            for r in ms_qty_rows:
+                total = int(r.get("總產量") or 0)
+                bad   = int(r.get("不良數量") or 0)
+                good  = max(total - bad, 0)
+                model_qty_data.append({
+                    "機種名稱":   r.get("機種名稱"),
+                    "總產量":     total,
+                    "良品數量":   good,
+                    "不良數量":   bad,
+                    "良率(%)":   round(good / total * 100, 2) if total > 0 else 0,
+                    "不良率(%)": round(bad  / total * 100, 4) if total > 0 else 0,
+                })
+
         # ── Step 4: Convert YMD (YYYYMMDD) to period label by granularity ────────
         def ymd_to_period(ymd: str, gran: str) -> str:
             """Convert YYYYMMDD string to a period label for the given granularity."""
@@ -685,8 +716,9 @@ class FactorySqlTools:
             "topic":          topic,
             "period":         f"{start_date} ~ {end_date}",
             "granularity":    granularity,
-            "model_names":       model_names,
-            "qty_data_available": bool(trend_data),
+            "model_names":        model_names,
+            "model_qty_data":     model_qty_data,   # per-model defect stats from Daily_Status_Report (fallback)
+            "qty_data_available": bool(trend_data) or bool(model_qty_data),
             "summary": {
                 "總產量":    int(total_all),
                 "良品數量":  int(total_good_all),

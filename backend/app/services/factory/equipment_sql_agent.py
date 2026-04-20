@@ -331,6 +331,10 @@ class EquipmentSqlAgent:
    - **回傳欄位 `qty_data_available` 判斷規則（必須嚴格遵守）**：
      - `qty_data_available=true`：正常顯示產量統計（良品、不良品、良率等）
      - `qty_data_available=false`：**絕對不可顯示產量統計**，只顯示 `model_names` 機種清單，並說明「產量數據目前不可用」
+   - **`model_qty_data` 欄位使用規則**：
+     - 若回傳中 `model_qty_data` 不為空（即 `[]` 以外），**優先使用 `model_qty_data` 顯示各機種的總產量、良品數、不良數、良率、不良率**
+     - `model_qty_data` 為工單層級的 MSSQL 備援資料（Daily_Status_Report 來源），當 CIM 即時資料不可用時自動填充
+     - 此時 `qty_data_available=true` 但 `trend_data=[]`，請以 `model_qty_data` 取代時序趨勢表格
    - 若使用者只問「生産了哪些機種」，重點輸出 `model_names` 清單，不需強調產量數字
 
 5. 詢問「哪些設備停機時間異常過長、停機確 Top-N、停機主因」 → 調用 `get_downtime_anomaly_ranking`
