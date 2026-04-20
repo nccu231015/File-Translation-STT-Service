@@ -380,15 +380,43 @@ class PDFLayoutPreservingService:
                 if n_unique < n_blocks:
                     print(f"  [Dedup] {n_blocks} blocks → {n_unique} unique texts to translate.", flush=True)
 
-                # Use batch func if available, otherwise fall back to sequential
+                # Use batch func if available, otherwise fall back to sequential.
+                # Cap each sub-batch at MAX_BATCH_SIZE to prevent LLM output truncation
+                # (a single huge batch with 80+ table cells hits the num_predict limit,
+                # causing most items to fall back to individual calls and blowing up latency).
+                MAX_BATCH_SIZE = int(os.getenv("PDF_MAX_BATCH_SIZE", "35"))
+
                 if self.translate_batch_func and n_unique > 1:
                     try:
-                        unique_translations = await self.translate_batch_func(unique_texts, target_lang, page_context)
+                        if n_unique <= MAX_BATCH_SIZE:
+                            unique_translations = await self.translate_batch_func(
+                                unique_texts, target_lang, page_context
+                            )
+                        else:
+                            # Split into sub-batches and merge results in order
+                            print(
+                                f"  [Batch] {n_unique} items exceed limit ({MAX_BATCH_SIZE}), "
+                                f"splitting into {-(-n_unique // MAX_BATCH_SIZE)} sub-batches...",
+                                flush=True,
+                            )
+                            unique_translations = []
+                            for chunk_start in range(0, n_unique, MAX_BATCH_SIZE):
+                                chunk = unique_texts[chunk_start : chunk_start + MAX_BATCH_SIZE]
+                                chunk_results = await self.translate_batch_func(
+                                    chunk, target_lang, page_context
+                                )
+                                unique_translations.extend(chunk_results)
                     except Exception as batch_err:
                         print(f"[PDF Layout] Batch translate error, falling back: {batch_err}", flush=True)
-                        unique_translations = [await self.translate_func(t, target_lang, page_context) for t in unique_texts]
+                        unique_translations = [
+                            await self.translate_func(t, target_lang, page_context)
+                            for t in unique_texts
+                        ]
                 else:
-                    unique_translations = [await self.translate_func(t, target_lang, page_context) for t in unique_texts]
+                    unique_translations = [
+                        await self.translate_func(t, target_lang, page_context)
+                        for t in unique_texts
+                    ]
 
                 # Build translation cache: original_text → translated_text
                 translation_cache = dict(zip(unique_texts, unique_translations))
