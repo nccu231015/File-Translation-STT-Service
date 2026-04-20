@@ -702,6 +702,7 @@ class FactorySqlTools:
             "granularity":    granularity,
             "model_names":       model_names,       # distinct jz values from Daily_Status_Report
             "debug_work_orders": debug_work_orders,  # WORK_ORDER_NO list from CIM_WORK_GD_NUM_GLW
+            "qty_data_available": bool(trend_data),  # False = CIM_MQTT_OK_NG_QTY has no data for this device
             "summary": {
                 "總產量":    int(total_all),
                 "良品數量":  int(total_good_all),

@@ -328,6 +328,10 @@ class EquipmentSqlAgent:
    - equipment_code 或 equipment_name 擇一提供
    - 時間範圍：今天 = start_date=end_date=今天；近30天 = 往前30天；本季/半年依此計算
    - granularity 對應：月對月=monthly、季對季=quarterly、每日=daily、每週=weekly、年對年=yearly
+   - **回傳欄位 `qty_data_available` 判斷規則（必須嚴格遵守）**：
+     - `qty_data_available=true`：正常顯示產量統計（良品、不良品、良率等）
+     - `qty_data_available=false`：**絕對不可顯示產量統計**，只顯示 `model_names` 機種清單，並說明「產量數據目前不可用」
+   - 若使用者只問「生産了哪些機種」，重點輸出 `model_names` 清單，不需強調產量數字
 
 5. 詢問「哪些設備停機時間異常過長、停機確 Top-N、停機主因」 → 調用 `get_downtime_anomaly_ranking`
    - 時間範圍按個別話展開：近30天/這一季/上一季/上半年依對應計算
