@@ -483,8 +483,12 @@ class FactorySqlTools:
     # EQ-D: Equipment model production trend (cross-DB PG → MSSQL)
     # Data flow:
     #   EQUIPMENT_INFO_DICT (PG)
-    #     ├─ TOPIC / EQUIPMENT_CODE → CIM_MQTT_OK_NG_QTY.SBMC  (daily LPSL/BLSL)
-    #     └─ GDHM (work order)      → MSSQL Daily_Status_Report.WORK_ORDER_NO → jz (model name)
+    #     └─ TOPIC / EQUIPMENT_CODE → CIM_MQTT_OK_NG_QTY.SBMC  (daily LPSL/BLSL)
+    #   CIM_WORK_GD_NUM_GLW (PG)
+    #     └─ NO contained in eq_name/eq_code (reverse ILIKE)
+    #          → WORK_ORDER_NO (date-filtered)
+    #          → MSSQL Daily_Status_Report.WORK_ORDER_NO → jz (model name)
+    #   NOTE: EQUIPMENT_INFO_DICT.GDHM is deprecated; never used.
     # ══════════════════════════════════════════════════════════════════════════════
     def get_equipment_model_production_trend(
         self,
@@ -503,10 +507,10 @@ class FactorySqlTools:
         """
         import re as _re
 
-        # ── Step 1: Resolve TOPIC and GDHM from EQUIPMENT_INFO_DICT ─────────────
+        # ── Step 1: Resolve EQUIPMENT_CODE, EQUIPMENT_NAME, TOPIC from EQUIPMENT_INFO_DICT
         safe_kw = (equipment_name or equipment_code or "").replace("'", "''")
         info_q = f"""
-            SELECT "EQUIPMENT_CODE", "EQUIPMENT_NAME", "TOPIC", "GDHM"
+            SELECT "EQUIPMENT_CODE", "EQUIPMENT_NAME", "TOPIC"
             FROM "public"."EQUIPMENT_INFO_DICT"
             WHERE "EQUIPMENT_NAME" ILIKE '%{safe_kw}%'
                OR "EQUIPMENT_CODE" ILIKE '%{safe_kw}%'
@@ -525,21 +529,35 @@ class FactorySqlTools:
         eq_code  = primary_row.get("EQUIPMENT_CODE") or safe_kw
         topic    = primary_row.get("TOPIC") or eq_code
 
-        # Collect ALL unique GDHMs only from rows that share the same EQUIPMENT_CODE
-        same_device_rows = [r for r in info_rows if r.get("EQUIPMENT_CODE") == eq_code]
-        unique_gdhms = list({r.get("GDHM") for r in same_device_rows if r.get("GDHM")})
-
-        # ── Step 2: Resolve model names via MSSQL Daily_Status_Report ────────────
-        # GDHM (EQUIPMENT_INFO_DICT) → WORK_ORDER_NO → jz (machine model name)
-        # If GDHM is NULL in EQUIPMENT_INFO_DICT, model lookup cannot proceed.
+        # ── Step 2: Resolve model names via CIM_WORK_GD_NUM_GLW → Daily_Status_Report
+        # CIM_WORK_GD_NUM_GLW.NO stores line/group codes like '501', '422', 'T2'.
+        # These codes appear as substrings inside equipment names/codes:
+        #   e.g. NO='501' is contained in eq_name='熔接機501' or eq_code='Sonic_501'
+        # Use reverse ILIKE: '{eq_name}' ILIKE '%' || NO || '%'
+        # EQUIPMENT_INFO_DICT.GDHM is deprecated and must NOT be used.
         model_names: List[str] = []
-        gdhm_available = bool(unique_gdhms)
-        if unique_gdhms:
-            gdhm_in = ",".join(f"'{g}'" for g in unique_gdhms)
+        debug_work_orders: List[str] = []
+        safe_eq_name = eq_name.replace("'", "''")
+        safe_eq_code = eq_code.replace("'", "''")
+        wo_q = f"""
+            SELECT DISTINCT "WORK_ORDER_NO"
+            FROM "public"."CIM_WORK_GD_NUM_GLW"
+            WHERE (
+                '{safe_eq_name}' ILIKE '%' || "NO" || '%'
+                OR '{safe_eq_code}' ILIKE '%' || "NO" || '%'
+            )
+              AND "WORK_ORDER_NO" IS NOT NULL
+              AND CAST("PRO_TIME" AS DATE) BETWEEN '{start_date}' AND '{end_date}'
+        """
+        wo_rows = self._execute_postgres_query(wo_q)
+        debug_work_orders = [r.get("WORK_ORDER_NO") for r in wo_rows if r.get("WORK_ORDER_NO")]
+        # Step 2b: resolve WORK_ORDER_NO → jz (machine model) via MSSQL
+        if debug_work_orders:
+            wo_in = ",".join(f"'{w}'" for w in debug_work_orders)
             ms_q = f"""
                 SELECT DISTINCT jz AS [機種名稱]
                 FROM [dbo].[Daily_Status_Report]
-                WHERE [WORK_ORDER_NO] IN ({gdhm_in})
+                WHERE [WORK_ORDER_NO] IN ({wo_in})
                   AND jz IS NOT NULL AND jz <> ''
             """
             ms_rows = self._execute_mssql_query(ms_q)
@@ -682,9 +700,8 @@ class FactorySqlTools:
             "topic":          topic,
             "period":         f"{start_date} ~ {end_date}",
             "granularity":    granularity,
-            "model_names":    model_names,   # jz from Daily_Status_Report via GDHM
-            "gdhm_available": gdhm_available, # False = GDHM is NULL in EQUIPMENT_INFO_DICT, model lookup skipped
-            "debug_gdhms":    unique_gdhms,   # work order numbers found (empty = GDHM not set)
+            "model_names":       model_names,       # distinct jz values from Daily_Status_Report
+            "debug_work_orders": debug_work_orders,  # WORK_ORDER_NO list from CIM_WORK_GD_NUM_GLW
             "summary": {
                 "總產量":    int(total_all),
                 "良品數量":  int(total_good_all),
