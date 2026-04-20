@@ -546,8 +546,14 @@ class FactorySqlTools:
             model_names = [r.get("機種名稱") for r in ms_rows if r.get("機種名稱")]
 
         # ── Step 3: Fetch daily LPSL / BLSL from CIM_MQTT_OK_NG_QTY ─────────────
+        # SBMC may store TOPIC, EQUIPMENT_CODE, or other device identifiers.
+        # Use multi-strategy filter to avoid format mismatches:
+        #   1. SBMC matches TOPIC values in EQUIPMENT_INFO_DICT
+        #   2. SBMC matches EQUIPMENT_CODE values in EQUIPMENT_INFO_DICT
+        #   3. SBMC ILIKE '%keyword%' as safety fallback
         start_ymd = start_date.replace('-', '')
         end_ymd   = end_date.replace('-', '')
+        safe_kw_qty = safe_kw.replace("'", "''")
 
         qty_q = f"""
             SELECT
@@ -556,7 +562,19 @@ class FactorySqlTools:
                 SUM(COALESCE("BLSL", 0))     AS "不良數量"
             FROM "public"."CIM_MQTT_OK_NG_QTY"
             WHERE "YMD" BETWEEN '{start_ymd}' AND '{end_ymd}'
-              AND ("SBMC" = '{eq_code}' OR "SBMC" = '{topic}')
+              AND (
+                "SBMC" IN (
+                    SELECT "TOPIC" FROM "public"."EQUIPMENT_INFO_DICT"
+                    WHERE ("EQUIPMENT_NAME" ILIKE '%{safe_kw_qty}%' OR "EQUIPMENT_CODE" ILIKE '%{safe_kw_qty}%')
+                      AND "TOPIC" IS NOT NULL
+                )
+                OR "SBMC" IN (
+                    SELECT "EQUIPMENT_CODE" FROM "public"."EQUIPMENT_INFO_DICT"
+                    WHERE ("EQUIPMENT_NAME" ILIKE '%{safe_kw_qty}%' OR "EQUIPMENT_CODE" ILIKE '%{safe_kw_qty}%')
+                      AND "EQUIPMENT_CODE" IS NOT NULL
+                )
+                OR "SBMC" ILIKE '%{safe_kw_qty}%'
+              )
             GROUP BY "YMD"
             ORDER BY "YMD"
         """
