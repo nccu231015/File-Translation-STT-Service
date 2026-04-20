@@ -529,14 +529,8 @@ class FactorySqlTools:
         eq_code  = primary_row.get("EQUIPMENT_CODE") or safe_kw
         topic    = primary_row.get("TOPIC") or eq_code
 
-        # ── Step 2: Resolve model names via CIM_WORK_GD_NUM_GLW → Daily_Status_Report
-        # CIM_WORK_GD_NUM_GLW.NO stores line/group codes like '501', '422', 'T2'.
-        # These codes appear as substrings inside equipment names/codes:
-        #   e.g. NO='501' is contained in eq_name='熔接機501' or eq_code='Sonic_501'
-        # Use reverse ILIKE: '{eq_name}' ILIKE '%' || NO || '%'
-        # EQUIPMENT_INFO_DICT.GDHM is deprecated and must NOT be used.
+        # Resolve model names via CIM_WORK_GD_NUM_GLW (line codes) -> Daily_Status_Report (machine model)
         model_names: List[str] = []
-        debug_work_orders: List[str] = []
         safe_eq_name = eq_name.replace("'", "''")
         safe_eq_code = eq_code.replace("'", "''")
         wo_q = f"""
@@ -550,10 +544,10 @@ class FactorySqlTools:
               AND CAST("PRO_TIME" AS DATE) BETWEEN '{start_date}' AND '{end_date}'
         """
         wo_rows = self._execute_postgres_query(wo_q)
-        debug_work_orders = [r.get("WORK_ORDER_NO") for r in wo_rows if r.get("WORK_ORDER_NO")]
-        # Step 2b: resolve WORK_ORDER_NO → jz (machine model) via MSSQL
-        if debug_work_orders:
-            wo_in = ",".join(f"'{w}'" for w in debug_work_orders)
+        work_orders = [r.get("WORK_ORDER_NO") for r in wo_rows if r.get("WORK_ORDER_NO")]
+
+        if work_orders:
+            wo_in = ",".join(f"'{w}'" for w in work_orders)
             ms_q = f"""
                 SELECT DISTINCT jz AS [機種名稱]
                 FROM [dbo].[Daily_Status_Report]
@@ -563,12 +557,7 @@ class FactorySqlTools:
             ms_rows = self._execute_mssql_query(ms_q)
             model_names = [r.get("機種名稱") for r in ms_rows if r.get("機種名稱")]
 
-        # ── Step 3: Fetch daily LPSL / BLSL from CIM_MQTT_OK_NG_QTY ─────────────
-        # SBMC may store TOPIC, EQUIPMENT_CODE, or other device identifiers.
-        # Use multi-strategy filter to avoid format mismatches:
-        #   1. SBMC matches TOPIC values in EQUIPMENT_INFO_DICT
-        #   2. SBMC matches EQUIPMENT_CODE values in EQUIPMENT_INFO_DICT
-        #   3. SBMC ILIKE '%keyword%' as safety fallback
+        # fetch daily LPSL / BLSL from CIM_MQTT_OK_NG_QTY
         start_ymd = start_date.replace('-', '')
         end_ymd   = end_date.replace('-', '')
         safe_kw_qty = safe_kw.replace("'", "''")
@@ -582,11 +571,6 @@ class FactorySqlTools:
             WHERE "YMD" BETWEEN '{start_ymd}' AND '{end_ymd}'
               AND (
                 "SBMC" IN (
-                    SELECT "TOPIC" FROM "public"."EQUIPMENT_INFO_DICT"
-                    WHERE ("EQUIPMENT_NAME" ILIKE '%{safe_kw_qty}%' OR "EQUIPMENT_CODE" ILIKE '%{safe_kw_qty}%')
-                      AND "TOPIC" IS NOT NULL
-                )
-                OR "SBMC" IN (
                     SELECT "EQUIPMENT_CODE" FROM "public"."EQUIPMENT_INFO_DICT"
                     WHERE ("EQUIPMENT_NAME" ILIKE '%{safe_kw_qty}%' OR "EQUIPMENT_CODE" ILIKE '%{safe_kw_qty}%')
                       AND "EQUIPMENT_CODE" IS NOT NULL
@@ -700,9 +684,8 @@ class FactorySqlTools:
             "topic":          topic,
             "period":         f"{start_date} ~ {end_date}",
             "granularity":    granularity,
-            "model_names":       model_names,       # distinct jz values from Daily_Status_Report
-            "debug_work_orders": debug_work_orders,  # WORK_ORDER_NO list from CIM_WORK_GD_NUM_GLW
-            "qty_data_available": bool(trend_data),  # False = CIM_MQTT_OK_NG_QTY has no data for this device
+            "model_names":       model_names,
+            "qty_data_available": bool(trend_data),
             "summary": {
                 "總產量":    int(total_all),
                 "良品數量":  int(total_good_all),
@@ -983,15 +966,11 @@ class FactorySqlTools:
                 eq_label = info_rows[0].get("EQUIPMENT_NAME") or info_rows[0].get("EQUIPMENT_CODE") or safe_kw
             else:
                 eq_label = safe_kw
-            # Multi-strategy filter: EQUIPMENT_INFO_DICT TOPIC values + EQUIPMENT_CODE as TOPIC
-            # + direct ILIKE on AM_PM.TOPIC to handle format mismatches (e.g. 'DATA/4F/64008A/' vs 'Sonic_401')
+            # AM_PM.TOPIC = EQUIPMENT_CODE (short name, e.g. 'Sonic_501')
+            # EQUIPMENT_INFO_DICT.TOPIC is MQTT path, never matches AM_PM.TOPIC.
+            # Match EQUIPMENT_CODE only, with ILIKE fallback for safety.
             topic_filter = f"""AND (
                 b."TOPIC" IN (
-                    SELECT "TOPIC" FROM "public"."EQUIPMENT_INFO_DICT"
-                    WHERE ("EQUIPMENT_NAME" ILIKE '%{safe_kw}%' OR "EQUIPMENT_CODE" ILIKE '%{safe_kw}%')
-                      AND "TOPIC" IS NOT NULL
-                )
-                OR b."TOPIC" IN (
                     SELECT "EQUIPMENT_CODE" FROM "public"."EQUIPMENT_INFO_DICT"
                     WHERE ("EQUIPMENT_NAME" ILIKE '%{safe_kw}%' OR "EQUIPMENT_CODE" ILIKE '%{safe_kw}%')
                       AND "EQUIPMENT_CODE" IS NOT NULL
@@ -1000,10 +979,12 @@ class FactorySqlTools:
             )"""
         elif floor:
             safe_floor = floor.replace("'", "''")
+            # AM_PM.TOPIC = EQUIPMENT_CODE; filter by floor via EQUIPMENT_INFO_DICT
             topic_filter = f"""
                 AND b."TOPIC" IN (
-                    SELECT DISTINCT "TOPIC" FROM "public"."EQUIPMENT_INFO_DICT"
+                    SELECT DISTINCT "EQUIPMENT_CODE" FROM "public"."EQUIPMENT_INFO_DICT"
                     WHERE "EQUIP_INSTALL_POSITION" ILIKE '%{safe_floor}%'
+                      AND "EQUIPMENT_CODE" IS NOT NULL
                 )
             """
 
@@ -1146,15 +1127,11 @@ class FactorySqlTools:
                 scope_label = info_rows[0].get("EQUIPMENT_NAME") or info_rows[0].get("EQUIPMENT_CODE") or safe_kw
             else:
                 scope_label = safe_kw
-            # Multi-strategy filter: EQUIPMENT_INFO_DICT TOPIC values + EQUIPMENT_CODE as TOPIC
-            # + direct ILIKE on AM_PM.TOPIC to handle format mismatches (e.g. 'DATA/4F/64008A/' vs 'Sonic_401')
+            # AM_PM.TOPIC = EQUIPMENT_CODE (short name, e.g. 'Sonic_501')
+            # EQUIPMENT_INFO_DICT.TOPIC is MQTT path, never matches AM_PM.TOPIC.
+            # Match EQUIPMENT_CODE only, with ILIKE fallback for safety.
             scope_filter = f"""AND (
                 b."TOPIC" IN (
-                    SELECT "TOPIC" FROM "public"."EQUIPMENT_INFO_DICT"
-                    WHERE ("EQUIPMENT_NAME" ILIKE '%{safe_kw}%' OR "EQUIPMENT_CODE" ILIKE '%{safe_kw}%')
-                      AND "TOPIC" IS NOT NULL
-                )
-                OR b."TOPIC" IN (
                     SELECT "EQUIPMENT_CODE" FROM "public"."EQUIPMENT_INFO_DICT"
                     WHERE ("EQUIPMENT_NAME" ILIKE '%{safe_kw}%' OR "EQUIPMENT_CODE" ILIKE '%{safe_kw}%')
                       AND "EQUIPMENT_CODE" IS NOT NULL
@@ -1166,13 +1143,14 @@ class FactorySqlTools:
             top_m_notes = 30
         elif floor:
             safe_floor = floor.replace("'", "''")
+            # AM_PM.TOPIC = EQUIPMENT_CODE; filter by floor via EQUIPMENT_INFO_DICT
             scope_filter = f'AND ei."EQUIP_INSTALL_POSITION" ILIKE \'%{safe_floor}%\''
 
         # Join B-codes (fault reason) with co-occurring DOWN events (A001/A006-A009)
         # B-codes appear within the same second as DOWN A-codes (co-occurrence pattern confirmed)
         # No CATE filter needed - B-code CATE is mostly IDEL/IDEL1, not DOWN
-        # IMPORTANT: LEFT JOIN EQUIPMENT_INFO_DICT must use deduplicated subquery (DISTINCT ON TOPIC)
-        # to avoid COUNT inflation when one TOPIC has multiple rows (different GDHM versions etc.)
+        # IMPORTANT: LEFT JOIN EQUIPMENT_INFO_DICT must use deduplicated subquery (DISTINCT ON EQUIPMENT_CODE)
+        # AM_PM.TOPIC = EQUIPMENT_CODE (short name); EQUIPMENT_INFO_DICT.TOPIC is MQTT path (different format)
         query = f"""
             SELECT
                 COALESCE(ei."EQUIPMENT_NAME", b."TOPIC") AS "設備名稱",
@@ -1182,13 +1160,13 @@ class FactorySqlTools:
             JOIN "public"."CIM_MQTTCODEERR" err
                 ON b."CODE" = err."PLCCODE"
             LEFT JOIN (
-                SELECT DISTINCT ON ("TOPIC")
-                    "TOPIC", "EQUIPMENT_NAME", "EQUIPMENT_CODE"
+                SELECT DISTINCT ON ("EQUIPMENT_CODE")
+                    "EQUIPMENT_CODE", "EQUIPMENT_NAME", "EQUIP_INSTALL_POSITION"
                 FROM "public"."EQUIPMENT_INFO_DICT"
-                WHERE "TOPIC" IS NOT NULL
-                ORDER BY "TOPIC",
+                WHERE "EQUIPMENT_CODE" IS NOT NULL
+                ORDER BY "EQUIPMENT_CODE",
                     CASE WHEN "EQUIPMENT_NAME" IS NOT NULL THEN 0 ELSE 1 END
-            ) ei ON ei."TOPIC" = b."TOPIC"
+            ) ei ON ei."EQUIPMENT_CODE" = b."TOPIC"
             WHERE b."CODE" LIKE 'B%'
               AND err."NOTE" IS NOT NULL
               AND SUBSTRING(b."DATETIMES", 1, 8) BETWEEN '{start_ymd}' AND '{end_ymd}'
