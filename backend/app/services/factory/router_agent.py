@@ -15,41 +15,39 @@ class FactoryRouterAgent:
 
     async def route_question(self, question: str) -> Dict[str, str]:
         """
-        根據使用者的問題，決定路由方式與所需提取的實體(Entity)。
-        返回 JSON 格式：{"route": "SQL" | "RAG", "reason": "...", "intent": "..."}
+        Decide which agent should handle the question.
+        Returns JSON: {"route": "SQL_EQ" | "SQL_PROD", "reason": "..."}
         """
         system_prompt = """你是一個製造業智能問答系統的請求路由器。
-請分析使用者的問題，决定該交由哪一個子系統處理：
+請分析使用者的問題，決定應交由哪一個子 Agent 處理：
 
-1. SQL 查詢服務 (route: "SQL")：
-   負責處理一切可以向資料庫查詢的問題。例如：
+1. 設備 Agent (route: "SQL_EQ")：
+   負責處理一切與「設備本身」相關的問題。例如：
+   - 「某台設備現在稼動狀態？」
+   - 「哪些設備停機時間最長？」
+   - 「熔接機501 近半年生産了哪些機種？」
+   - 「設備 RUN/DOWN/稼動率/良率」
+   - 「故障熱點圖、停機原因排行、兩期間故障比對」
+   - 「某樓層所有設備狀態」
+
+2. 產線 Agent (route: "SQL_PROD")：
+   負責處理一切與「產線生產」相關的問題。例如：
    - 「今日產線開工狀況？」
    - 「N511 工單的生產進度？」
-   - 「哪些設備現在閃紅燈？」
-   - 「查詢特定的良率、稼動率資料」
-   - 「產線 136 在哪樓？」、「201 產線在哪裡？」（位置查詢 → SQL）
-   - 「成型機裝在哪裡？」、「設備安裝在哪層？」（位置查詢 → SQL）
-   - 「共有幾條產線？幾台設備？」（數量查詢 → SQL）
-   - 「故障了幾次？停機多久？」（統計查詢 → SQL）
+   - 「哪些工單落後？」
+   - 「機種不良率趨勢」
+   - 「某樓層開工幾條、生産什麼機種」
+   - 「產量與不良率月對月/季對季走勢」
 
-2. RAG 知識庫服務 (route: "RAG")：
-   【僅限】處理「問題成因分析」與「故障跟因」類問題。例如：
-   - 「為什麼設備會閃紅燈？」
-   - 「異常代碼 A006 的處理方法？」
-   - 「產品表面刷傷的成因與排除指引是什麼？」
-   - 「這個問題的根本原因是什麼？」
-
-判斷規則（嚴格依序執行）：
-- 如果問題中含有「在哪裡」、「在幾樓」、「位置」、「哪層」等位置詞 → 一律選 SQL。
-- 如果問題中含有具體數字、日期、工單號、設備號碼、產線號碼、狀態、清單 → 選 SQL。
-- 【唯一選 RAG 的條件】：問題的核心是詢問某個異常/故障「為什麼發生」或「如何排除」→ 才選 RAG。
-- 其他情況有痑慮時，預設選 SQL。
+判斷規則：
+- 問題核心是「特定機台/設備代碼/設備稼動/停機/故障」→ SQL_EQ
+- 問題核心是「工單/產線/良率趨勢/生產進度/開工條數」→ SQL_PROD
+- 無法判斷時預設 SQL_PROD
 
 請嚴格回傳以下 JSON 格式：
 {
-    "route": "SQL" 或 "RAG",
-    "reason": "你的判斷理由",
-    "intent": "使用者想知道的核心資訊"
+    "route": "SQL_EQ" 或 "SQL_PROD",
+    "reason": "你的判斷理由"
 }"""
         
         try:
@@ -65,4 +63,4 @@ class FactoryRouterAgent:
             
         except Exception as e:
             print(f"[Router Agent] Error: {e}")
-            return {"route": "SQL", "reason": "Error routing, fallback to SQL", "intent": "unknown"}
+            return {"route": "SQL_PROD", "reason": "Error routing, fallback to SQL_PROD"}

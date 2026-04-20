@@ -21,45 +21,21 @@ class FactoryAgentService:
         
     async def chat(self, user_question: str, history: List[Dict] = None) -> dict:
         """
-        處理使用者的每一句話
+        Route user question to the correct agent based on router decision.
         Returns: {"response": str, "chart_config": dict | None}
         """
         print(f"\n[Factory Agent] Received new question: '{user_question}'")
-        
-        # 判斷問題前綴
-        is_equipment = "【設備】" in user_question
-        
-        # 移除前綴讓後續 Router 判斷意圖時不會被死板的關鍵字干擾
-        clean_question = user_question.replace("【設備】", "").replace("【產線】", "").strip()
-        
-        # 取得路由路徑 (例如: {"route": "SQL"})
-        route_decision = await self.router.route_question(clean_question)
-        
-        route_type = route_decision.get("route", "UNKNOWN")
-        print(f"[Factory Agent] Router decision -> {route_type} (Is Equipment: {is_equipment})")
-        
-        if route_type == "SQL":
-            if is_equipment:
-                # 委託給 Equipment SQL Agent (PostgreSQL 設備數據)
-                result = await self.equipment_sql_agent.chat(clean_question, history=history)
-            else:
-                # 委託給 Production SQL Agent (MSSQL 產線數據)
-                result = await self.sql_agent.chat(clean_question, history=history)
-            
-            # Normalise: both agents now return dict, but guard for string fallback
-            if isinstance(result, dict):
-                return result
-            return {"response": str(result), "chart_config": None}
-            
-        elif route_type == "RAG":
-            # RAG route removed; fall back to production SQL agent
-            result = await self.sql_agent.chat(clean_question, history=history)
-            if isinstance(result, dict):
-                return result
-            return {"response": str(result), "chart_config": None}
-            
+
+        route_decision = await self.router.route_question(user_question)
+        route_type = route_decision.get("route", "SQL_PROD")
+        print(f"[Factory Agent] Router decision -> {route_type}")
+
+        if route_type == "SQL_EQ":
+            result = await self.equipment_sql_agent.chat(user_question, history=history)
         else:
-            return {
-                "response": "無法解析您的問題。如果需要查詢稼動率，或是機台異常處理方法，請再說明得更詳細一點。",
-                "chart_config": None
-            }
+            # SQL_PROD or any fallback
+            result = await self.sql_agent.chat(user_question, history=history)
+
+        if isinstance(result, dict):
+            return result
+        return {"response": str(result), "chart_config": None}
