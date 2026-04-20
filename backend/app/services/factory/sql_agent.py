@@ -114,12 +114,15 @@ class SqlAgent:
                         "同時回傳可直接渲染的圖表設定 (chart_config)：Bar Chart 呈現產量、Line Chart 呈現不良率，雙 Y 軸。"
                         "適用於：月對月(M-o-M)、年對年(Y-o-Y)、季對季(Q-o-Q)、某時間區間中每日/每週趨勢比對。"
                         "granularity 參數：daily(每日) | weekly(每週) | monthly(每月) | quarterly(每季) | yearly(每年)。"
+                        "start_date/end_date 必須依上方【時間段邊界】精確設定，禁止自行猜測。"
+                        "回傳 period_incomplete 欄位：any_incomplete=true 時，必須在回覆開頭主動說明時間段尚未結束，"
+                        "並引用 period/elapsed_days/total_days/pct 讓使用者了解資料涵蓋程度。"
                     ),
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "start_date": {"type": "string", "description": "查詢起始日期，例如 '2025-01-01'。"},
-                            "end_date":   {"type": "string", "description": "查詢結束日期，例如 '2026-04-01'。"},
+                            "start_date": {"type": "string", "description": "查詢起始日期，依上方時間段邊界精確設定，例如本季='2026-04-01'。"},
+                            "end_date":   {"type": "string", "description": "查詢結束日期，例如今天='2026-04-20'。"},
                             "line_no":    {"type": "string", "description": "產線號碼，例如 '136'。選填。"},
                             "model":      {"type": "string", "description": "機種名稱，例如 'M3820'。選填。"},
                             "granularity": {
@@ -164,18 +167,20 @@ class SqlAgent:
                         "排行波動最大的機種，並回傳可直接渲染的多線折線圖 (chart_config)，每條線代表一個機種。"
                         "適用於：『哪些機種不良率波動最大？』、'M-o-M/Q-o-Q/Y-o-Y/1H-2H 不良率比對'，以及特定時間區間中每日或每週的波動比對。"
                         "granularity：daily(每日) | weekly(每週) | monthly(月對月) | quarterly(季對季) | half_yearly(上下半年1H/2H) | yearly(年對年)。"
+                        "回傳 period_incomplete 欄位：若查詢期間包含尚未結束的時段，any_incomplete=true，附帶 period/elapsed_days/total_days/pct，LLM 必須據此在回覆中主動說明。"
                     ),
                     "parameters": {
                         "type": "object",
                         "properties": {
+                            "start_date":  {"type": "string", "description": "分析起始日。強烈建議依上方【時間段邊界】設定精確日曆邊界（如本季 start=2026-04-01），不傳則自動以 periods×granularity 往前回溯。"},
                             "end_date":    {"type": "string", "description": "分析截止日，預設今天。"},
                             "granularity": {
                                 "type": "string",
                                 "enum": ["daily", "weekly", "monthly", "quarterly", "half_yearly", "yearly"],
                                 "description": "時間粒度：daily(每日) | weekly(每週) | monthly(月對月) | quarterly(季對季) | half_yearly(上下半年1H/2H) | yearly(年對年)。預設 quarterly。"
                             },
-                            "periods":  {"type": "integer", "description": "要回溯幾個週期，例如 4 季，預設 4。"},
-                            "limit":    {"type": "integer", "description": "最多顯示幾個機種，預設 10。"}
+                            "periods":  {"type": "integer", "description": "當未提供 start_date 時，回溯幾個週期，例如 4 季，預設 4。"},
+                            "limit":    {"type": "integer", "description": "最多顯示幾個機種，預設 5。"}
                         }
                     }
                 }
@@ -219,44 +224,81 @@ class SqlAgent:
         return await self.chat(question)
 
     @staticmethod
-    def _get_quarter_info() -> str:
+    def _get_period_info() -> str:
         """
-        Compute current and previous quarter date boundaries and return
+        Pre-compute date boundaries for ALL comparison period types and return
         a formatted string for injection into the system prompt.
-        Quarter boundaries: Q1=Jan-Mar, Q2=Apr-Jun, Q3=Jul-Sep, Q4=Oct-Dec
+        Covers: monthly (M-o-M), quarterly (Q-o-Q), half-yearly (1H/2H), yearly (Y-o-Y).
+        Any currently in-progress period is flagged with elapsed days and percentage.
         """
+        import calendar
         today = datetime.date.today()
         y, m = today.year, today.month
 
-        # Determine current quarter number (1~4)
-        cur_q = (m - 1) // 3 + 1
-        # First month of current quarter
-        cur_q_start_month = (cur_q - 1) * 3 + 1
-        cur_q_start = datetime.date(y, cur_q_start_month, 1)
-        cur_q_end = today  # current quarter is still ongoing
+        def _last(yr: int, mo: int) -> datetime.date:
+            # Return the last calendar day of a given year-month
+            return datetime.date(yr, mo, calendar.monthrange(yr, mo)[1])
 
-        # Previous quarter
-        if cur_q == 1:
-            prev_q = 4
-            prev_q_year = y - 1
+        def _status(start: datetime.date, full_end: datetime.date) -> str:
+            # Return a completion-status label for a period
+            elapsed = (today - start).days + 1
+            total   = (full_end - start).days + 1
+            pct     = round(elapsed / total * 100, 1)
+            if today >= full_end:
+                return "✅ 完整期間"
+            return f"⚠️ 尚未結束，已過 {elapsed}/{total} 天（{pct}%）"
+
+        # ── Monthly (M-o-M) ──────────────────────────────────────────────
+        cur_mo_s  = datetime.date(y, m, 1)
+        cur_mo_f  = _last(y, m)
+        pmy, pmm  = (y, m - 1) if m > 1 else (y - 1, 12)
+        prev_mo_s = datetime.date(pmy, pmm, 1)
+        prev_mo_f = _last(pmy, pmm)
+
+        # ── Quarterly (Q-o-Q) ────────────────────────────────────────────
+        cur_q    = (m - 1) // 3 + 1
+        cur_q_s  = datetime.date(y, (cur_q - 1) * 3 + 1, 1)
+        cur_q_f  = _last(y, cur_q * 3)
+        pq       = cur_q - 1 if cur_q > 1 else 4
+        pqy      = y if cur_q > 1 else y - 1
+        prev_q_s = datetime.date(pqy, (pq - 1) * 3 + 1, 1)
+        prev_q_f = cur_q_s - datetime.timedelta(days=1)
+
+        # ── Half-yearly (1H / 2H) ────────────────────────────────────────
+        if m <= 6:
+            cur_h_lbl, cur_h_s, cur_h_f       = f"1H {y}",     datetime.date(y, 1, 1),     datetime.date(y, 6, 30)
+            prev_h_lbl, prev_h_s, prev_h_f    = f"2H {y - 1}", datetime.date(y - 1, 7, 1), datetime.date(y - 1, 12, 31)
         else:
-            prev_q = cur_q - 1
-            prev_q_year = y
-        prev_q_start_month = (prev_q - 1) * 3 + 1
-        prev_q_start = datetime.date(prev_q_year, prev_q_start_month, 1)
-        # Last day of previous quarter = day before current quarter start
-        prev_q_end = cur_q_start - datetime.timedelta(days=1)
+            cur_h_lbl, cur_h_s, cur_h_f       = f"2H {y}",     datetime.date(y, 7, 1),     datetime.date(y, 12, 31)
+            prev_h_lbl, prev_h_s, prev_h_f    = f"1H {y}",     datetime.date(y, 1, 1),     datetime.date(y, 6, 30)
 
-        return (
-            f"【季度邊界（重要，調用工具時必須嚴格使用）】\n"
-            f"- 本季（Q{cur_q} {y}）：{cur_q_start.isoformat()} ～ {cur_q_end.isoformat()}（截至今天）\n"
-            f"- 上一季（Q{prev_q} {prev_q_year}）：{prev_q_start.isoformat()} ～ {prev_q_end.isoformat()}\n"
-            f"- 季度定義：Q1=1~3月, Q2=4~6月, Q3=7~9月, Q4=10~12月\n"
-            f"- 當使用者說「這一季/本季與上一季比較」，必須分別以上述日期範圍各自查詢，"
-            f"並使用 granularity='quarterly' 讓資料依季分群。\n"
-            f"- 若只問「這一季」：start_date={cur_q_start.isoformat()}, end_date={cur_q_end.isoformat()}\n"
-            f"- 若只問「上一季」：start_date={prev_q_start.isoformat()}, end_date={prev_q_end.isoformat()}"
-        )
+        # ── Yearly (Y-o-Y) ───────────────────────────────────────────────
+        cur_yr_s  = datetime.date(y, 1, 1)
+        cur_yr_f  = datetime.date(y, 12, 31)
+        prev_yr_s = datetime.date(y - 1, 1, 1)
+        prev_yr_f = datetime.date(y - 1, 12, 31)
+
+        lines = [
+            "【時間段邊界（調用工具時必須嚴格依此設定 start_date / end_date）】",
+            f"▸ 月對月 (M-o-M)",
+            f"  本月  {y}-{m:02d}: {cur_mo_s} ～ {today}  {_status(cur_mo_s, cur_mo_f)}",
+            f"  上個月 {pmy}-{pmm:02d}: {prev_mo_s} ～ {prev_mo_f}  ✅ 完整期間",
+            f"▸ 季對季 (Q-o-Q)  [Q1=1~3月, Q2=4~6月, Q3=7~9月, Q4=10~12月]",
+            f"  本季  Q{cur_q} {y} : {cur_q_s} ～ {today}  {_status(cur_q_s, cur_q_f)}",
+            f"  上一季 Q{pq} {pqy}: {prev_q_s} ～ {prev_q_f}  ✅ 完整期間",
+            f"▸ 上下半年 (1H/2H)  [1H=1~6月, 2H=7~12月]",
+            f"  本半年 {cur_h_lbl}: {cur_h_s} ～ {today}  {_status(cur_h_s, cur_h_f)}",
+            f"  對比期 {prev_h_lbl}: {prev_h_s} ～ {prev_h_f}  ✅ 完整期間",
+            f"▸ 年對年 (Y-o-Y)",
+            f"  今年 {y}   : {cur_yr_s} ～ {today}  {_status(cur_yr_s, cur_yr_f)}",
+            f"  去年 {y - 1}: {prev_yr_s} ～ {prev_yr_f}  ✅ 完整期間",
+            "",
+            "⚠️ 不完整時間段必須聲明（強制規則）：凡涉及標記「⚠️ 尚未結束」的時間段，",
+            "  回答時【必須】在開頭主動說明：(1) 尚未結束、已涵蓋天數與百分比；",
+            "  (2) 與對比完整期間屬不對等比較，總量偏低為正常；",
+            "  (3) 建議以【日均值】或【不良率/良率】評估真實趨勢，而非直接比較總量。",
+        ]
+        return "\n".join(lines)
 
     async def chat(self, question: str, history: List[Dict[str, str]] = None) -> dict:
         """
@@ -264,7 +306,7 @@ class SqlAgent:
         Returns: {"response": str, "chart_config": dict | None}
         """
         today_str = datetime.date.today().isoformat()
-        current_date_info = f"目前的系統日期是 {today_str}。\n\n{self._get_quarter_info()}"
+        current_date_info = f"目前的系統日期是 {today_str}。\n\n{self._get_period_info()}"
         
         system_prompt = f"""你是一個專業的製造業數據分析專家，服務於「全一電子」。
 你的任務是根據使用者的問題，調用適當的 SQL 工具來獲取即時生產數據，並給出詳細、專業且易懂的分析回覆。
@@ -303,6 +345,7 @@ class SqlAgent:
 5. **產量與不良率趨勢圖 (Q5)**：
    - 詢問「某機種/某產線的月對月、季對季、年對年、每日/每週/某時間區間的產量與不良率趨勢」→ 調用 `get_production_trend_data`。
    - granularity 對應：月對月=monthly、季對季=quarterly、半年對半年(1H/2H)=half_yearly、年對年=yearly、每日=daily、每週=weekly。
+   - **⚠️ 不完整時間段強制聲明（最高優先級）**：凡查詢涉及本月/本季/本半年/本年等在上方時間段邊界標記「⚠️ 尚未結束」的時間段，回覆開頭【必須】主動說明：(1) 該時間段尚未結束、已涵蓋天數與百分比；(2) 與對比完整期間屬不對等比較，總量偏低為正常現象；(3) 建議以「不良率」或「日均產量」評估真實趨勢，而非直接比較總量。
    - **圖表回覆規範**：回覆中必須提及「圖表資料已就緒，請參考隨附的 chart_config（Bar=產量, Line=不良率, 雙 Y 軸）」。同時以 Markdown 表格呈現 data 欄位的時序數據。
 
 6. **單一工單進度確認 (Q6)**：
@@ -313,6 +356,7 @@ class SqlAgent:
    - 詢問「哪些機種不良率波動最大、本季與上季比對、M-o-M/Q-o-Q/Y-o-Y/1H-2H 波動、某時間區間每日或每週波動」→ 調用 `get_defect_rate_fluctuation_data`。
    - granularity 對應：月對月=monthly、季對季=quarterly、半年對半年(1H/2H)=half_yearly、年對年=yearly、每日=daily、每週=weekly。
    - **重要規範**：除非使用者明確指定數量，否則**一律強制設定 `limit=5`**。
+   - **⚠️ 不完整時間段聲明**：同 Q5 規則，若 start_date~end_date 對應的時間段在上方邊界標記「⚠️ 尚未結束」，必須在回覆開頭主動聲明不對等比較，並建議以不良率或日均值輔助評估。
    - **圖表回覆規範**：回覆中必須提及「圖表已就緒（柱狀代表各機種產量，折線代表不良率）。為保持介面簡潔，圖例僅顯示折線項」。同時以 Markdown 表格呈現排行榜。
 
 8. **不良趨勢 & 主因分析 (Q8)**：

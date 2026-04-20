@@ -291,13 +291,91 @@ class EquipmentSqlAgent:
             },
         ]
 
+    @staticmethod
+    def _get_period_info() -> str:
+        """
+        Pre-compute date boundaries for ALL comparison period types.
+        Covers: monthly (M-o-M), quarterly (Q-o-Q), half-yearly (1H/2H), yearly (Y-o-Y).
+        Returns a formatted string for injection into the system prompt.
+        Any currently in-progress period is flagged with elapsed days and percentage.
+        """
+        import calendar
+        today = datetime.date.today()
+        y, m = today.year, today.month
+
+        def _last(yr: int, mo: int) -> datetime.date:
+            # Return the last calendar day of a given year-month
+            return datetime.date(yr, mo, calendar.monthrange(yr, mo)[1])
+
+        def _status(start: datetime.date, full_end: datetime.date) -> str:
+            # Return a completion-status label for a period
+            elapsed = (today - start).days + 1
+            total   = (full_end - start).days + 1
+            pct     = round(elapsed / total * 100, 1)
+            if today >= full_end:
+                return "✅ 完整期間"
+            return f"⚠️ 尚未結束，已過 {elapsed}/{total} 天（{pct}%）"
+
+        # ── Monthly (M-o-M) ──────────────────────────────────────────────
+        cur_mo_s  = datetime.date(y, m, 1)
+        cur_mo_f  = _last(y, m)
+        pmy, pmm  = (y, m - 1) if m > 1 else (y - 1, 12)
+        prev_mo_s = datetime.date(pmy, pmm, 1)
+        prev_mo_f = _last(pmy, pmm)
+
+        # ── Quarterly (Q-o-Q) ────────────────────────────────────────────
+        cur_q    = (m - 1) // 3 + 1
+        cur_q_s  = datetime.date(y, (cur_q - 1) * 3 + 1, 1)
+        cur_q_f  = _last(y, cur_q * 3)
+        pq       = cur_q - 1 if cur_q > 1 else 4
+        pqy      = y if cur_q > 1 else y - 1
+        prev_q_s = datetime.date(pqy, (pq - 1) * 3 + 1, 1)
+        prev_q_f = cur_q_s - datetime.timedelta(days=1)
+
+        # ── Half-yearly (1H / 2H) ────────────────────────────────────────
+        if m <= 6:
+            cur_h_lbl, cur_h_s, cur_h_f       = f"1H {y}",     datetime.date(y, 1, 1),     datetime.date(y, 6, 30)
+            prev_h_lbl, prev_h_s, prev_h_f    = f"2H {y - 1}", datetime.date(y - 1, 7, 1), datetime.date(y - 1, 12, 31)
+        else:
+            cur_h_lbl, cur_h_s, cur_h_f       = f"2H {y}",     datetime.date(y, 7, 1),     datetime.date(y, 12, 31)
+            prev_h_lbl, prev_h_s, prev_h_f    = f"1H {y}",     datetime.date(y, 1, 1),     datetime.date(y, 6, 30)
+
+        # ── Yearly (Y-o-Y) ───────────────────────────────────────────────
+        cur_yr_s  = datetime.date(y, 1, 1)
+        cur_yr_f  = datetime.date(y, 12, 31)
+        prev_yr_s = datetime.date(y - 1, 1, 1)
+        prev_yr_f = datetime.date(y - 1, 12, 31)
+
+        lines = [
+            "【時間段邊界（調用工具時必須嚴格依此設定 start_date / end_date）】",
+            f"▸ 月對月 (M-o-M)",
+            f"  本月  {y}-{m:02d}: {cur_mo_s} ～ {today}  {_status(cur_mo_s, cur_mo_f)}",
+            f"  上個月 {pmy}-{pmm:02d}: {prev_mo_s} ～ {prev_mo_f}  ✅ 完整期間",
+            f"▸ 季對季 (Q-o-Q)  [Q1=1~3月, Q2=4~6月, Q3=7~9月, Q4=10~12月]",
+            f"  本季  Q{cur_q} {y} : {cur_q_s} ～ {today}  {_status(cur_q_s, cur_q_f)}",
+            f"  上一季 Q{pq} {pqy}: {prev_q_s} ～ {prev_q_f}  ✅ 完整期間",
+            f"▸ 上下半年 (1H/2H)  [1H=1~6月, 2H=7~12月]",
+            f"  本半年 {cur_h_lbl}: {cur_h_s} ～ {today}  {_status(cur_h_s, cur_h_f)}",
+            f"  對比期 {prev_h_lbl}: {prev_h_s} ～ {prev_h_f}  ✅ 完整期間",
+            f"▸ 年對年 (Y-o-Y)",
+            f"  今年 {y}   : {cur_yr_s} ～ {today}  {_status(cur_yr_s, cur_yr_f)}",
+            f"  去年 {y - 1}: {prev_yr_s} ～ {prev_yr_f}  ✅ 完整期間",
+            "",
+            "⚠️ 不完整時間段必須聲明（強制規則）：凡涉及標記「⚠️ 尚未結束」的時間段，",
+            "  回答時【必須】在開頭主動說明：(1) 尚未結束、已涵蓋天數與百分比；",
+            "  (2) 與對比完整期間屬不對等比較，總量偏低為正常；",
+            "  (3) 建議以【日均值】或【不良率/良率】評估真實趨勢，而非直接比較總量。",
+        ]
+        return "\n".join(lines)
+
     async def execute_task(self, question: str) -> Dict[str, Any]:
         """Alias for compatibility with router agent."""
         return await self.chat(question)
 
     async def chat(self, question: str, history: List[Dict[str, str]] = None) -> Dict[str, Any]:
         """支援上下文記憶的聊天接口，回傳與 SqlAgent 格式一致的 dict。"""
-        current_date_info = f"目前的系統日期是 {datetime.date.today().isoformat()}。"
+        today_str = datetime.date.today().isoformat()
+        current_date_info = f"目前的系統日期是 {today_str}。\n\n{self._get_period_info()}"
 
         system_prompt = f"""你是一個專業的製造業數據分析專家，負責處理「全一電子」的**設備專用數據**。
 你的任務是根據使用者的問題，調用資料庫工具來獲取即時設備數據，並給出詳細、專業且易懂的分析回覆。
@@ -331,7 +409,7 @@ class EquipmentSqlAgent:
 
 4. 詢問「某設備今天/這段時間生産了哪些機種、機種的不良率走勢、設備生産趨勢」 → 調用 `get_equipment_model_production_trend`
    - equipment_code 或 equipment_name 擇一提供
-   - 時間範圍：今天 = start_date=end_date=今天；近30天 = 往前30天；本季/半年依此計算
+   - 時間範圍：今天 = start_date=end_date=今天；近30天 = 往前30天；本月/本季/上季/本半年/今年等**依上方時間段邊界計算**（₠ 標記「⚠️ 尚未結束」者必須聲明不完整比較）
    - granularity 對應：月對月=monthly、季對季=quarterly、每日=daily、每週=weekly、年對年=yearly
    - **回傳欄位 `qty_data_available` 判斷規則（必須嚴格遵守）**：
      - `qty_data_available=true`：正常顯示產量統計（良品、不良品、良率等）
@@ -343,7 +421,7 @@ class EquipmentSqlAgent:
    - 若使用者只問「生産了哪些機種」，重點輸出 `model_names` 清單，不需強調產量數字
 
 5. 詢問「哪些設備停機時間異常過長、停機確 Top-N、停機主因」 → 調用 `get_downtime_anomaly_ranking`
-   - 時間範圍按個別話展開：近30天/這一季/上一季/上半年依對應計算
+   - 時間範圍按個別話展開：近30天/本月/本季/上季/本半年等**依上方時間段邊界計算**（⚠️ 標記尚未結束者必須聲明不完整比較）
    - top_n 預設 10，使用者指定則跟上
    - **include_cause 判斷規則（極其重要，必須嚴格遵守）**：
      - 只要提問中出現以下任意關鍵字：`原因`、`主因`、`為什麼`、`為何`、`why`、`cause`、`怎麼了`、`哪裡出問題` → **無條件設 `include_cause=True`**，不論是否同時詢問排名
@@ -354,7 +432,8 @@ class EquipmentSqlAgent:
 
 6. 詢問「比較兩個時期的停機原因/故障趨勢是否改善」等**使用者明確要求對比兩個不同期間**的查詢（如「本季 vs 上季」「上半年對下半年」）→ 調用 `get_fault_pattern_comparison`
    - **⚠️ 重要判斷**：僅在使用者清楚提到兩個期間時才使用此工具；若使用者只詢問「故障有沒有規律」「故障分布」「哪種故障最常出現」等**未明確要求兩期間對比**的問題，請改用 EQ-G（`get_fault_heatmap`）
-   - period_a 和 period_b 均為必填，常見用法：本季對上季、上半年對下半年
+   - period_a 和 period_b 均為必填，常見用法：本季對上季、上半年對下半年；日期必須依上方時間段邊界設定
+   - **⚠️ 若 period_a 或 period_b 涉及「⚠️ 尚未結束」的時間段，必須在回覆開頭聲明不完整比較（參照上方時間段邊界說明），並以日均發生次數輔助評估**
    - 可鎖定設備（equipment_code/equipment_name）、樓層（floor）或全廠
    - **`include_chart` 預設 True**，工具會回傳分組長條圖（`chart_type='bar_line_combo'`），X 軸為故障原因，紅色 = 期間A、藍色 = 期間B
    - 回傳 `comparison` 表格：`故障原因`、`{{期間A}}(次)`、`{{期間B}}(次)`、`變化(次)`、`趨勢`；有工具回傳 chart_config 時前端會自動渲染，你只需說明「紅色長條為期間A、藍色長條為期間B，高度代表故障發生次數」

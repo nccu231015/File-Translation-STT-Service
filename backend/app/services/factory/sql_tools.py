@@ -36,6 +36,116 @@ class FactorySqlTools:
     負責與產線 (MSSQL) 和設備 (PostgreSQL) 互動的 SQL 工具庫。
     """
 
+    @staticmethod
+    def _period_completeness(end_date: str, granularity: str) -> dict:
+        """
+        Check if the queried period (identified by end_date + granularity) is still
+        in progress.  Returns a metadata dict so callers can embed it in the response
+        for the LLM to generate an appropriate disclaimer.
+
+        Returns:
+          {"any_incomplete": False}
+          or
+          {"any_incomplete": True, "period": str, "elapsed_days": int,
+           "total_days": int, "pct": float}
+        """
+        import calendar as _cal
+        today = datetime.date.today()
+        try:
+            end = datetime.date.fromisoformat(end_date)
+        except (ValueError, TypeError):
+            return {"any_incomplete": False}
+
+        # If end_date is before today the trailing period is already finished
+        if end < today:
+            return {"any_incomplete": False}
+
+        y, m = today.year, today.month
+
+        if granularity == 'daily':
+            # Daily granularity is always a single finished day unless end == today
+            if end == today:
+                return {"any_incomplete": True, "period": f"今日 {today}",
+                        "elapsed_days": 1, "total_days": 1, "pct": 100.0,
+                        "note": "今日數據可能尚未完整報工"}
+            return {"any_incomplete": False}
+
+        elif granularity == 'weekly':
+            # ISO week: Monday→Sunday
+            dow = today.weekday()          # Monday=0, Sunday=6
+            week_start = today - datetime.timedelta(days=dow)
+            week_end   = week_start + datetime.timedelta(days=6)
+            if today <= week_end:
+                elapsed = (today - week_start).days + 1
+                return {"any_incomplete": True,
+                        "period":       f"本週 ({week_start} ~ {week_end})",
+                        "elapsed_days": elapsed,
+                        "total_days":   7,
+                        "pct":          round(elapsed / 7 * 100, 1)}
+            return {"any_incomplete": False}
+
+        elif granularity == 'monthly':
+            last_d = _cal.monthrange(y, m)[1]
+            month_end = datetime.date(y, m, last_d)
+            if today < month_end:
+                start_of_month = datetime.date(y, m, 1)
+                elapsed = (today - start_of_month).days + 1
+                return {"any_incomplete": True,
+                        "period":       f"本月 ({y}-{m:02d}, {start_of_month} ~ {month_end})",
+                        "elapsed_days": elapsed,
+                        "total_days":   last_d,
+                        "pct":          round(elapsed / last_d * 100, 1)}
+            return {"any_incomplete": False}
+
+        elif granularity == 'quarterly':
+            cur_q      = (m - 1) // 3 + 1
+            q_end_m    = cur_q * 3
+            q_last_d   = _cal.monthrange(y, q_end_m)[1]
+            q_end      = datetime.date(y, q_end_m, q_last_d)
+            q_start    = datetime.date(y, (cur_q - 1) * 3 + 1, 1)
+            if today < q_end:
+                elapsed = (today - q_start).days + 1
+                total   = (q_end - q_start).days + 1
+                return {"any_incomplete": True,
+                        "period":       f"本季 Q{cur_q} {y} ({q_start} ~ {q_end})",
+                        "elapsed_days": elapsed,
+                        "total_days":   total,
+                        "pct":          round(elapsed / total * 100, 1)}
+            return {"any_incomplete": False}
+
+        elif granularity == 'half_yearly':
+            if m <= 6:
+                h_start, h_end, h_lbl = (
+                    datetime.date(y, 1, 1), datetime.date(y, 6, 30), f"1H {y}")
+            else:
+                h_start, h_end, h_lbl = (
+                    datetime.date(y, 7, 1), datetime.date(y, 12, 31), f"2H {y}")
+            if today < h_end:
+                elapsed = (today - h_start).days + 1
+                total   = (h_end - h_start).days + 1
+                return {"any_incomplete": True,
+                        "period":       f"本半年 {h_lbl} ({h_start} ~ {h_end})",
+                        "elapsed_days": elapsed,
+                        "total_days":   total,
+                        "pct":          round(elapsed / total * 100, 1)}
+            return {"any_incomplete": False}
+
+        elif granularity == 'yearly':
+            year_end   = datetime.date(y, 12, 31)
+            year_start = datetime.date(y, 1, 1)
+            leap       = _cal.isleap(y)
+            if today < year_end:
+                elapsed = (today - year_start).days + 1
+                total   = 366 if leap else 365
+                return {"any_incomplete": True,
+                        "period":       f"今年 {y} ({year_start} ~ {year_end})",
+                        "elapsed_days": elapsed,
+                        "total_days":   total,
+                        "pct":          round(elapsed / total * 100, 1)}
+            return {"any_incomplete": False}
+
+        return {"any_incomplete": False}
+
     def test_connections(self) -> dict:
         results = {"mssql": "failed", "postgres": "failed"}
         
@@ -1718,7 +1828,8 @@ class FactorySqlTools:
             "line_no":     line_no,
             "model":       model,
             "data":        result,          # table rows for LLM text response
-            "chart_config": chart_config    # JSON for frontend chart rendering
+            "chart_config": chart_config,   # JSON for frontend chart rendering
+            "period_incomplete": self._period_completeness(end_date, granularity),
         }
 
     # ──────────────────────────────────────────────────────────────────────────────
@@ -1814,31 +1925,36 @@ class FactorySqlTools:
         end_date: str = None,
         granularity: str = 'quarterly',
         periods: int = 4,
-        limit: int = 5
+        limit: int = 5,
+        start_date: str = None,      # explicit start overrides rolling-window calculation
     ) -> Dict[str, Any]:
         """
         Q7: Rank models by defect rate fluctuation (MAX − MIN across time periods).
+        start_date (optional): when provided, overrides the rolling-window look-back so
+                               the LLM can supply exact calendar boundaries (e.g. Q1 start).
         Returns:
           - 'fluctuation_ranking': sorted by volatility descending (table)
           - 'trend_data':          raw time-series rows per model
           - 'chart_config':        multi-line chart JSON (one line per model)
+          - 'period_incomplete':   metadata for LLM disclaimer if period is in progress
         """
         if not end_date:
             end_date = datetime.date.today().isoformat()
 
-        # Determine look-back window and time label SQL
-        days_per_period = {
-            'daily':       1,
-            'weekly':      7,
-            'monthly':     30,
-            'quarterly':   90,
-            'half_yearly': 182,
-            'yearly':      365,
-        }
-        days       = days_per_period.get(granularity, 90) * periods
-        start_date = (
-            datetime.date.fromisoformat(end_date) - datetime.timedelta(days=days)
-        ).isoformat()
+        # Use explicit start_date if supplied; otherwise fall back to rolling window
+        if not start_date:
+            days_per_period = {
+                'daily':       1,
+                'weekly':      7,
+                'monthly':     30,
+                'quarterly':   90,
+                'half_yearly': 182,
+                'yearly':      365,
+            }
+            days       = days_per_period.get(granularity, 90) * periods
+            start_date = (
+                datetime.date.fromisoformat(end_date) - datetime.timedelta(days=days)
+            ).isoformat()
 
         granularity_map = {
             'daily':       "CONVERT(VARCHAR(10), PRO_TIME, 120)",
@@ -2019,7 +2135,8 @@ class FactorySqlTools:
             "granularity":          granularity,
             "fluctuation_ranking":  fluctuation_result,   # table: model → volatility
             "trend_data":           trend_result,          # raw time-series
-            "chart_config":         chart_config           # JSON for frontend chart
+            "chart_config":         chart_config,          # JSON for frontend chart
+            "period_incomplete":    self._period_completeness(end_date, granularity),
         }
 
     # ──────────────────────────────────────────────────────────────────────────────
@@ -2232,7 +2349,8 @@ class FactorySqlTools:
             "top_n":         top_n,
             "trend_data":    trend_result,    # for LLM text table
             "cause_ranking": cause_result,    # top-N defect types with concentration
-            "chart_config":  chart_config     # dual-line JSON for frontend
+            "chart_config":  chart_config,    # dual-line JSON for frontend
+            "period_incomplete": self._period_completeness(end_date, granularity),
         }
 
     def _execute_postgres_query(self, query: str) -> List[Dict[str, Any]]:
