@@ -218,12 +218,53 @@ class SqlAgent:
         """Alias for compatibility with router agent."""
         return await self.chat(question)
 
+    @staticmethod
+    def _get_quarter_info() -> str:
+        """
+        Compute current and previous quarter date boundaries and return
+        a formatted string for injection into the system prompt.
+        Quarter boundaries: Q1=Jan-Mar, Q2=Apr-Jun, Q3=Jul-Sep, Q4=Oct-Dec
+        """
+        today = datetime.date.today()
+        y, m = today.year, today.month
+
+        # Determine current quarter number (1~4)
+        cur_q = (m - 1) // 3 + 1
+        # First month of current quarter
+        cur_q_start_month = (cur_q - 1) * 3 + 1
+        cur_q_start = datetime.date(y, cur_q_start_month, 1)
+        cur_q_end = today  # current quarter is still ongoing
+
+        # Previous quarter
+        if cur_q == 1:
+            prev_q = 4
+            prev_q_year = y - 1
+        else:
+            prev_q = cur_q - 1
+            prev_q_year = y
+        prev_q_start_month = (prev_q - 1) * 3 + 1
+        prev_q_start = datetime.date(prev_q_year, prev_q_start_month, 1)
+        # Last day of previous quarter = day before current quarter start
+        prev_q_end = cur_q_start - datetime.timedelta(days=1)
+
+        return (
+            f"【季度邊界（重要，調用工具時必須嚴格使用）】\n"
+            f"- 本季（Q{cur_q} {y}）：{cur_q_start.isoformat()} ～ {cur_q_end.isoformat()}（截至今天）\n"
+            f"- 上一季（Q{prev_q} {prev_q_year}）：{prev_q_start.isoformat()} ～ {prev_q_end.isoformat()}\n"
+            f"- 季度定義：Q1=1~3月, Q2=4~6月, Q3=7~9月, Q4=10~12月\n"
+            f"- 當使用者說「這一季/本季與上一季比較」，必須分別以上述日期範圍各自查詢，"
+            f"並使用 granularity='quarterly' 讓資料依季分群。\n"
+            f"- 若只問「這一季」：start_date={cur_q_start.isoformat()}, end_date={cur_q_end.isoformat()}\n"
+            f"- 若只問「上一季」：start_date={prev_q_start.isoformat()}, end_date={prev_q_end.isoformat()}"
+        )
+
     async def chat(self, question: str, history: List[Dict[str, str]] = None) -> dict:
         """
         支援上下文記憶的聊天接口。
         Returns: {"response": str, "chart_config": dict | None}
         """
-        current_date_info = f"目前的系統日期是 {datetime.date.today().isoformat()}。"
+        today_str = datetime.date.today().isoformat()
+        current_date_info = f"目前的系統日期是 {today_str}。\n\n{self._get_quarter_info()}"
         
         system_prompt = f"""你是一個專業的製造業數據分析專家，服務於「全一電子」。
 你的任務是根據使用者的問題，調用適當的 SQL 工具來獲取即時生產數據，並給出詳細、專業且易懂的分析回覆。
