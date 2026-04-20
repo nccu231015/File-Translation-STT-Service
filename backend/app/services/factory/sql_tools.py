@@ -558,9 +558,13 @@ class FactorySqlTools:
             model_names = [r.get("機種名稱") for r in ms_rows if r.get("機種名稱")]
 
         # fetch daily LPSL / BLSL from CIM_MQTT_OK_NG_QTY
-        start_ymd = start_date.replace('-', '')
-        end_ymd   = end_date.replace('-', '')
-        safe_kw_qty = safe_kw.replace("'", "''")
+        # SBMC matches EQUIPMENT_CODE (short name, e.g. 'Sonic_501').
+        # Use eq_code / topic resolved in Step 1 as direct literals; ILIKE on eq_name as fallback.
+        start_ymd    = start_date.replace('-', '')
+        end_ymd      = end_date.replace('-', '')
+        safe_eq_code_qty = eq_code.replace("'", "''")
+        safe_topic_qty   = topic.replace("'", "''")
+        safe_kw_qty      = safe_kw.replace("'", "''")
 
         qty_q = f"""
             SELECT
@@ -570,11 +574,8 @@ class FactorySqlTools:
             FROM "public"."CIM_MQTT_OK_NG_QTY"
             WHERE "YMD" BETWEEN '{start_ymd}' AND '{end_ymd}'
               AND (
-                "SBMC" IN (
-                    SELECT "EQUIPMENT_CODE" FROM "public"."EQUIPMENT_INFO_DICT"
-                    WHERE ("EQUIPMENT_NAME" ILIKE '%{safe_kw_qty}%' OR "EQUIPMENT_CODE" ILIKE '%{safe_kw_qty}%')
-                      AND "EQUIPMENT_CODE" IS NOT NULL
-                )
+                "SBMC" = '{safe_eq_code_qty}'
+                OR "SBMC" = '{safe_topic_qty}'
                 OR "SBMC" ILIKE '%{safe_kw_qty}%'
               )
             GROUP BY "YMD"
