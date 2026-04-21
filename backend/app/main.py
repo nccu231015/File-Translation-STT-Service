@@ -21,6 +21,7 @@ from app.services.employee_db import (
 from app.services.rank_service import get_rank, has_view_permission
 from app.services.factory.factory_agent import FactoryAgentService
 from app.services.factory.factory_redis import factory_store
+from app.services.factory.doc_redis import doc_store
 from pydantic import BaseModel
 from typing import Optional
 import uuid
@@ -61,6 +62,13 @@ async def startup_event():
         print("[FactoryStore] ✓ Session store initialized")
     except Exception as e:
         print(f"[FactoryStore Error] {e}")
+
+    # 2b. Document KM Session Store (same Redis, different key prefix)
+    try:
+        await doc_store.connect()
+        print("[DocStore] ✓ Document session store initialized")
+    except Exception as e:
+        print(f"[DocStore Error] {e}")
 
     # 3. Factory Databases Health Check
     try:
@@ -913,14 +921,24 @@ async def delete_factory_session(session_id: str):
 # n8n receives {"question": "..."}, runs ChromaDB retrieval + LLM, and returns
 # {"output": "answer text"} via a Respond to Webhook node.
 @app.post("/document-chat")
-async def document_chat(payload: dict):
-    """Document KM chat: proxies to n8n PDF RAG webhook."""
+async def document_chat(payload: dict, background_tasks: BackgroundTasks):
+    """Document KM chat: proxies to n8n PDF RAG webhook with session tracking."""
     question = payload.get("question") or payload.get("text")
+    session_id = payload.get("session_id")
     if not question:
         raise HTTPException(status_code=400, detail="question field is required")
 
+    # Ensure session exists
+    if not session_id:
+        try:
+            session = await doc_store.create_session(question)
+            session_id = session["session_id"]
+        except Exception as se:
+            session_id = str(uuid.uuid4())
+            print(f"[DocSession Warning] Fallback session id: {se}")
+
     try:
-        print(f"\n[Document Chat] question='{question}'", flush=True)
+        print(f"\n[Document Chat] session={session_id} question='{question}'", flush=True)
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(connect=10.0, read=180.0, write=30.0, pool=10.0)
         ) as client:
@@ -932,20 +950,48 @@ async def document_chat(payload: dict):
             raw = n8n_resp.text.strip()
             if not raw:
                 print("[Document Chat Warning] n8n returned empty body.", flush=True)
-                return {"response": "抱歉，知識庫查詢未回傳結果，請稍後再試。"}
+                return {"response": "抱歉，知識庫查詢未回傳結果，請稍後再試。", "session_id": session_id}
 
             result = n8n_resp.json()
 
-        # n8n Modify Output node returns {"output": "..."};
-        # fall back to "response" key for forward compatibility
+        # n8n returns {"output": "..."} or {"response": "..."}
         response_text = result.get("output") or result.get("response") or ""
         print(f"[Document Chat] Success: {len(response_text)} chars", flush=True)
-        return {"response": response_text}
+
+        # Save message pair to session in background
+        background_tasks.add_task(doc_store.append_messages, session_id, question, response_text)
+
+        return {"response": response_text, "session_id": str(session_id)}
 
     except Exception as e:
         print(f"[Document Chat Error] {e}", flush=True)
         print(traceback.format_exc(), flush=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/document-sessions")
+async def list_document_sessions():
+    try:
+        sessions = await doc_store.list_sessions()
+        return {"sessions": sessions}
+    except Exception as e:
+        print(f"[API Error] list_document_sessions: {e}")
+        return {"sessions": []}
+
+@app.get("/document-sessions/{session_id}")
+async def get_document_session(session_id: str):
+    session = await doc_store.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session
+
+@app.delete("/document-sessions/{session_id}")
+async def delete_document_session(session_id: str):
+    deleted = await doc_store.delete_session(session_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"message": "Session deleted"}
+
 
 
 # ── Document Ingest (PDF → ChromaDB via n8n) ───────────────────────────────────

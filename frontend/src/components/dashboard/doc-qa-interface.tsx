@@ -7,14 +7,19 @@ import { Badge } from '@/components/ui/badge';
 import {
     Send, Loader2, Bot, User as UserIcon,
     FileSearch, Mic, Square, UploadCloud,
-    FileText, CheckCircle2, XCircle, Trash2, X
+    FileText, CheckCircle2, XCircle, Trash2, X,
+    PlusCircle, MessageSquare, ChevronRight
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'framer-motion';
-import { askDocumentQA, uploadDocument } from '@/lib/api/doc-qa';
+import {
+    askDocumentQA, uploadDocument,
+    listDocSessions, getDocSession, deleteDocSession,
+    DocSessionSummary, DocSessionMessage
+} from '@/lib/api/doc-qa';
 
 interface Message {
     id: string;
@@ -33,11 +38,22 @@ interface UploadedFile {
     errorMsg?: string;
 }
 
+const WELCOME_MSG: Message = {
+    id: 'welcome',
+    role: 'assistant',
+    content: '您好！我是 **文件知識助理 (KM)**。您可以詢問關於公司 **SOP、規範手冊、作業標準、教育訓練** 等文件內容。\n\n請先在左側上傳 PDF 文件建立知識庫，再開始提問。',
+    timestamp: new Date(),
+};
+
 export function DocQAInterface() {
     const [mounted, setMounted] = useState(false);
-    const [messages, setMessages] = useState<Message[]>([]);
+    const [messages, setMessages] = useState<Message[]>([WELCOME_MSG]);
     const [input, setInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
+
+    // Session state
+    const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+    const [sessions, setSessions] = useState<DocSessionSummary[]>([]);
 
     // Uploaded file records (client-side tracking only)
     const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
@@ -64,14 +80,31 @@ export function DocQAInterface() {
         setTimeStrings(t);
     }, [messages]);
 
+    // ── Init: load session list and restore latest session ───────────────────
     useEffect(() => {
         setMounted(true);
-        setMessages([{
-            id: 'welcome',
-            role: 'assistant',
-            content: '您好！我是 **文件知識助理 (KM)**。您可以詢問關於公司 **SOP、規範手冊、作業標準、教育訓練** 等文件內容。\n\n請先在左側上傳 PDF 文件建立知識庫，再開始提問。',
-            timestamp: new Date(),
-        }]);
+        listDocSessions()
+            .then(async (list: DocSessionSummary[]) => {
+                setSessions(list);
+                if (list.length > 0) {
+                    try {
+                        const detail = await getDocSession(list[0].session_id);
+                        if (detail && detail.messages.length > 0) {
+                            const restored: Message[] = detail.messages.map((m: DocSessionMessage, i: number) => ({
+                                id: `${m.role}-${i}-restored`,
+                                role: m.role as 'user' | 'assistant',
+                                content: m.content,
+                                timestamp: new Date(m.ts),
+                            }));
+                            setCurrentSessionId(list[0].session_id);
+                            setMessages(restored);
+                        }
+                    } catch (e) {
+                        console.warn('Failed to restore last doc session', e);
+                    }
+                }
+            })
+            .catch((e: unknown) => console.error('Failed to load doc sessions', e));
     }, []);
 
     useEffect(() => {
@@ -80,34 +113,67 @@ export function DocQAInterface() {
         }
     }, [messages, isLoading]);
 
+    // ── Session Helpers ──────────────────────────────────────────────────────
+    const loadSessions = async () => {
+        try {
+            setSessions(await listDocSessions());
+        } catch (e) {
+            console.error('Failed to load doc sessions', e);
+        }
+    };
+
+    const startNewChat = () => {
+        setCurrentSessionId(null);
+        setMessages([WELCOME_MSG]);
+        setInput('');
+        setTimeout(() => inputRef.current?.focus(), 10);
+    };
+
+    const loadSession = async (session_id: string) => {
+        const detail = await getDocSession(session_id);
+        if (!detail) return;
+        const restored: Message[] = detail.messages.map((m: DocSessionMessage, i: number) => ({
+            id: `${m.role}-${i}-${Date.now()}`,
+            role: m.role as 'user' | 'assistant',
+            content: m.content,
+            timestamp: new Date(m.ts),
+        }));
+        setCurrentSessionId(session_id);
+        setMessages(restored);
+        setInput('');
+    };
+
+    const removeSession = async (e: React.MouseEvent, session_id: string) => {
+        e.stopPropagation();
+        if (!window.confirm('確定要刪除這段對話嗎？資料刪除後無法復原。')) return;
+        try {
+            await deleteDocSession(session_id);
+            if (currentSessionId === session_id) startNewChat();
+            await loadSessions();
+        } catch {
+            alert('刪除失敗，請稍後再試。');
+        }
+    };
+
+    const formatSessionDate = (iso: string) => {
+        if (!mounted) return '';
+        const d = new Date(iso);
+        return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
+    };
+
     // ── File Upload ──────────────────────────────────────────────────────────
     const processFiles = useCallback(async (files: File[]) => {
         const pdfs = files.filter(f => f.name.toLowerCase().endsWith('.pdf'));
-        if (pdfs.length === 0) {
-            toast.error('請上傳 PDF 格式的文件');
-            return;
-        }
-
+        if (pdfs.length === 0) { toast.error('請上傳 PDF 格式的文件'); return; }
         for (const f of pdfs) {
             const id = `${f.name}-${Date.now()}`;
-            // Add to list with uploading status
-            setUploadedFiles(prev => [...prev, {
-                id,
-                name: f.name,
-                size: f.size,
-                status: 'uploading',
-            }]);
-
+            setUploadedFiles(prev => [...prev, { id, name: f.name, size: f.size, status: 'uploading' }]);
             try {
                 await uploadDocument(f);
-                setUploadedFiles(prev =>
-                    prev.map(u => u.id === id ? { ...u, status: 'done' } : u)
-                );
+                setUploadedFiles(prev => prev.map(u => u.id === id ? { ...u, status: 'done' } : u));
                 toast.success(`${f.name} 已成功寫入知識庫`);
             } catch (err: any) {
-                setUploadedFiles(prev =>
-                    prev.map(u => u.id === id ? { ...u, status: 'error', errorMsg: err.message } : u)
-                );
+                setUploadedFiles(prev => prev.map(u => u.id === id ? { ...u, status: 'error', errorMsg: err.message } : u));
                 toast.error(`${f.name} 上傳失敗`);
             }
         }
@@ -117,20 +183,13 @@ export function DocQAInterface() {
         if (e.target.files) processFiles(Array.from(e.target.files));
         e.target.value = '';
     };
-
     const handleDrop = useCallback((e: React.DragEvent) => {
-        e.preventDefault();
-        setIsDragging(false);
+        e.preventDefault(); setIsDragging(false);
         if (e.dataTransfer.files) processFiles(Array.from(e.dataTransfer.files));
     }, [processFiles]);
-
     const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); setIsDragging(true); };
     const handleDragLeave = () => setIsDragging(false);
-
-    const removeFile = (id: string) => {
-        setUploadedFiles(prev => prev.filter(f => f.id !== id));
-    };
-
+    const removeFile = (id: string) => setUploadedFiles(prev => prev.filter(f => f.id !== id));
     const formatSize = (bytes: number) => {
         if (bytes < 1024) return `${bytes} B`;
         if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -141,16 +200,13 @@ export function DocQAInterface() {
     const startRecording = async () => {
         try {
             if (!navigator.mediaDevices?.getUserMedia) {
-                toast.error('無法存取麥克風：請確認連線為 https 或 localhost');
-                return;
+                toast.error('無法存取麥克風：請確認連線為 https 或 localhost'); return;
             }
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             const mediaRecorder = new MediaRecorder(stream);
             mediaRecorderRef.current = mediaRecorder;
             audioChunksRef.current = [];
-            mediaRecorder.ondataavailable = (e) => {
-                if (e.data.size > 0) audioChunksRef.current.push(e.data);
-            };
+            mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
             mediaRecorder.onstop = async () => {
                 const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
                 stream.getTracks().forEach(t => t.stop());
@@ -164,11 +220,8 @@ export function DocQAInterface() {
                         setInput(prev => (prev + ' ' + result.transcription.text.trim()).trim());
                         toast.success('語音辨識完成');
                     }
-                } catch {
-                    toast.error('語音辨識失敗，請稍後再試');
-                } finally {
-                    setIsLoading(false);
-                }
+                } catch { toast.error('語音辨識失敗，請稍後再試'); }
+                finally { setIsLoading(false); }
             };
             mediaRecorder.start();
             setIsRecording(true);
@@ -178,12 +231,8 @@ export function DocQAInterface() {
             else toast.error(`無法存取麥克風: ${error.message || '未知錯誤'}`);
         }
     };
-
     const stopRecording = () => {
-        if (mediaRecorderRef.current && isRecording) {
-            mediaRecorderRef.current.stop();
-            setIsRecording(false);
-        }
+        if (mediaRecorderRef.current && isRecording) { mediaRecorderRef.current.stop(); setIsRecording(false); }
     };
 
     // ── Send Message ─────────────────────────────────────────────────────────
@@ -191,42 +240,28 @@ export function DocQAInterface() {
         if (!text.trim() || isLoading) return;
         const finalText = text.trim();
         setInput('');
-        const userMsg: Message = {
-            id: `user-${Date.now()}`,
-            role: 'user',
-            content: finalText,
-            timestamp: new Date(),
-        };
-        setMessages(prev => {
-            const filtered = prev.filter(m => m.id !== 'welcome');
-            return [...filtered, userMsg];
-        });
+        const userMsg: Message = { id: `user-${Date.now()}`, role: 'user', content: finalText, timestamp: new Date() };
+        setMessages(prev => [...prev.filter(m => m.id !== 'welcome'), userMsg]);
         setIsLoading(true);
         try {
-            const data = await askDocumentQA(finalText);
+            const data = await askDocumentQA(finalText, currentSessionId ?? undefined);
+            if (!currentSessionId) {
+                setCurrentSessionId(data.session_id);
+                loadSessions();
+            }
             setMessages(prev => [...prev, {
-                id: `ai-${Date.now()}`,
-                role: 'assistant',
-                content: data.response,
-                timestamp: new Date(),
+                id: `ai-${Date.now()}`, role: 'assistant', content: data.response, timestamp: new Date(),
             }]);
         } catch {
             setMessages(prev => [...prev, {
-                id: `error-${Date.now()}`,
-                role: 'assistant',
-                content: '⚠️ 抱歉，知識庫查詢服務連線異常，請稍後再試。',
-                timestamp: new Date(),
+                id: `error-${Date.now()}`, role: 'assistant',
+                content: '⚠️ 抱歉，知識庫查詢服務連線異常，請稍後再試。', timestamp: new Date(),
             }]);
-        } finally {
-            setIsLoading(false);
-        }
+        } finally { setIsLoading(false); }
     };
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            handleSend();
-        }
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
     };
 
     if (!mounted) return null;
@@ -234,11 +269,59 @@ export function DocQAInterface() {
     return (
         <div className="flex h-[calc(100vh-8rem)] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
 
-            {/* ── Left Panel: Knowledge Base Manager ──────────────────────── */}
+            {/* ── Left Panel ──────────────────────────────────────────────── */}
             <div className="w-72 flex-shrink-0 border-r border-slate-100 bg-slate-50 flex flex-col">
-                <div className="px-4 py-3 border-b border-slate-200 flex items-center gap-2">
-                    <FileSearch className="size-4 text-emerald-600" />
-                    <span className="text-sm font-semibold text-slate-700">知識庫文件</span>
+
+                {/* New chat button */}
+                <div className="px-3 pt-3 pb-2">
+                    <Button
+                        onClick={startNewChat}
+                        className="w-full gap-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm h-9"
+                    >
+                        <PlusCircle className="size-4" /> 新對話
+                    </Button>
+                </div>
+
+                {/* Session list */}
+                <div className="flex-1 overflow-y-auto px-2 space-y-1 min-h-0">
+                    {sessions.length === 0 ? (
+                        <p className="text-[11px] text-slate-400 text-center pt-3 px-2">尚無對話紀錄</p>
+                    ) : sessions.map(s => (
+                        <button
+                            key={s.session_id}
+                            onClick={() => loadSession(s.session_id)}
+                            className={`group w-full text-left px-3 py-2.5 rounded-xl transition-all flex items-start gap-2 ${
+                                currentSessionId === s.session_id
+                                    ? 'bg-emerald-50 border border-emerald-200'
+                                    : 'hover:bg-white hover:shadow-sm border border-transparent'
+                            }`}
+                        >
+                            <MessageSquare className={`size-4 flex-shrink-0 mt-0.5 ${
+                                currentSessionId === s.session_id ? 'text-emerald-600' : 'text-slate-400'
+                            }`} />
+                            <div className="flex-1 min-w-0">
+                                <p className={`text-xs font-medium truncate ${
+                                    currentSessionId === s.session_id ? 'text-emerald-800' : 'text-slate-700'
+                                }`}>{s.title}</p>
+                                <p className="text-[10px] text-slate-400">{formatSessionDate(s.updated_at)}</p>
+                            </div>
+                            <button
+                                onClick={(e) => removeSession(e, s.session_id)}
+                                className="opacity-0 group-hover:opacity-60 hover:!opacity-100 text-slate-400 hover:text-red-500 transition-opacity flex-shrink-0 mt-0.5"
+                            >
+                                <Trash2 className="size-3.5" />
+                            </button>
+                        </button>
+                    ))}
+                </div>
+
+                {/* Divider */}
+                <div className="mx-3 border-t border-slate-200 my-2" />
+
+                {/* Knowledge Base PDF Manager */}
+                <div className="px-4 pb-1 flex items-center gap-2">
+                    <FileSearch className="size-3.5 text-emerald-600" />
+                    <span className="text-xs font-semibold text-slate-600">知識庫文件</span>
                     <Badge variant="outline" className="ml-auto text-[10px] text-emerald-600 border-emerald-200 bg-emerald-50">
                         {uploadedFiles.filter(f => f.status === 'done').length} 份
                     </Badge>
@@ -246,73 +329,45 @@ export function DocQAInterface() {
 
                 {/* Drop Zone */}
                 <div
-                    onDrop={handleDrop}
-                    onDragOver={handleDragOver}
-                    onDragLeave={handleDragLeave}
+                    onDrop={handleDrop} onDragOver={handleDragOver} onDragLeave={handleDragLeave}
                     onClick={() => fileInputRef.current?.click()}
-                    className={`mx-3 mt-3 rounded-xl border-2 border-dashed cursor-pointer transition-all px-4 py-5 flex flex-col items-center gap-2 ${
-                        isDragging
-                            ? 'border-emerald-400 bg-emerald-50 scale-[1.01]'
-                            : 'border-slate-300 hover:border-emerald-300 hover:bg-emerald-50/50'
+                    className={`mx-3 mb-1 rounded-xl border-2 border-dashed cursor-pointer transition-all px-3 py-3 flex flex-col items-center gap-1 ${
+                        isDragging ? 'border-emerald-400 bg-emerald-50 scale-[1.01]' : 'border-slate-300 hover:border-emerald-300 hover:bg-emerald-50/50'
                     }`}
                 >
-                    <UploadCloud className={`size-8 transition-colors ${isDragging ? 'text-emerald-500' : 'text-slate-400'}`} />
-                    <p className="text-xs text-slate-500 text-center leading-relaxed">
-                        拖放 PDF 至此，或<span className="text-emerald-600 font-semibold">點擊選擇</span>
+                    <UploadCloud className={`size-6 transition-colors ${isDragging ? 'text-emerald-500' : 'text-slate-400'}`} />
+                    <p className="text-[11px] text-slate-500 text-center">
+                        拖放 PDF 或<span className="text-emerald-600 font-semibold">點擊上傳</span>
                     </p>
-                    <p className="text-[10px] text-slate-400">僅支援 .pdf 格式</p>
                 </div>
-                <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept=".pdf"
-                    multiple
-                    className="hidden"
-                    onChange={handleFileChange}
-                />
+                <input ref={fileInputRef} type="file" accept=".pdf" multiple className="hidden" onChange={handleFileChange} />
 
-                {/* File List */}
-                <div className="flex-1 overflow-y-auto px-3 py-2 space-y-2 mt-1">
+                {/* File list */}
+                <div className="overflow-y-auto px-3 pb-2 space-y-1 max-h-40">
                     {uploadedFiles.length === 0 ? (
-                        <p className="text-[11px] text-slate-400 text-center pt-4">尚未上傳任何文件</p>
+                        <p className="text-[10px] text-slate-400 text-center py-1">尚未上傳任何文件</p>
                     ) : (
                         <AnimatePresence>
                             {uploadedFiles.map(f => (
                                 <motion.div
                                     key={f.id}
-                                    initial={{ opacity: 0, y: -6 }}
+                                    initial={{ opacity: 0, y: -4 }}
                                     animate={{ opacity: 1, y: 0 }}
-                                    exit={{ opacity: 0, x: -20 }}
-                                    className="flex items-start gap-2 bg-white rounded-lg px-3 py-2 border border-slate-100 shadow-sm group"
+                                    exit={{ opacity: 0, x: -16 }}
+                                    className="flex items-center gap-1.5 bg-white rounded-lg px-2 py-1.5 border border-slate-100 shadow-sm group"
                                 >
-                                    {/* Status icon */}
-                                    <div className="mt-0.5 flex-shrink-0">
-                                        {f.status === 'uploading' && (
-                                            <Loader2 className="size-4 text-emerald-500 animate-spin" />
-                                        )}
-                                        {f.status === 'done' && (
-                                            <CheckCircle2 className="size-4 text-emerald-500" />
-                                        )}
-                                        {f.status === 'error' && (
-                                            <XCircle className="size-4 text-red-500" />
-                                        )}
+                                    <div className="flex-shrink-0">
+                                        {f.status === 'uploading' && <Loader2 className="size-3.5 text-emerald-500 animate-spin" />}
+                                        {f.status === 'done' && <CheckCircle2 className="size-3.5 text-emerald-500" />}
+                                        {f.status === 'error' && <XCircle className="size-3.5 text-red-500" />}
                                     </div>
                                     <div className="flex-1 min-w-0">
-                                        <p className="text-xs font-medium text-slate-700 truncate">{f.name}</p>
-                                        <p className="text-[10px] text-slate-400">
-                                            {formatSize(f.size)} ·{' '}
-                                            {f.status === 'uploading' && <span className="text-emerald-500">上傳中...</span>}
-                                            {f.status === 'done' && <span className="text-emerald-600">已寫入知識庫</span>}
-                                            {f.status === 'error' && <span className="text-red-500">上傳失敗</span>}
-                                        </p>
+                                        <p className="text-[11px] font-medium text-slate-700 truncate">{f.name}</p>
+                                        <p className="text-[10px] text-slate-400">{formatSize(f.size)}</p>
                                     </div>
-                                    <Button
-                                        variant="ghost" size="icon"
-                                        onClick={() => removeFile(f.id)}
-                                        className="size-5 opacity-0 group-hover:opacity-60 hover:!opacity-100 text-slate-400 hover:text-red-500 flex-shrink-0 transition-opacity"
-                                    >
+                                    <button onClick={() => removeFile(f.id)} className="opacity-0 group-hover:opacity-60 hover:!opacity-100 text-slate-400 hover:text-red-500 flex-shrink-0 transition-opacity">
                                         <X className="size-3" />
-                                    </Button>
+                                    </button>
                                 </motion.div>
                             ))}
                         </AnimatePresence>
@@ -321,11 +376,9 @@ export function DocQAInterface() {
 
                 {/* Clear all */}
                 {uploadedFiles.length > 0 && (
-                    <div className="p-3 border-t border-slate-200">
-                        <Button
-                            variant="ghost" size="sm"
-                            onClick={() => setUploadedFiles([])}
-                            className="w-full text-xs text-slate-400 hover:text-red-500 gap-1.5"
+                    <div className="px-3 pb-3">
+                        <Button variant="ghost" size="sm" onClick={() => setUploadedFiles([])}
+                            className="w-full text-xs text-slate-400 hover:text-red-500 gap-1.5 h-7"
                         >
                             <Trash2 className="size-3" /> 清除清單
                         </Button>
@@ -362,9 +415,7 @@ export function DocQAInterface() {
                                 className={`flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}
                             >
                                 <div className={`size-9 rounded-xl flex-shrink-0 flex items-center justify-center shadow-sm ${
-                                    msg.role === 'user'
-                                        ? 'bg-emerald-600 text-white'
-                                        : 'bg-white border border-slate-200 text-emerald-600'
+                                    msg.role === 'user' ? 'bg-emerald-600 text-white' : 'bg-white border border-slate-200 text-emerald-600'
                                 }`}>
                                     {msg.role === 'user' ? <UserIcon className="size-5" /> : <Bot className="size-5" />}
                                 </div>
@@ -450,3 +501,5 @@ export function DocQAInterface() {
         </div>
     );
 }
+
+
