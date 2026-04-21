@@ -36,12 +36,6 @@ interface UploadedFile {
 export function DocQAInterface() {
     const [mounted, setMounted] = useState(false);
     const [messages, setMessages] = useState<Message[]>([]);
-    const [quickQuestions] = useState<string[]>([
-        '請說明本公司的電焊作業安全規範',
-        '設備點檢的 SOP 是什麼？',
-        '新人訓練的流程與注意事項',
-        '品質異常處理程序',
-    ]);
     const [input, setInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
 
@@ -358,22 +352,6 @@ export function DocQAInterface() {
 
                 {/* Messages */}
                 <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-6 scroll-smooth">
-                    {messages.length === 1 && messages[0].id === 'welcome' && (
-                        <div className="flex flex-wrap gap-2 mb-4">
-                            {quickQuestions.map((q, i) => (
-                                <motion.button
-                                    key={i}
-                                    whileHover={{ scale: 1.02 }}
-                                    whileTap={{ scale: 0.98 }}
-                                    onClick={() => handleSend(q)}
-                                    className="text-xs bg-white hover:bg-emerald-50 text-slate-700 hover:text-emerald-700 border border-slate-200 hover:border-emerald-200 px-4 py-2 rounded-full transition-all shadow-sm"
-                                >
-                                    {q}
-                                </motion.button>
-                            ))}
-                        </div>
-                    )}
-
                     <AnimatePresence initial={false}>
                         {messages.map(msg => (
                             <motion.div

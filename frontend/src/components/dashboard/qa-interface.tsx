@@ -31,7 +31,6 @@ export function QAInterface() {
     const [mounted, setMounted] = useState(false);
     // ... (其餘狀態保持不變)
     const [messages, setMessages] = useState<Message[]>([]);
-    const [quickQuestions, setQuickQuestions] = useState<string[]>([]);
     const [input, setInputRaw] = useState('');
     // 用 sessionStorage 同步輸入文字，切換分頁後不會消失
     const setInput = (val: string) => {
@@ -84,15 +83,7 @@ export function QAInterface() {
             timestamp: new Date(),
         }]);
 
-        // 2. 初始化快速問題（對應 Q1-Q4 產線分析）
-        setQuickQuestions([
-            `今日 (${today}) 各樓層產線稼動狀態？`,
-            '目前哪些工單進度落後？依嚴重度排行',
-            '今日哪些產線不良比例特別高？',
-            '上週停機趨勢分析',
-        ]);
-        
-        // 3. 恢復輸入框文字（切換分頁後不遺失）
+        // 2. 恢復輸入框文字（切換分頁後不遺失）
         try {
             const savedInput = sessionStorage.getItem('factory_chat_input');
             if (savedInput) setInputRaw(savedInput);
@@ -404,23 +395,6 @@ export function QAInterface() {
 
                 {/* Messages */}
                 <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-6 scroll-smooth">
-                    {/* Quick question pills */}
-                    {messages.length === 1 && messages[0].id === 'welcome' && (
-                        <div className="flex flex-wrap gap-2 mb-4">
-                            {quickQuestions.map((q, i) => (
-                                <motion.button
-                                    key={i}
-                                    whileHover={{ scale: 1.02 }}
-                                    whileTap={{ scale: 0.98 }}
-                                    onClick={() => handleSend(q)}
-                                    className="text-xs bg-white hover:bg-indigo-50 text-slate-700 hover:text-indigo-700 border border-slate-200 hover:border-indigo-200 px-4 py-2 rounded-full transition-all shadow-sm"
-                                >
-                                    {q}
-                                </motion.button>
-                            ))}
-                        </div>
-                    )}
-
                     <AnimatePresence initial={false}>
                         {messages.map(msg => (
                             <motion.div
