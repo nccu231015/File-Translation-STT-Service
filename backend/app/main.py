@@ -784,6 +784,8 @@ async def chat_text(payload: dict):
 # The Router decision is made in n8n; actual AI processing stays in the backend.
 
 N8N_FACTORY_WEBHOOK = "http://172.16.2.68:5678/webhook/factory-chat"
+N8N_DOC_WEBHOOK    = os.getenv("N8N_DOC_WEBHOOK",    "http://172.16.2.68/webhook/doc-chat")
+N8N_DOC_INGEST     = os.getenv("N8N_DOC_INGEST",     "http://172.16.2.68/webhook/doc-ingest")
 
 class FactoryChatRequest(BaseModel):
     question: str
@@ -905,3 +907,81 @@ async def delete_factory_session(session_id: str):
     deleted = await factory_store.delete_session(session_id)
     if not deleted: raise HTTPException(status_code=404, detail="Session not found")
     return {"message": "Session deleted"}
+
+# ── Document Knowledge (RAG) Chat ──────────────────────────────────────────────
+# Proxies to the n8n PDF RAG webhook.
+# n8n receives {"question": "..."}, runs ChromaDB retrieval + LLM, and returns
+# {"output": "answer text"} via a Respond to Webhook node.
+@app.post("/document-chat")
+async def document_chat(payload: dict):
+    """Document KM chat: proxies to n8n PDF RAG webhook."""
+    question = payload.get("question") or payload.get("text")
+    if not question:
+        raise HTTPException(status_code=400, detail="question field is required")
+
+    try:
+        print(f"\n[Document Chat] question='{question}'", flush=True)
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=10.0, read=180.0, write=30.0, pool=10.0)
+        ) as client:
+            n8n_resp = await client.post(
+                N8N_DOC_WEBHOOK,
+                json={"question": question}
+            )
+            n8n_resp.raise_for_status()
+            raw = n8n_resp.text.strip()
+            if not raw:
+                print("[Document Chat Warning] n8n returned empty body.", flush=True)
+                return {"response": "抱歉，知識庫查詢未回傳結果，請稍後再試。"}
+
+            result = n8n_resp.json()
+
+        # n8n Modify Output node returns {"output": "..."};
+        # fall back to "response" key for forward compatibility
+        response_text = result.get("output") or result.get("response") or ""
+        print(f"[Document Chat] Success: {len(response_text)} chars", flush=True)
+        return {"response": response_text}
+
+    except Exception as e:
+        print(f"[Document Chat Error] {e}", flush=True)
+        print(traceback.format_exc(), flush=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Document Ingest (PDF → ChromaDB via n8n) ───────────────────────────────────
+# Accepts a PDF file upload and forwards it to the n8n doc-ingest webhook as
+# multipart/form-data so n8n can extract text, chunk, embed and store in ChromaDB.
+@app.post("/document-ingest")
+async def document_ingest(file: UploadFile = File(...)):
+    """Forward an uploaded PDF to the n8n PDF ingestion webhook."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file provided")
+    # Only accept PDF and common document types
+    allowed = {"application/pdf", "application/octet-stream"}
+    if file.content_type not in allowed and not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+
+    try:
+        print(f"[Document Ingest] Received: {file.filename} ({file.content_type})", flush=True)
+        content = await file.read()
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=10.0, read=120.0, write=60.0, pool=10.0)
+        ) as client:
+            n8n_resp = await client.post(
+                N8N_DOC_INGEST,
+                files={"file": (file.filename, content, file.content_type or "application/pdf")}
+            )
+            n8n_resp.raise_for_status()
+            raw = n8n_resp.text.strip()
+            if not raw:
+                return {"status": "ok", "filename": file.filename, "message": "Ingested (no detail returned)"}
+            result = n8n_resp.json()
+
+        print(f"[Document Ingest] Done: {file.filename}", flush=True)
+        return {"status": "ok", "filename": file.filename, **result}
+
+    except Exception as e:
+        print(f"[Document Ingest Error] {e}", flush=True)
+        print(traceback.format_exc(), flush=True)
+        raise HTTPException(status_code=500, detail=str(e))
+

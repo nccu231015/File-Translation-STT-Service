@@ -24,6 +24,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 
 import { QAInterface } from './qa-interface';
+import { KMHub } from './km-hub';
 import { ReportInterface } from './report-interface';
 import { VoiceInterface } from './voice-interface';
 import { DocumentTranslation } from './document-translation';
@@ -36,14 +37,14 @@ interface MainDashboardProps {
     onLogout: () => void;
 }
 
-type ActiveView = 'home' | 'qa' | 'report' | 'translation' | 'voice' | 'records';
+type ActiveView = 'home' | 'km' | 'report' | 'translation' | 'voice' | 'records';
 
 export function MainDashboard({ user, onLogout }: MainDashboardProps) {
     const [activeView, setActiveView] = useState<ActiveView>('home');
 
     const navigationItems = [
         { id: 'home' as const, label: '首頁', icon: Home },
-        { id: 'qa' as const, label: '智能問答', icon: MessageSquare },
+        { id: 'km' as const, label: 'KM 助理', icon: MessageSquare },
         { id: 'report' as const, label: '報表生成', icon: FileBarChart },
         { id: 'translation' as const, label: '文件翻譯', icon: Languages },
         { id: 'voice' as const, label: '語音處理', icon: Mic },
@@ -143,7 +144,7 @@ export function MainDashboard({ user, onLogout }: MainDashboardProps) {
             {/* Main Content Area */}
             <main className="container mx-auto p-4 md:p-6 flex-1 max-w-7xl animate-in fade-in duration-300">
                 {activeView === 'home' && <DashboardHome user={user} onNavigate={setActiveView} />}
-                {activeView === 'qa' && <QAInterface />}
+                {activeView === 'km' && <KMHub />}
                 {activeView === 'report' && <ReportInterface />}
                 {activeView === 'translation' && <DocumentTranslation />}
                 {activeView === 'voice' && <VoiceInterface />}

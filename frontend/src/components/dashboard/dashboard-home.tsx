@@ -20,18 +20,18 @@ interface DashboardHomeProps {
         name: string;
         dpt: string;
     };
-    onNavigate: (view: 'qa' | 'report' | 'translation' | 'voice') => void;
+    onNavigate: (view: 'km' | 'report' | 'translation' | 'voice') => void;
 }
 
 export function DashboardHome({ user, onNavigate }: DashboardHomeProps) {
     const features = [
         {
-            id: 'qa' as const,
-            title: '智能問答',
-            description: '基於企業資料與專業知識的 AI 問答系統',
+            id: 'km' as const,
+            title: 'KM 助理',
+            description: '工廠發數問答．文件備查詢問，一個入口涵蓋所有 AI 問答功能',
             icon: MessageSquare,
-            color: 'from-blue-500 to-cyan-500',
-            features: ['自然語言查詢', '多語言支援', '資料來源可追溯']
+            color: 'from-violet-500 to-indigo-600',
+            features: ['工廠數據問答', 'SOP/文件搜尋', '資料來源可追發']
         },
         {
             id: 'report' as const,
