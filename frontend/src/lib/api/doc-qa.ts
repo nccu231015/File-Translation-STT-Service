@@ -101,3 +101,25 @@ export async function uploadDocument(file: File): Promise<DocIngestResponse> {
     return resp.json();
 }
 
+export interface DocFileRecord {
+    filename: string;
+    size: number;
+    uploaded_at: string;
+}
+
+/** List all ingested file records stored in Redis. */
+export async function listDocFiles(): Promise<DocFileRecord[]> {
+    const res = await fetch(`${getBackendUrl()}/document-files`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.files ?? [];
+}
+
+/** Remove a file record from Redis (does not delete from ChromaDB). */
+export async function deleteDocFile(filename: string): Promise<boolean> {
+    const res = await fetch(`${getBackendUrl()}/document-files/${encodeURIComponent(filename)}`, {
+        method: 'DELETE',
+    });
+    return res.ok;
+}
+

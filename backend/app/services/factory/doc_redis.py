@@ -23,6 +23,7 @@ except ImportError:
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 SESSION_TTL = 604800  # 7 days
 SESSION_INDEX_KEY = "doc:sessions:index"
+FILES_INDEX_KEY = "doc:files:index"  # persistent uploaded file metadata
 
 
 def _session_key(session_id: str) -> str:
@@ -168,6 +169,52 @@ class DocRedisStore:
             await self._redis.set(SESSION_INDEX_KEY, json.dumps(index), ex=SESSION_TTL)
         else:
             self._index_memory.append(entry)
+
+    # ── File Metadata CRUD ───────────────────────────────────────────────────
+
+    async def add_file(self, filename: str, size: int) -> dict:
+        """Record an ingested file in the persistent file index."""
+        now = datetime.utcnow().isoformat()
+        entry = {"filename": filename, "size": size, "uploaded_at": now}
+        if self._use_redis and self._redis:
+            raw = await self._redis.get(FILES_INDEX_KEY)
+            files = json.loads(raw) if raw else []
+            # Avoid duplicates: replace if same filename exists
+            files = [f for f in files if f["filename"] != filename]
+            files.append(entry)
+            await self._redis.set(FILES_INDEX_KEY, json.dumps(files, ensure_ascii=False))
+        else:
+            self._in_memory.setdefault("__files__", [])
+            self._in_memory["__files__"] = [f for f in self._in_memory["__files__"] if f["filename"] != filename]
+            self._in_memory["__files__"].append(entry)
+        return entry
+
+    async def list_files(self) -> List[dict]:
+        """Return all recorded ingested files, newest first."""
+        if self._use_redis and self._redis:
+            raw = await self._redis.get(FILES_INDEX_KEY)
+            files = json.loads(raw) if raw else []
+        else:
+            files = self._in_memory.get("__files__", [])
+        return list(reversed(files))
+
+    async def delete_file(self, filename: str) -> bool:
+        """Remove a file record from the file index."""
+        if self._use_redis and self._redis:
+            raw = await self._redis.get(FILES_INDEX_KEY)
+            if not raw:
+                return False
+            files = json.loads(raw)
+            new_files = [f for f in files if f["filename"] != filename]
+            existed = len(new_files) < len(files)
+            await self._redis.set(FILES_INDEX_KEY, json.dumps(new_files, ensure_ascii=False))
+            return existed
+        else:
+            files = self._in_memory.get("__files__", [])
+            new_files = [f for f in files if f["filename"] != filename]
+            existed = len(new_files) < len(files)
+            self._in_memory["__files__"] = new_files
+            return existed
 
 
 # Global singleton

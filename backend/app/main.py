@@ -950,7 +950,9 @@ async def document_chat(payload: dict, background_tasks: BackgroundTasks):
             raw = n8n_resp.text.strip()
             if not raw:
                 print("[Document Chat Warning] n8n returned empty body.", flush=True)
-                return {"response": "抱歉，知識庫查詢未回傳結果，請稍後再試。", "session_id": session_id}
+                fallback = "抱歉，知識庫查詢未回傳結果，請稍後再試。"
+                background_tasks.add_task(doc_store.append_messages, session_id, question, fallback)
+                return {"response": fallback, "session_id": session_id}
 
             result = n8n_resp.json()
 
@@ -966,6 +968,9 @@ async def document_chat(payload: dict, background_tasks: BackgroundTasks):
     except Exception as e:
         print(f"[Document Chat Error] {e}", flush=True)
         print(traceback.format_exc(), flush=True)
+        # Save message pair even on error so the session is not empty
+        err_msg = "⚠️ 知識庫服務暫時無法使用，請稍後再試。"
+        background_tasks.add_task(doc_store.append_messages, session_id, question, err_msg)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1024,10 +1029,31 @@ async def document_ingest(file: UploadFile = File(...)):
             result = n8n_resp.json()
 
         print(f"[Document Ingest] Done: {file.filename}", flush=True)
+        # Persist file metadata to Redis so the file list survives page refresh
+        try:
+            await doc_store.add_file(file.filename, len(content))
+        except Exception as fe:
+            print(f"[Document Ingest] Warning: failed to persist file metadata: {fe}", flush=True)
         return {"status": "ok", "filename": file.filename, **result}
 
     except Exception as e:
         print(f"[Document Ingest Error] {e}", flush=True)
         print(traceback.format_exc(), flush=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/document-files")
+async def list_document_files():
+    """Return the list of all ingested files recorded in Redis."""
+    files = await doc_store.list_files()
+    return {"files": files}
+
+
+@app.delete("/document-files/{filename:path}")
+async def delete_document_file(filename: str):
+    """Remove a file record from Redis. (Does not delete from ChromaDB.)"""
+    deleted = await doc_store.delete_file(filename)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="File record not found")
+    return {"message": f"{filename} removed from file index"}
 

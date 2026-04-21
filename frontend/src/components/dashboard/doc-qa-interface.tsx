@@ -18,7 +18,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     askDocumentQA, uploadDocument,
     listDocSessions, getDocSession, deleteDocSession,
-    DocSessionSummary, DocSessionMessage
+    listDocFiles, deleteDocFile,
+    DocSessionSummary, DocSessionMessage, DocFileRecord
 } from '@/lib/api/doc-qa';
 
 interface Message {
@@ -30,7 +31,8 @@ interface Message {
 
 type FileStatus = 'uploading' | 'done' | 'error';
 
-interface UploadedFile {
+// Local tracking for in-progress uploads (not yet confirmed by backend)
+interface UploadingFile {
     id: string;
     name: string;
     size: number;
@@ -55,8 +57,10 @@ export function DocQAInterface() {
     const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
     const [sessions, setSessions] = useState<DocSessionSummary[]>([]);
 
-    // Uploaded file records (client-side tracking only)
-    const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
+    // Persistent file records loaded from backend (survive page refresh)
+    const [persistedFiles, setPersistedFiles] = useState<DocFileRecord[]>([]);
+    // In-progress uploads tracked locally only
+    const [uploadingFiles, setUploadingFiles] = useState<UploadingFile[]>([]);
     const [isDragging, setIsDragging] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -80,9 +84,12 @@ export function DocQAInterface() {
         setTimeStrings(t);
     }, [messages]);
 
-    // ── Init: load session list and restore latest session ───────────────────
+    // ── Init: load session list, file list, and restore latest session ───────
     useEffect(() => {
         setMounted(true);
+        // Load persistent file list from backend
+        listDocFiles().then(setPersistedFiles).catch(() => {});
+        // Load session list and restore latest session
         listDocSessions()
             .then(async (list: DocSessionSummary[]) => {
                 setSessions(list);
@@ -161,22 +168,47 @@ export function DocQAInterface() {
         return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
     };
 
+    // ── File Helpers ─────────────────────────────────────────────────────────
+    const loadFiles = async () => {
+        try {
+            setPersistedFiles(await listDocFiles());
+        } catch (e) {
+            console.error('Failed to load doc files', e);
+        }
+    };
+
+    const handleDeleteFile = async (e: React.MouseEvent, filename: string) => {
+        e.stopPropagation();
+        if (!window.confirm(`確定要從知識庫清單中移除「${filename}」嗎？`)) return;
+        try {
+            await deleteDocFile(filename);
+            await loadFiles();
+            toast.success(`${filename} 已從清單中移除`);
+        } catch {
+            toast.error('移除失敗，請稍後再試。');
+        }
+    };
+
     // ── File Upload ──────────────────────────────────────────────────────────
     const processFiles = useCallback(async (files: File[]) => {
         const pdfs = files.filter(f => f.name.toLowerCase().endsWith('.pdf'));
         if (pdfs.length === 0) { toast.error('請上傳 PDF 格式的文件'); return; }
         for (const f of pdfs) {
             const id = `${f.name}-${Date.now()}`;
-            setUploadedFiles(prev => [...prev, { id, name: f.name, size: f.size, status: 'uploading' }]);
+            setUploadingFiles(prev => [...prev, { id, name: f.name, size: f.size, status: 'uploading' }]);
             try {
                 await uploadDocument(f);
-                setUploadedFiles(prev => prev.map(u => u.id === id ? { ...u, status: 'done' } : u));
+                // On success: remove from uploading list, reload persisted list from backend
+                setUploadingFiles(prev => prev.filter(u => u.id !== id));
+                await loadFiles();
                 toast.success(`${f.name} 已成功寫入知識庫`);
-            } catch (err: any) {
-                setUploadedFiles(prev => prev.map(u => u.id === id ? { ...u, status: 'error', errorMsg: err.message } : u));
+            } catch (err: unknown) {
+                const msg = err instanceof Error ? err.message : '未知錯誤';
+                setUploadingFiles(prev => prev.map(u => u.id === id ? { ...u, status: 'error', errorMsg: msg } : u));
                 toast.error(`${f.name} 上傳失敗`);
             }
         }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -189,7 +221,7 @@ export function DocQAInterface() {
     }, [processFiles]);
     const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); setIsDragging(true); };
     const handleDragLeave = () => setIsDragging(false);
-    const removeFile = (id: string) => setUploadedFiles(prev => prev.filter(f => f.id !== id));
+    const removeUploadingFile = (id: string) => setUploadingFiles(prev => prev.filter(f => f.id !== id));
     const formatSize = (bytes: number) => {
         if (bytes < 1024) return `${bytes} B`;
         if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -247,7 +279,6 @@ export function DocQAInterface() {
             const data = await askDocumentQA(finalText, currentSessionId ?? undefined);
             if (!currentSessionId) {
                 setCurrentSessionId(data.session_id);
-                loadSessions();
             }
             setMessages(prev => [...prev, {
                 id: `ai-${Date.now()}`, role: 'assistant', content: data.response, timestamp: new Date(),
@@ -257,7 +288,11 @@ export function DocQAInterface() {
                 id: `error-${Date.now()}`, role: 'assistant',
                 content: '⚠️ 抱歉，知識庫查詢服務連線異常，請稍後再試。', timestamp: new Date(),
             }]);
-        } finally { setIsLoading(false); }
+        } finally {
+            setIsLoading(false);
+            // Always refresh session list after any send attempt
+            loadSessions();
+        }
     };
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -323,7 +358,7 @@ export function DocQAInterface() {
                     <FileSearch className="size-3.5 text-emerald-600" />
                     <span className="text-xs font-semibold text-slate-600">知識庫文件</span>
                     <Badge variant="outline" className="ml-auto text-[10px] text-emerald-600 border-emerald-200 bg-emerald-50">
-                        {uploadedFiles.filter(f => f.status === 'done').length} 份
+                        {persistedFiles.length} 份
                     </Badge>
                 </div>
 
@@ -343,47 +378,63 @@ export function DocQAInterface() {
                 <input ref={fileInputRef} type="file" accept=".pdf" multiple className="hidden" onChange={handleFileChange} />
 
                 {/* File list */}
-                <div className="overflow-y-auto px-3 pb-2 space-y-1 max-h-40">
-                    {uploadedFiles.length === 0 ? (
+                <div className="overflow-y-auto px-3 pb-2 space-y-1 max-h-48">
+                    {/* In-progress uploads */}
+                    <AnimatePresence>
+                        {uploadingFiles.map(f => (
+                            <motion.div
+                                key={f.id}
+                                initial={{ opacity: 0, y: -4 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0, x: -16 }}
+                                className="flex items-center gap-1.5 bg-white rounded-lg px-2 py-1.5 border border-slate-100 shadow-sm group"
+                            >
+                                <div className="flex-shrink-0">
+                                    {f.status === 'uploading' && <Loader2 className="size-3.5 text-emerald-500 animate-spin" />}
+                                    {f.status === 'error' && <XCircle className="size-3.5 text-red-500" />}
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                    <p className="text-[11px] font-medium text-slate-700 truncate">{f.name}</p>
+                                    <p className="text-[10px] text-slate-400">{f.status === 'uploading' ? '上傳中...' : '上傳失敗'}</p>
+                                </div>
+                                {f.status === 'error' && (
+                                    <button onClick={() => removeUploadingFile(f.id)} className="text-slate-400 hover:text-red-500 flex-shrink-0 transition-opacity">
+                                        <X className="size-3" />
+                                    </button>
+                                )}
+                            </motion.div>
+                        ))}
+                    </AnimatePresence>
+                    {/* Persisted files from backend */}
+                    {persistedFiles.length === 0 && uploadingFiles.length === 0 ? (
                         <p className="text-[10px] text-slate-400 text-center py-1">尚未上傳任何文件</p>
                     ) : (
                         <AnimatePresence>
-                            {uploadedFiles.map(f => (
+                            {persistedFiles.map(f => (
                                 <motion.div
-                                    key={f.id}
+                                    key={f.filename}
                                     initial={{ opacity: 0, y: -4 }}
                                     animate={{ opacity: 1, y: 0 }}
                                     exit={{ opacity: 0, x: -16 }}
                                     className="flex items-center gap-1.5 bg-white rounded-lg px-2 py-1.5 border border-slate-100 shadow-sm group"
                                 >
-                                    <div className="flex-shrink-0">
-                                        {f.status === 'uploading' && <Loader2 className="size-3.5 text-emerald-500 animate-spin" />}
-                                        {f.status === 'done' && <CheckCircle2 className="size-3.5 text-emerald-500" />}
-                                        {f.status === 'error' && <XCircle className="size-3.5 text-red-500" />}
-                                    </div>
+                                    <CheckCircle2 className="size-3.5 text-emerald-500 flex-shrink-0" />
                                     <div className="flex-1 min-w-0">
-                                        <p className="text-[11px] font-medium text-slate-700 truncate">{f.name}</p>
+                                        <p className="text-[11px] font-medium text-slate-700 truncate">{f.filename}</p>
                                         <p className="text-[10px] text-slate-400">{formatSize(f.size)}</p>
                                     </div>
-                                    <button onClick={() => removeFile(f.id)} className="opacity-0 group-hover:opacity-60 hover:!opacity-100 text-slate-400 hover:text-red-500 flex-shrink-0 transition-opacity">
-                                        <X className="size-3" />
+                                    <button
+                                        onClick={(e) => handleDeleteFile(e, f.filename)}
+                                        className="opacity-0 group-hover:opacity-60 hover:!opacity-100 text-slate-400 hover:text-red-500 flex-shrink-0 transition-opacity"
+                                        title="從清單移除"
+                                    >
+                                        <Trash2 className="size-3" />
                                     </button>
                                 </motion.div>
                             ))}
                         </AnimatePresence>
                     )}
                 </div>
-
-                {/* Clear all */}
-                {uploadedFiles.length > 0 && (
-                    <div className="px-3 pb-3">
-                        <Button variant="ghost" size="sm" onClick={() => setUploadedFiles([])}
-                            className="w-full text-xs text-slate-400 hover:text-red-500 gap-1.5 h-7"
-                        >
-                            <Trash2 className="size-3" /> 清除清單
-                        </Button>
-                    </div>
-                )}
             </div>
 
             {/* ── Right Panel: Chat Area ────────────────────────────────────── */}
