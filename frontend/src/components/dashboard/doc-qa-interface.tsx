@@ -342,7 +342,8 @@ export function DocQAInterface() {
                             </div>
                             <button
                                 onClick={(e) => removeSession(e, s.session_id)}
-                                className="opacity-0 group-hover:opacity-60 hover:!opacity-100 text-slate-400 hover:text-red-500 transition-opacity flex-shrink-0 mt-0.5"
+                                className="group-hover:opacity-100 text-slate-300 hover:text-red-500 transition-all flex-shrink-0 mt-0.5 px-1"
+                                title="刪除對話"
                             >
                                 <Trash2 className="size-3.5" />
                             </button>
