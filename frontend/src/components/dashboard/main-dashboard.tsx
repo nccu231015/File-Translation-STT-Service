@@ -144,7 +144,10 @@ export function MainDashboard({ user, onLogout }: MainDashboardProps) {
             {/* Main Content Area */}
             <main className="container mx-auto p-4 md:p-6 flex-1 max-w-7xl animate-in fade-in duration-300">
                 {activeView === 'home' && <DashboardHome user={user} onNavigate={setActiveView} />}
-                {activeView === 'km' && <KMHub />}
+                {/* KMHub stays mounted at all times to preserve in-flight requests and message state */}
+                <div className={activeView === 'km' ? '' : 'hidden'}>
+                    <KMHub />
+                </div>
                 {activeView === 'report' && <ReportInterface />}
                 {activeView === 'translation' && <DocumentTranslation />}
                 {activeView === 'voice' && <VoiceInterface />}
