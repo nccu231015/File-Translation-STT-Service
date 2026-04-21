@@ -784,8 +784,8 @@ async def chat_text(payload: dict):
 # The Router decision is made in n8n; actual AI processing stays in the backend.
 
 N8N_FACTORY_WEBHOOK = "http://172.16.2.68:5678/webhook/factory-chat"
-N8N_DOC_WEBHOOK    = os.getenv("N8N_DOC_WEBHOOK",    "http://172.16.2.68/webhook/doc-chat")
-N8N_DOC_INGEST     = os.getenv("N8N_DOC_INGEST",     "http://172.16.2.68/webhook/doc-ingest")
+N8N_DOC_WEBHOOK    = os.getenv("N8N_DOC_WEBHOOK",    "http://172.16.2.68:5678/webhook/doc-chat")
+N8N_DOC_INGEST     = os.getenv("N8N_DOC_INGEST",     "http://172.16.2.68:5678/webhook/doc-ingest")
 
 class FactoryChatRequest(BaseModel):
     question: str
