@@ -267,21 +267,21 @@ class FactorySqlTools:
             ),
             deltas AS (
                 -- Compute duration per state interval using LAG within (TOPIC, date)
-                -- Source: CIM_MQTTCOLLECT_AM_PM; DATETIMES format = YYYYMMDDTHHMMSS.xxxxx
+                -- Source: CIM_MQTTCOLLECT (status A-codes); use DATEHOUR for date filtering per engineer example
                 SELECT
                     "TOPIC" AS "SBMC",
                     LAG("CODE") OVER (PARTITION BY "TOPIC", SUBSTRING("DATETIMES", 1, 8) ORDER BY "DATETIMES") AS prev_code,
                     (SUBSTRING("DATETIMES", 10, 2)::INT * 3600
                      + SUBSTRING("DATETIMES", 12, 2)::INT * 60
-                     + SUBSTRING("DATETIMES", 14, 2)::INT)
+                     + CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT)
                     - LAG(
                         SUBSTRING("DATETIMES", 10, 2)::INT * 3600
                         + SUBSTRING("DATETIMES", 12, 2)::INT * 60
-                        + SUBSTRING("DATETIMES", 14, 2)::INT
+                        + CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT
                     ) OVER (PARTITION BY "TOPIC", SUBSTRING("DATETIMES", 1, 8) ORDER BY "DATETIMES") AS duration_sec
-                FROM "public"."CIM_MQTTCOLLECT_AM_PM"
-                WHERE SUBSTRING("DATETIMES", 1, 8) = '{target_ymd}'
-                  AND LENGTH("DATETIMES") >= 14
+                FROM "public"."CIM_MQTTCOLLECT"
+                WHERE "DATEHOUR" LIKE '{target_ymd}%'
+                  AND "CODE" IN ('A001','A002','A003','A004','A006','A007','A008','A009','A010','A011','A012','A013','A014')
             ),
             times AS (
                 -- Classify each interval into RUN/DOWN/IDEL/SHUTDOWN using confirmed code mapping
@@ -456,21 +456,21 @@ class FactorySqlTools:
             ),
             deltas AS (
                 -- LAG-based duration within each (TOPIC, date) to avoid cross-day bleeding
-                -- Source: CIM_MQTTCOLLECT_AM_PM; DATETIMES format = YYYYMMDDTHHMMSS.xxxxx
+                -- Source: CIM_MQTTCOLLECT (status A-codes); use DATEHOUR for date filtering per engineer example
                 SELECT
                     "TOPIC" AS "SBMC",
                     LAG("CODE") OVER (PARTITION BY "TOPIC", SUBSTRING("DATETIMES", 1, 8) ORDER BY "DATETIMES") AS prev_code,
                     (SUBSTRING("DATETIMES", 10, 2)::INT * 3600
                      + SUBSTRING("DATETIMES", 12, 2)::INT * 60
-                     + SUBSTRING("DATETIMES", 14, 2)::INT)
+                     + CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT)
                     - LAG(
                         SUBSTRING("DATETIMES", 10, 2)::INT * 3600
                         + SUBSTRING("DATETIMES", 12, 2)::INT * 60
-                        + SUBSTRING("DATETIMES", 14, 2)::INT
+                        + CAST(SUBSTRING("DATETIMES", 14) AS NUMERIC)::INT
                     ) OVER (PARTITION BY "TOPIC", SUBSTRING("DATETIMES", 1, 8) ORDER BY "DATETIMES") AS duration_sec
-                FROM "public"."CIM_MQTTCOLLECT_AM_PM"
-                WHERE SUBSTRING("DATETIMES", 1, 8) = '{target_ymd}'
-                  AND LENGTH("DATETIMES") >= 14
+                FROM "public"."CIM_MQTTCOLLECT"
+                WHERE "DATEHOUR" LIKE '{target_ymd}%'
+                  AND "CODE" IN ('A001','A002','A003','A004','A006','A007','A008','A009','A010','A011','A012','A013','A014')
             ),
             times AS (
                 -- Aggregate minutes per state category using confirmed code mapping
@@ -531,9 +531,8 @@ class FactorySqlTools:
                            PARTITION BY "TOPIC"
                            ORDER BY "DATETIMES" DESC
                        ) AS rn
-                FROM "public"."CIM_MQTTCOLLECT_AM_PM"
-                WHERE SUBSTRING("DATETIMES", 1, 8) >= '{seven_days_ago_ymd}'
-                  AND LENGTH("DATETIMES") >= 14
+                FROM "public"."CIM_MQTTCOLLECT"
+                WHERE "DATEHOUR" >= '{seven_days_ago_ymd}'
                   AND "CODE" IN ('A001','A002','A003','A004','A006','A007','A008','A009','A010','A011','A012','A013','A014')
             ) sub
             LEFT JOIN "public"."EQUIPMENT_INFO_DICT" e ON e."TOPIC" = sub."TOPIC"
