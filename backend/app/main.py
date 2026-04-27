@@ -1003,8 +1003,15 @@ async def delete_document_session(session_id: str):
 # Accepts a PDF file upload and forwards it to the n8n doc-ingest webhook as
 # multipart/form-data so n8n can extract text, chunk, embed and store in ChromaDB.
 @app.post("/document-ingest")
-async def document_ingest(file: UploadFile = File(...)):
-    """Forward an uploaded PDF to the n8n PDF ingestion webhook."""
+async def document_ingest(
+    file: UploadFile = File(...),
+    session_id: str | None = Form(default=None),
+):
+    """Forward an uploaded PDF to the n8n PDF ingestion webhook.
+
+    Optional `session_id` ties the file to a chat session for the UI file list.
+    If omitted, a new empty session is created so uploads are always per-session.
+    """
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file provided")
     # Only accept PDF and common document types
@@ -1013,7 +1020,15 @@ async def document_ingest(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Only PDF files are supported")
 
     try:
-        print(f"[Document Ingest] Received: {file.filename} ({file.content_type})", flush=True)
+        sid = (session_id or "").strip() or None
+        if not sid:
+            new_sess = await doc_store.create_empty_session("新對話")
+            sid = new_sess["session_id"]
+        else:
+            if not await doc_store.get_session(sid):
+                raise HTTPException(status_code=404, detail="Session not found")
+
+        print(f"[Document Ingest] Received: {file.filename} ({file.content_type}) session={sid}", flush=True)
         content = await file.read()
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(connect=10.0, read=120.0, write=60.0, pool=10.0)
@@ -1025,16 +1040,24 @@ async def document_ingest(file: UploadFile = File(...)):
             n8n_resp.raise_for_status()
             raw = n8n_resp.text.strip()
             if not raw:
-                return {"status": "ok", "filename": file.filename, "message": "Ingested (no detail returned)"}
+                try:
+                    await doc_store.add_file(sid, file.filename, len(content))
+                except Exception as fe:
+                    print(f"[Document Ingest] Warning: failed to persist file metadata: {fe}", flush=True)
+                return {
+                    "status": "ok",
+                    "filename": file.filename,
+                    "message": "Ingested (no detail returned)",
+                    "session_id": sid,
+                }
             result = n8n_resp.json()
 
         print(f"[Document Ingest] Done: {file.filename}", flush=True)
-        # Persist file metadata to Redis so the file list survives page refresh
         try:
-            await doc_store.add_file(file.filename, len(content))
+            await doc_store.add_file(sid, file.filename, len(content))
         except Exception as fe:
             print(f"[Document Ingest] Warning: failed to persist file metadata: {fe}", flush=True)
-        return {"status": "ok", "filename": file.filename, **result}
+        return {"status": "ok", "filename": file.filename, "session_id": sid, **result}
 
     except Exception as e:
         print(f"[Document Ingest Error] {e}", flush=True)
@@ -1043,16 +1066,20 @@ async def document_ingest(file: UploadFile = File(...)):
 
 
 @app.get("/document-files")
-async def list_document_files():
-    """Return the list of all ingested files recorded in Redis."""
-    files = await doc_store.list_files()
+async def list_document_files(session_id: str):
+    """Return ingested file records for one chat session (UI list; same Chroma collection allowed)."""
+    if not (session_id or "").strip():
+        raise HTTPException(status_code=400, detail="session_id is required")
+    files = await doc_store.list_files(session_id.strip())
     return {"files": files}
 
 
 @app.delete("/document-files/{filename:path}")
-async def delete_document_file(filename: str):
-    """Remove a file record from Redis. (Does not delete from ChromaDB.)"""
-    deleted = await doc_store.delete_file(filename)
+async def delete_document_file(filename: str, session_id: str):
+    """Remove a file record for a session from Redis. (Does not delete from ChromaDB.)"""
+    if not (session_id or "").strip():
+        raise HTTPException(status_code=400, detail="session_id is required")
+    deleted = await doc_store.delete_file(session_id.strip(), filename)
     if not deleted:
         raise HTTPException(status_code=404, detail="File record not found")
     return {"message": f"{filename} removed from file index"}

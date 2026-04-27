@@ -4,6 +4,8 @@ doc_redis.py
 Manages document KM chat session storage using Redis.
 - Each session has a unique ID (UUID), a title (from the first user message),
   a list of messages, and a creation timestamp.
+- Ingested PDF file metadata is stored per session (key doc:sessionfiles:{session_id})
+  for the UI; vector storage may still use a single Chroma collection.
 - Session TTL: 7 days (604800 seconds) — longer than factory sessions.
 - Reuses the same Redis instance; key prefix: "doc:session:"
 """
@@ -23,11 +25,16 @@ except ImportError:
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 SESSION_TTL = 604800  # 7 days
 SESSION_INDEX_KEY = "doc:sessions:index"
-FILES_INDEX_KEY = "doc:files:index"  # persistent uploaded file metadata
+# Per-session uploaded file metadata (UI list); legacy global key: doc:files:index (no longer read)
+FILE_PREFIX = "doc:sessionfiles:"
 
 
 def _session_key(session_id: str) -> str:
     return f"doc:session:{session_id}"
+
+
+def _session_files_key(session_id: str) -> str:
+    return f"{FILE_PREFIX}{session_id}"
 
 
 class DocRedisStore:
@@ -40,6 +47,8 @@ class DocRedisStore:
         self._redis: Optional[aioredis.Redis] = None
         self._in_memory: dict = {}
         self._index_memory: list = []
+        # session_id -> list of file entry dicts (in-memory fallback for per-session file index)
+        self._files_by_session: dict = {}
         self._use_redis = REDIS_AVAILABLE
 
     async def connect(self):
@@ -56,6 +65,21 @@ class DocRedisStore:
             self._redis = None
 
     # ── Session CRUD ─────────────────────────────────────────────────────────
+
+    async def create_empty_session(self, title: str = "新對話") -> dict:
+        """Create a session with no messages (e.g. first action is file upload)."""
+        session_id = str(uuid.uuid4())
+        now = datetime.utcnow().isoformat()
+        session = {
+            "session_id": session_id,
+            "title": title,
+            "messages": [],
+            "created_at": now,
+            "updated_at": now,
+        }
+        await self._save_session(session)
+        await self._add_to_index(session_id, title, now)
+        return session
 
     async def create_session(self, first_message: str) -> dict:
         """Create a new session with the first user message as the title."""
@@ -133,8 +157,9 @@ class DocRedisStore:
             return []
 
     async def delete_session(self, session_id: str) -> bool:
-        """Delete a session by ID."""
+        """Delete a session by ID and its per-session file index."""
         if self._use_redis and self._redis:
+            await self._redis.delete(_session_files_key(session_id))
             deleted = await self._redis.delete(_session_key(session_id))
             raw = await self._redis.get(SESSION_INDEX_KEY)
             if raw:
@@ -145,6 +170,7 @@ class DocRedisStore:
             existed = session_id in self._in_memory
             self._in_memory.pop(session_id, None)
             self._index_memory = [e for e in self._index_memory if e["session_id"] != session_id]
+            self._files_by_session.pop(session_id, None)
             return existed
 
     # ── Internal Helpers ─────────────────────────────────────────────────────
@@ -170,50 +196,59 @@ class DocRedisStore:
         else:
             self._index_memory.append(entry)
 
-    # ── File Metadata CRUD ───────────────────────────────────────────────────
+    # ── Per-session file metadata (UI only; Chroma may still use one collection) ──
 
-    async def add_file(self, filename: str, size: int) -> dict:
-        """Record an ingested file in the persistent file index."""
+    async def add_file(self, session_id: str, filename: str, size: int) -> dict:
+        """Record an ingested file under a chat session's file list."""
         now = datetime.utcnow().isoformat()
         entry = {"filename": filename, "size": size, "uploaded_at": now}
         if self._use_redis and self._redis:
-            raw = await self._redis.get(FILES_INDEX_KEY)
-            files = json.loads(raw) if raw else []
-            # Avoid duplicates: replace if same filename exists
-            files = [f for f in files if f["filename"] != filename]
+            key = _session_files_key(session_id)
+            raw = await self._redis.get(key)
+            files: list = json.loads(raw) if raw else []
+            files = [f for f in files if f.get("filename") != filename]
             files.append(entry)
-            await self._redis.set(FILES_INDEX_KEY, json.dumps(files, ensure_ascii=False))
+            await self._redis.set(
+                key, json.dumps(files, ensure_ascii=False), ex=SESSION_TTL
+            )
         else:
-            self._in_memory.setdefault("__files__", [])
-            self._in_memory["__files__"] = [f for f in self._in_memory["__files__"] if f["filename"] != filename]
-            self._in_memory["__files__"].append(entry)
+            lst = self._files_by_session.setdefault(session_id, [])
+            self._files_by_session[session_id] = [f for f in lst if f.get("filename") != filename]
+            self._files_by_session[session_id].append(entry)
         return entry
 
-    async def list_files(self) -> List[dict]:
-        """Return all recorded ingested files, newest first."""
+    async def list_files(self, session_id: str) -> List[dict]:
+        """Return files uploaded for a session, newest first in the list UI."""
+        if not session_id:
+            return []
         if self._use_redis and self._redis:
-            raw = await self._redis.get(FILES_INDEX_KEY)
+            raw = await self._redis.get(_session_files_key(session_id))
             files = json.loads(raw) if raw else []
         else:
-            files = self._in_memory.get("__files__", [])
+            files = self._files_by_session.get(session_id, [])
         return list(reversed(files))
 
-    async def delete_file(self, filename: str) -> bool:
-        """Remove a file record from the file index."""
+    async def delete_file(self, session_id: str, filename: str) -> bool:
+        """Remove a file record from a session's list (does not remove Chroma entries)."""
+        if not session_id:
+            return False
         if self._use_redis and self._redis:
-            raw = await self._redis.get(FILES_INDEX_KEY)
+            key = _session_files_key(session_id)
+            raw = await self._redis.get(key)
             if not raw:
                 return False
             files = json.loads(raw)
-            new_files = [f for f in files if f["filename"] != filename]
+            new_files = [f for f in files if f.get("filename") != filename]
             existed = len(new_files) < len(files)
-            await self._redis.set(FILES_INDEX_KEY, json.dumps(new_files, ensure_ascii=False))
+            await self._redis.set(
+                key, json.dumps(new_files, ensure_ascii=False), ex=SESSION_TTL
+            )
             return existed
         else:
-            files = self._in_memory.get("__files__", [])
-            new_files = [f for f in files if f["filename"] != filename]
+            files = self._files_by_session.get(session_id, [])
+            new_files = [f for f in files if f.get("filename") != filename]
             existed = len(new_files) < len(files)
-            self._in_memory["__files__"] = new_files
+            self._files_by_session[session_id] = new_files
             return existed
 
 

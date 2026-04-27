@@ -9,7 +9,9 @@
  *   GET    /document-sessions              →  { sessions: SessionSummary[] }
  *   GET    /document-sessions/:id          →  SessionDetail
  *   DELETE /document-sessions/:id          →  { message: string }
- *   POST   /document-ingest (multipart)    →  { status, filename }
+ *   POST   /document-ingest (multipart + optional session_id) →  { status, filename, session_id }
+ *   GET    /document-files?session_id=     →  { files }
+ *   DELETE /document-files/:name?session_id=
  */
 
 const getBackendUrl = () => {
@@ -28,6 +30,8 @@ export interface DocIngestResponse {
     status: string;
     filename: string;
     message?: string;
+    /** Present when backend created a session for this upload, or echoed for an existing session */
+    session_id?: string;
 }
 
 export interface DocSessionSummary {
@@ -89,10 +93,14 @@ export async function deleteDocSession(session_id: string): Promise<boolean> {
 /**
  * Upload a PDF file to be ingested into the ChromaDB knowledge base via n8n.
  * Uses multipart/form-data – do NOT set Content-Type manually (browser handles boundary).
+ * When `session_id` is omitted, the backend creates a new chat session for this upload.
  */
-export async function uploadDocument(file: File): Promise<DocIngestResponse> {
+export async function uploadDocument(file: File, session_id?: string | null): Promise<DocIngestResponse> {
     const formData = new FormData();
     formData.append('file', file);
+    if (session_id) {
+        formData.append('session_id', session_id);
+    }
     const resp = await fetch(`${getBackendUrl()}/document-ingest`, {
         method: 'POST',
         body: formData,
@@ -107,19 +115,23 @@ export interface DocFileRecord {
     uploaded_at: string;
 }
 
-/** List all ingested file records stored in Redis. */
-export async function listDocFiles(): Promise<DocFileRecord[]> {
-    const res = await fetch(`${getBackendUrl()}/document-files`);
+/** List ingested file records for one document-KM chat session. */
+export async function listDocFiles(session_id: string | null): Promise<DocFileRecord[]> {
+    if (!session_id) return [];
+    const q = new URLSearchParams({ session_id });
+    const res = await fetch(`${getBackendUrl()}/document-files?${q.toString()}`);
     if (!res.ok) return [];
     const data = await res.json();
     return data.files ?? [];
 }
 
-/** Remove a file record from Redis (does not delete from ChromaDB). */
-export async function deleteDocFile(filename: string): Promise<boolean> {
-    const res = await fetch(`${getBackendUrl()}/document-files/${encodeURIComponent(filename)}`, {
-        method: 'DELETE',
-    });
+/** Remove a file record for a session from Redis (does not delete from ChromaDB). */
+export async function deleteDocFile(filename: string, session_id: string): Promise<boolean> {
+    const q = new URLSearchParams({ session_id });
+    const res = await fetch(
+        `${getBackendUrl()}/document-files/${encodeURIComponent(filename)}?${q.toString()}`,
+        { method: 'DELETE' },
+    );
     return res.ok;
 }
 

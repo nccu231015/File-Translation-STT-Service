@@ -84,18 +84,17 @@ export function DocQAInterface() {
         setTimeStrings(t);
     }, [messages]);
 
-    // ── Init: load session list, file list, and restore latest session ───────
+    // ── Init: load session list and restore latest session (files load per session_id below) ──
     useEffect(() => {
         setMounted(true);
-        // Load persistent file list from backend
-        listDocFiles().then(setPersistedFiles).catch(() => {});
-        // Load session list and restore latest session
         listDocSessions()
             .then(async (list: DocSessionSummary[]) => {
                 setSessions(list);
                 if (list.length > 0) {
+                    const sid = list[0].session_id;
+                    setCurrentSessionId(sid);
                     try {
-                        const detail = await getDocSession(list[0].session_id);
+                        const detail = await getDocSession(sid);
                         if (detail && detail.messages.length > 0) {
                             const restored: Message[] = detail.messages.map((m: DocSessionMessage, i: number) => ({
                                 id: `${m.role}-${i}-restored`,
@@ -103,7 +102,6 @@ export function DocQAInterface() {
                                 content: m.content,
                                 timestamp: new Date(m.ts),
                             }));
-                            setCurrentSessionId(list[0].session_id);
                             setMessages(restored);
                         }
                     } catch (e) {
@@ -113,6 +111,16 @@ export function DocQAInterface() {
             })
             .catch((e: unknown) => console.error('Failed to load doc sessions', e));
     }, []);
+
+    // Reload per-session file list when the active chat session changes
+    useEffect(() => {
+        if (!mounted) return;
+        if (!currentSessionId) {
+            setPersistedFiles([]);
+            return;
+        }
+        listDocFiles(currentSessionId).then(setPersistedFiles).catch(() => setPersistedFiles([]));
+    }, [mounted, currentSessionId]);
 
     useEffect(() => {
         if (scrollRef.current) {
@@ -131,6 +139,7 @@ export function DocQAInterface() {
 
     const startNewChat = () => {
         setCurrentSessionId(null);
+        setPersistedFiles([]);
         setMessages([WELCOME_MSG]);
         setInput('');
         setTimeout(() => inputRef.current?.focus(), 10);
@@ -146,7 +155,7 @@ export function DocQAInterface() {
             timestamp: new Date(m.ts),
         }));
         setCurrentSessionId(session_id);
-        setMessages(restored);
+        setMessages(restored.length > 0 ? restored : [WELCOME_MSG]);
         setInput('');
     };
 
@@ -170,8 +179,12 @@ export function DocQAInterface() {
 
     // ── File Helpers ─────────────────────────────────────────────────────────
     const loadFiles = async () => {
+        if (!currentSessionId) {
+            setPersistedFiles([]);
+            return;
+        }
         try {
-            setPersistedFiles(await listDocFiles());
+            setPersistedFiles(await listDocFiles(currentSessionId));
         } catch (e) {
             console.error('Failed to load doc files', e);
         }
@@ -179,9 +192,10 @@ export function DocQAInterface() {
 
     const handleDeleteFile = async (e: React.MouseEvent, filename: string) => {
         e.stopPropagation();
-        if (!window.confirm(`確定要從知識庫清單中移除「${filename}」嗎？`)) return;
+        if (!currentSessionId) return;
+        if (!window.confirm(`確定要從本對話的知識庫清單中移除「${filename}」嗎？`)) return;
         try {
-            await deleteDocFile(filename);
+            await deleteDocFile(filename, currentSessionId);
             await loadFiles();
             toast.success(`${filename} 已從清單中移除`);
         } catch {
@@ -197,10 +211,12 @@ export function DocQAInterface() {
             const id = `${f.name}-${Date.now()}`;
             setUploadingFiles(prev => [...prev, { id, name: f.name, size: f.size, status: 'uploading' }]);
             try {
-                await uploadDocument(f);
-                // On success: remove from uploading list, reload persisted list from backend
+                const data = await uploadDocument(f, currentSessionId);
                 setUploadingFiles(prev => prev.filter(u => u.id !== id));
-                await loadFiles();
+                if (data.session_id) {
+                    setCurrentSessionId(data.session_id);
+                }
+                await loadSessions();
                 toast.success(`${f.name} 已成功寫入知識庫`);
             } catch (err: unknown) {
                 const msg = err instanceof Error ? err.message : '未知錯誤';
@@ -209,7 +225,7 @@ export function DocQAInterface() {
             }
         }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+    }, [currentSessionId]);
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files) processFiles(Array.from(e.target.files));
@@ -354,10 +370,10 @@ export function DocQAInterface() {
                 {/* Divider */}
                 <div className="mx-3 border-t border-slate-200 my-2" />
 
-                {/* Knowledge Base PDF Manager */}
+                {/* Per-session knowledge base file list (same Chroma collection; UI scoped to this chat) */}
                 <div className="px-4 pb-1 flex items-center gap-2">
                     <FileSearch className="size-3.5 text-emerald-600" />
-                    <span className="text-xs font-semibold text-slate-600">知識庫文件</span>
+                    <span className="text-xs font-semibold text-slate-600">本對話上傳</span>
                     <Badge variant="outline" className="ml-auto text-[10px] text-emerald-600 border-emerald-200 bg-emerald-50">
                         {persistedFiles.length} 份
                     </Badge>
