@@ -405,7 +405,7 @@ class PDFService:
         if not os.path.exists(input_pdf_path):
             raise FileNotFoundError(f"File not found: {input_pdf_path}")
 
-        print(f"[PDF] processing: {input_pdf_path} (Debug: {debug_mode})")
+        print(f"[PDF] processing: {input_pdf_path} (Debug: {debug_mode})", flush=True)
         
         target_lang = force_target_lang or "zh-TW"
         
