@@ -27,6 +27,7 @@ from typing import Optional
 import uuid
 import traceback
 import asyncio
+import time
 from fastapi.concurrency import run_in_threadpool
 from pdf2docx import Converter
 from app.services.factory.sql_tools import FactorySqlTools
@@ -222,10 +223,21 @@ async def stt_process_for_n8n(
             shutil.copyfileobj(file.file, tmp)
             temp_file_path = tmp.name
         print(f"[n8n STT] Received: {file.filename} | mode={mode} | temp={temp_file_path}", flush=True)
+        try:
+            _nbytes = os.path.getsize(temp_file_path)
+        except OSError:
+            _nbytes = -1
+        print(f"[n8n STT-TRACE] file_saved bytes_on_disk={_nbytes}", flush=True)
 
         # Step 2: Whisper Transcription (using threadpool for concurrency)
         # Inherits existing stt_service with VAD filter and GPU acceleration
+        _t_whisper = time.monotonic()
+        print("[n8n STT-TRACE] run_in_threadpool(transcribe) START (if this stays here, worker never returned)", flush=True)
         stt_result = await run_in_threadpool(stt_service.transcribe, temp_file_path)
+        print(
+            f"[n8n STT-TRACE] run_in_threadpool(transcribe) END elapsed_ms={(time.monotonic() - _t_whisper) * 1000:.0f}",
+            flush=True,
+        )
         transcript_text = stt_result.get("text", "")
         print(f"[n8n STT] Transcription done: {len(transcript_text)} chars", flush=True)
 
@@ -251,14 +263,26 @@ async def stt_process_for_n8n(
         llm_options = {"temperature": temperature, "num_predict": num_predict}
         model_override = model.strip() or None
         print(f"[n8n STT] Running LLM analysis | model={model_override or 'default'} options={llm_options}", flush=True)
+        _t_llm = time.monotonic()
+        print("[n8n STT-TRACE] analyze_meeting_transcript START", flush=True)
         analysis = await run_in_threadpool(
             llm_service.analyze_meeting_transcript, transcript_text,
             model_override, temperature, num_predict
         )
+        print(
+            f"[n8n STT-TRACE] analyze_meeting_transcript END elapsed_ms={(time.monotonic() - _t_llm) * 1000:.0f}",
+            flush=True,
+        )
 
         # Step 5: Translate analysis to English (for bilingual minutes)
         try:
+            _t_tr = time.monotonic()
+            print("[n8n STT-TRACE] translate_analysis START", flush=True)
             en_analysis = await run_in_threadpool(llm_service.translate_analysis, analysis, model_override)
+            print(
+                f"[n8n STT-TRACE] translate_analysis END elapsed_ms={(time.monotonic() - _t_tr) * 1000:.0f}",
+                flush=True,
+            )
         except Exception as te:
             print(f"[n8n STT] translate_analysis failed: {te}")
             en_analysis = {}
@@ -299,8 +323,14 @@ async def stt_process_for_n8n(
         is_chinese = detected_lang.lower().startswith("zh")
         try:
             if segments:
+                _t_seg = time.monotonic()
+                print(f"[n8n STT-TRACE] translate_segments_async START count={len(segments)}", flush=True)
                 translated_segments = await llm_service.translate_segments_async(
                     segments, detected_lang, model_override
+                )
+                print(
+                    f"[n8n STT-TRACE] translate_segments_async END elapsed_ms={(time.monotonic() - _t_seg) * 1000:.0f}",
+                    flush=True,
                 )
                 transcript_svc = TranscriptDocxService()
                 transcript_bytes = await run_in_threadpool(
@@ -389,8 +419,21 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_input:
             shutil.copyfileobj(file.file, temp_input)
             temp_input_path = temp_input.name
-            
+        
+        try:
+            _psz = os.path.getsize(temp_input_path)
+        except OSError:
+            _psz = -1
+        print(
+            f"[PDF-TRACE] translate_pdf temp_saved bytes={_psz} debug={debug_mode} complex_table={is_complex_table_bool}",
+            flush=True,
+        )
+        _t_pdf = time.monotonic()
         result_list = await pdf_service.process_pdf(temp_input_path, force_target_lang=target_lang, debug_mode=debug_mode, is_complex_table=is_complex_table_bool)
+        print(
+            f"[PDF-TRACE] process_pdf DONE elapsed_ms={(time.monotonic() - _t_pdf) * 1000:.0f}",
+            flush=True,
+        )
         output_pdf_path = result_list[0]["file_path"]
         
         with open(output_pdf_path, 'rb') as f:

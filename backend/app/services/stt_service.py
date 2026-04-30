@@ -49,29 +49,56 @@ class STTService:
         Transcribes the given audio file using faster-whisper.
         """
         start_time = time.time()
+        t0 = time.monotonic()
 
+        # Diagnostic breadcrumbs (helps locate hangs: model load vs lock vs transcribe vs segment iteration)
+        def _elapsed_ms() -> float:
+            return (time.monotonic() - t0) * 1000.0
+
+        def _diag(msg: str) -> None:
+            if os.getenv("STT_DIAGNOSTIC_LOG", "true").lower() in ("0", "false", "no", "off"):
+                return
+            print(f"[STT-TRACE] +{_elapsed_ms():.0f}ms {msg}", flush=True)
+
+        try:
+            sz = os.path.getsize(audio_path) if os.path.exists(audio_path) else -1
+        except OSError:
+            sz = -1
+        _diag(f"transcribe_start path={audio_path} size_bytes={sz}")
+
+        _diag("_ensure_model_loaded: enter (may block on lock if another thread loads model)")
         self._ensure_model_loaded()
+        _diag("_ensure_model_loaded: done")
 
         if not self.model:
             raise RuntimeError("STT Model not initialized")
 
-        # beam_size=1 to save memory, default is 5
-        # vad_filter=True to ignore silent parts of the audio, speeding up processing
+        force_cpu = os.getenv("FORCE_CPU", "false").lower() == "true"
+        _diag(f"model_ready force_cpu={force_cpu}")
+
         print(f"Starting transcription for {audio_path}...", flush=True)
 
         segment_list = []
         text_list = []
+        count = 0
 
-        # Protect the ENTIRE inference and iteration process within the lock
+        _diag("acquiring Whisper inference lock (another request may hold this)")
         with self.lock:
+            _diag("inference lock acquired; calling faster_whisper.transcribe (VAD runs here)")
             segments, info = self.model.transcribe(audio_path, beam_size=1, vad_filter=True)
+            _diag(
+                "transcribe returned iterator; iterating segments "
+                "(first forward pass often starts on first iteration)"
+            )
             print(f"Detected language '{info.language}' with probability {info.language_probability}", flush=True)
 
-            count = 0
             for segment in segments:
                 count += 1
+                if count == 1:
+                    _diag(f"first_segment received end={segment.end:.2f}s")
                 if count % 10 == 0:
                     print(f"Processed {count} segments...", flush=True)
+                    _diag(f"segment_progress count={count}")
                 text_list.append(segment.text)
                 segment_list.append({
                     "start": segment.start,
@@ -79,6 +106,7 @@ class STTService:
                     "text": segment.text
                 })
 
+        _diag(f"segment_loop_done total_segments={count}")
         full_text = "".join(text_list).strip()
         print(f"Transcription complete. Total segments: {count}", flush=True)
 
