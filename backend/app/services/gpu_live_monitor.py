@@ -2,6 +2,15 @@
 Background sampler: while any GPU-heavy module holds a refcount, log host metrics periodically.
 Disabled when GPU_LIVE_METRICS_ENABLED is false-ish.
 English-only comments match project conventions.
+
+Single-GPU: nvidia-smi returns one CSV row; GPU_VRAM_MiB and GPU_util_pct match that card
+(summing one value or max of one value is identical).
+
+Performance: acquire/release only touch a short lock (no I/O). Sampling runs on a daemon
+thread, so HTTP/worker coroutines are not blocked. While no module holds a refcount, the
+worker only sleeps and checks refcounts—no psutil and no nvidia-smi. When active, each tick
+does one psutil read plus one nvidia-smi subprocess (typically tens of ms, not on the
+async event loop).
 """
 
 from __future__ import annotations
