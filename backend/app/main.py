@@ -11,6 +11,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.services.stt_service import stt_service
 from app.services.llm_service import llm_service
 from app.services.pdf_service import pdf_service
+from app.services.gpu_live_monitor import (
+    MODULE_KM_ASSISTANT,
+    MODULE_VOICE,
+    gpu_work_acquire,
+    gpu_work_release,
+    gpu_work_scope,
+)
 from app.services.meeting_minutes_docx import MeetingMinutesDocxService
 from app.services.transcript_docx_service import TranscriptDocxService
 from app.services.employee_db import (
@@ -27,14 +34,12 @@ from typing import Optional
 import uuid
 import traceback
 import asyncio
-import time
 from fastapi.concurrency import run_in_threadpool
 from pdf2docx import Converter
 from app.services.factory.sql_tools import FactorySqlTools
 import docx
 from docx.shared import Pt
 from docx.oxml.ns import qn
-import asyncio
 import subprocess
 import platform
 try:
@@ -227,181 +232,164 @@ async def stt_process_for_n8n(
             _nbytes = os.path.getsize(temp_file_path)
         except OSError:
             _nbytes = -1
-        print(f"[n8n STT-TRACE] file_saved bytes_on_disk={_nbytes}", flush=True)
+        print(f"[n8n STT] temp audio bytes_on_disk={_nbytes}", flush=True)
 
-        # Step 2: Whisper Transcription (using threadpool for concurrency)
-        # Inherits existing stt_service with VAD filter and GPU acceleration
-        _t_whisper = time.monotonic()
-        print("[n8n STT-TRACE] run_in_threadpool(transcribe) START (if this stays here, worker never returned)", flush=True)
-        stt_result = await run_in_threadpool(stt_service.transcribe, temp_file_path)
-        print(
-            f"[n8n STT-TRACE] run_in_threadpool(transcribe) END elapsed_ms={(time.monotonic() - _t_whisper) * 1000:.0f}",
-            flush=True,
-        )
-        transcript_text = stt_result.get("text", "")
-        print(f"[n8n STT] Transcription done: {len(transcript_text)} chars", flush=True)
+        if mode == "minutes":
+            gpu_work_acquire(MODULE_VOICE)
+        try:
+            # Step 2: Whisper Transcription (using threadpool for concurrency)
+            stt_result = await run_in_threadpool(stt_service.transcribe, temp_file_path)
+            transcript_text = stt_result.get("text", "")
+            print(f"[n8n STT] Transcription done: {len(transcript_text)} chars", flush=True)
 
-        # Clean up temp audio file
-        if os.path.exists(temp_file_path):
-            os.remove(temp_file_path)
-            temp_file_path = ""
+            # Clean up temp audio file
+            if os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
+                temp_file_path = ""
 
-        # Step 3: Return raw transcript if mode is stt_only
-        if mode == "stt_only":
-            return {
+            # Step 3: Return raw transcript if mode is stt_only
+            if mode == "stt_only":
+                return {
+                    "status": "success",
+                    "mode": "stt_only",
+                    "transcript": transcript_text,
+                    "language": stt_result.get("language", ""),
+                    "processing_time": stt_result.get("processing_time", 0),
+                    "segments": stt_result.get("segments", []),
+                }
+
+            # ── minutes mode: Full analysis + bilingual Word document generation ────
+
+            # Step 4: LLM analysis (Traditional Chinese output)
+            llm_options = {"temperature": temperature, "num_predict": num_predict}
+            model_override = model.strip() or None
+            print(f"[n8n STT] Running LLM analysis | model={model_override or 'default'} options={llm_options}", flush=True)
+            analysis = await run_in_threadpool(
+                llm_service.analyze_meeting_transcript, transcript_text,
+                model_override, temperature, num_predict
+            )
+
+            # Step 5: Translate analysis to English (for bilingual minutes)
+            try:
+                en_analysis = await run_in_threadpool(llm_service.translate_analysis, analysis, model_override)
+            except Exception as te:
+                print(f"[n8n STT] translate_analysis failed: {te}")
+                en_analysis = {}
+
+            # Step 6: Generate meeting minutes DOCX
+            file_download = None
+            try:
+                minutes_svc = MeetingMinutesDocxService()
+                minutes_bytes = await run_in_threadpool(
+                    minutes_svc.generate_minutes,
+                    file.filename,
+                    analysis.get("meeting_objective", ""),
+                    analysis.get("discussion_summary", ""),
+                    analysis.get("decisions", []),
+                    analysis.get("action_items", []),
+                    analysis.get("attendees", []),
+                    analysis.get("schedule_notes", ""),
+                    None,
+                    en_analysis.get("meeting_objective", ""),
+                    en_analysis.get("discussion_summary", ""),
+                    en_analysis.get("decisions", []),
+                    en_analysis.get("action_items", []),
+                    en_analysis.get("schedule_notes", ""),
+                )
+                file_download = {
+                    "filename": f"meeting_minutes_{file.filename}.docx",
+                    "content_base64": base64.b64encode(minutes_bytes).decode("utf-8"),
+                    "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                }
+            except Exception as de:
+                print(f"[n8n STT] MeetingMinutesDocx generation failed: {de}")
+
+            # Step 7: Translate segments and generate bilingual transcript DOCX
+            translated_segments = []
+            transcript_download = None
+            segments = stt_result.get("segments", [])
+            detected_lang = stt_result.get("language", "zh")
+            is_chinese = detected_lang.lower().startswith("zh")
+            try:
+                if segments:
+                    translated_segments = await llm_service.translate_segments_async(
+                        segments, detected_lang, model_override
+                    )
+                    transcript_svc = TranscriptDocxService()
+                    transcript_bytes = await run_in_threadpool(
+                        transcript_svc.generate,
+                        file.filename,
+                        translated_segments,
+                        "Chinese" if is_chinese else "English",
+                        "English" if is_chinese else "Chinese (Traditional)",
+                    )
+                    transcript_download = {
+                        "filename": f"transcript_{file.filename}.docx",
+                        "content_base64": base64.b64encode(transcript_bytes).decode("utf-8"),
+                        "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    }
+            except Exception as te2:
+                print(f"[n8n STT] TranscriptDocx generation failed: {te2}")
+
+            # Step 8: Build bilingual composite display fields for frontend
+            composite_summary = ""
+            zh_obj = analysis.get("meeting_objective", "").strip()
+            en_obj = en_analysis.get("meeting_objective", "").strip()
+            if zh_obj or en_obj:
+                composite_summary += f"【會議目的 | Meeting Objective】\n{zh_obj}\n{en_obj}\n\n"
+
+            zh_sum = analysis.get("discussion_summary", analysis.get("summary", "")).strip()
+            en_sum = en_analysis.get("discussion_summary", en_analysis.get("summary", "")).strip()
+            if zh_sum or en_sum:
+                composite_summary += f"【討論摘要 | Discussion Summary】\n{zh_sum}\n{en_sum}"
+
+            zh_decisions = analysis.get("decisions", [])
+            en_decisions = en_analysis.get("decisions", [])
+            composite_decisions = []
+            for i in range(max(len(zh_decisions), len(en_decisions))):
+                zh_d = zh_decisions[i] if i < len(zh_decisions) else ""
+                en_d = en_decisions[i] if i < len(en_decisions) else ""
+                composite_decisions.append(f"{zh_d}\n{en_d}".strip())
+
+            zh_actions = analysis.get("action_items", [])
+            en_actions = en_analysis.get("action_items", [])
+            composite_actions = []
+            for i in range(max(len(zh_actions), len(en_actions))):
+                zh_a = zh_actions[i] if i < len(zh_actions) else {}
+                en_a = en_actions[i] if i < len(en_actions) else {}
+                if isinstance(zh_a, str):
+                    en_task = en_a if isinstance(en_a, str) else en_a.get("task", "")
+                    composite_actions.append(f"{zh_a}\n{en_task}".strip())
+                else:
+                    task = f"{zh_a.get('task', '')}\n{en_a.get('task', '')}".strip()
+                    composite_actions.append(
+                        {"task": task, "owner": zh_a.get("owner", ""), "deadline": zh_a.get("deadline", "")}
+                    )
+
+            # Step 9: Construct final response
+            result = {
                 "status": "success",
-                "mode": "stt_only",
+                "mode": "minutes",
                 "transcript": transcript_text,
                 "language": stt_result.get("language", ""),
                 "processing_time": stt_result.get("processing_time", 0),
-                "segments": stt_result.get("segments", []),
+                "summary": composite_summary.strip() or zh_sum,
+                "meeting_objective": analysis.get("meeting_objective", ""),
+                "decisions": composite_decisions,
+                "action_items": composite_actions,
+                "attendees": analysis.get("attendees", []),
+                "llm_options_used": llm_options,
             }
-
-        # ── minutes mode: Full analysis + bilingual Word document generation ────
-
-        # Step 4: LLM analysis (Traditional Chinese output)
-        llm_options = {"temperature": temperature, "num_predict": num_predict}
-        model_override = model.strip() or None
-        print(f"[n8n STT] Running LLM analysis | model={model_override or 'default'} options={llm_options}", flush=True)
-        _t_llm = time.monotonic()
-        print("[n8n STT-TRACE] analyze_meeting_transcript START", flush=True)
-        analysis = await run_in_threadpool(
-            llm_service.analyze_meeting_transcript, transcript_text,
-            model_override, temperature, num_predict
-        )
-        print(
-            f"[n8n STT-TRACE] analyze_meeting_transcript END elapsed_ms={(time.monotonic() - _t_llm) * 1000:.0f}",
-            flush=True,
-        )
-
-        # Step 5: Translate analysis to English (for bilingual minutes)
-        try:
-            _t_tr = time.monotonic()
-            print("[n8n STT-TRACE] translate_analysis START", flush=True)
-            en_analysis = await run_in_threadpool(llm_service.translate_analysis, analysis, model_override)
-            print(
-                f"[n8n STT-TRACE] translate_analysis END elapsed_ms={(time.monotonic() - _t_tr) * 1000:.0f}",
-                flush=True,
-            )
-        except Exception as te:
-            print(f"[n8n STT] translate_analysis failed: {te}")
-            en_analysis = {}
-
-        # Step 6: Generate meeting minutes DOCX
-        file_download = None
-        try:
-            minutes_svc = MeetingMinutesDocxService()
-            minutes_bytes = await run_in_threadpool(
-                minutes_svc.generate_minutes,
-                file.filename,
-                analysis.get("meeting_objective", ""),
-                analysis.get("discussion_summary", ""),
-                analysis.get("decisions", []),
-                analysis.get("action_items", []),
-                analysis.get("attendees", []),
-                analysis.get("schedule_notes", ""),
-                None,
-                en_analysis.get("meeting_objective", ""),
-                en_analysis.get("discussion_summary", ""),
-                en_analysis.get("decisions", []),
-                en_analysis.get("action_items", []),
-                en_analysis.get("schedule_notes", ""),
-            )
-            file_download = {
-                "filename": f"meeting_minutes_{file.filename}.docx",
-                "content_base64": base64.b64encode(minutes_bytes).decode("utf-8"),
-                "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            }
-        except Exception as de:
-            print(f"[n8n STT] MeetingMinutesDocx generation failed: {de}")
-
-        # Step 7: Translate segments and generate bilingual transcript DOCX
-        translated_segments = []
-        transcript_download = None
-        segments = stt_result.get("segments", [])
-        detected_lang = stt_result.get("language", "zh")
-        is_chinese = detected_lang.lower().startswith("zh")
-        try:
-            if segments:
-                _t_seg = time.monotonic()
-                print(f"[n8n STT-TRACE] translate_segments_async START count={len(segments)}", flush=True)
-                translated_segments = await llm_service.translate_segments_async(
-                    segments, detected_lang, model_override
-                )
-                print(
-                    f"[n8n STT-TRACE] translate_segments_async END elapsed_ms={(time.monotonic() - _t_seg) * 1000:.0f}",
-                    flush=True,
-                )
-                transcript_svc = TranscriptDocxService()
-                transcript_bytes = await run_in_threadpool(
-                    transcript_svc.generate,
-                    file.filename,
-                    translated_segments,
-                    "Chinese" if is_chinese else "English",
-                    "English" if is_chinese else "Chinese (Traditional)",
-                )
-                transcript_download = {
-                    "filename": f"transcript_{file.filename}.docx",
-                    "content_base64": base64.b64encode(transcript_bytes).decode("utf-8"),
-                    "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                }
-        except Exception as te2:
-            print(f"[n8n STT] TranscriptDocx generation failed: {te2}")
-
-        # Step 8: Build bilingual composite display fields for frontend
-        composite_summary = ""
-        zh_obj = analysis.get("meeting_objective", "").strip()
-        en_obj = en_analysis.get("meeting_objective", "").strip()
-        if zh_obj or en_obj:
-            composite_summary += f"【會議目的 | Meeting Objective】\n{zh_obj}\n{en_obj}\n\n"
-
-        zh_sum = analysis.get("discussion_summary", analysis.get("summary", "")).strip()
-        en_sum = en_analysis.get("discussion_summary", en_analysis.get("summary", "")).strip()
-        if zh_sum or en_sum:
-            composite_summary += f"【討論摘要 | Discussion Summary】\n{zh_sum}\n{en_sum}"
-
-        zh_decisions = analysis.get("decisions", [])
-        en_decisions = en_analysis.get("decisions", [])
-        composite_decisions = []
-        for i in range(max(len(zh_decisions), len(en_decisions))):
-            zh_d = zh_decisions[i] if i < len(zh_decisions) else ""
-            en_d = en_decisions[i] if i < len(en_decisions) else ""
-            composite_decisions.append(f"{zh_d}\n{en_d}".strip())
-
-        zh_actions = analysis.get("action_items", [])
-        en_actions = en_analysis.get("action_items", [])
-        composite_actions = []
-        for i in range(max(len(zh_actions), len(en_actions))):
-            zh_a = zh_actions[i] if i < len(zh_actions) else {}
-            en_a = en_actions[i] if i < len(en_actions) else {}
-            if isinstance(zh_a, str):
-                en_task = en_a if isinstance(en_a, str) else en_a.get("task", "")
-                composite_actions.append(f"{zh_a}\n{en_task}".strip())
-            else:
-                task = f"{zh_a.get('task', '')}\n{en_a.get('task', '')}".strip()
-                composite_actions.append({"task": task, "owner": zh_a.get("owner", ""), "deadline": zh_a.get("deadline", "")})
-
-        # Step 9: Construct final response
-        result = {
-            "status": "success",
-            "mode": "minutes",
-            "transcript": transcript_text,
-            "language": stt_result.get("language", ""),
-            "processing_time": stt_result.get("processing_time", 0),
-            "summary": composite_summary.strip() or zh_sum,
-            "meeting_objective": analysis.get("meeting_objective", ""),
-            "decisions": composite_decisions,
-            "action_items": composite_actions,
-            "attendees": analysis.get("attendees", []),
-            "llm_options_used": llm_options,
-        }
-        if translated_segments:
-            result["translated_segments"] = translated_segments
-        if file_download:
-            result["file_download"] = file_download
-        if transcript_download:
-            result["transcript_download"] = transcript_download
-        return result
+            if translated_segments:
+                result["translated_segments"] = translated_segments
+            if file_download:
+                result["file_download"] = file_download
+            if transcript_download:
+                result["transcript_download"] = transcript_download
+            return result
+        finally:
+            if mode == "minutes":
+                gpu_work_release(MODULE_VOICE)
 
     except Exception as e:
         if temp_file_path and os.path.exists(temp_file_path):
@@ -425,15 +413,10 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
         except OSError:
             _psz = -1
         print(
-            f"[PDF-TRACE] translate_pdf temp_saved bytes={_psz} debug={debug_mode} complex_table={is_complex_table_bool}",
+            f"[PDF] translate_pdf temp_saved bytes={_psz} debug={debug_mode} complex_table={is_complex_table_bool}",
             flush=True,
         )
-        _t_pdf = time.monotonic()
         result_list = await pdf_service.process_pdf(temp_input_path, force_target_lang=target_lang, debug_mode=debug_mode, is_complex_table=is_complex_table_bool)
-        print(
-            f"[PDF-TRACE] process_pdf DONE elapsed_ms={(time.monotonic() - _t_pdf) * 1000:.0f}",
-            flush=True,
-        )
         output_pdf_path = result_list[0]["file_path"]
         
         with open(output_pdf_path, 'rb') as f:
@@ -827,7 +810,8 @@ async def document_process_for_n8n(
 @app.post("/chat")
 async def chat_text(payload: dict):
     text = payload.get("question", payload.get("text", ""))
-    response = await llm_service.chat(text)
+    with gpu_work_scope(MODULE_KM_ASSISTANT):
+        response = await llm_service.chat(text)
     return {"response": response}
 
 # ── n8n Sub-Agent Endpoints ────────────────────────────────────────────────────
@@ -982,22 +966,23 @@ async def document_chat(payload: dict, background_tasks: BackgroundTasks):
 
     try:
         print(f"\n[Document Chat] session={session_id} question='{question}'", flush=True)
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(connect=10.0, read=180.0, write=30.0, pool=10.0)
-        ) as client:
-            n8n_resp = await client.post(
-                N8N_DOC_WEBHOOK,
-                json={"question": question}
-            )
-            n8n_resp.raise_for_status()
-            raw = n8n_resp.text.strip()
-            if not raw:
-                print("[Document Chat Warning] n8n returned empty body.", flush=True)
-                fallback = "抱歉，知識庫查詢未回傳結果，請稍後再試。"
-                background_tasks.add_task(doc_store.append_messages, session_id, question, fallback)
-                return {"response": fallback, "session_id": session_id}
+        with gpu_work_scope(MODULE_KM_ASSISTANT):
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(connect=10.0, read=180.0, write=30.0, pool=10.0)
+            ) as client:
+                n8n_resp = await client.post(
+                    N8N_DOC_WEBHOOK,
+                    json={"question": question},
+                )
+                n8n_resp.raise_for_status()
+                raw = n8n_resp.text.strip()
+                if not raw:
+                    print("[Document Chat Warning] n8n returned empty body.", flush=True)
+                    fallback = "抱歉，知識庫查詢未回傳結果，請稍後再試。"
+                    background_tasks.add_task(doc_store.append_messages, session_id, question, fallback)
+                    return {"response": fallback, "session_id": session_id}
 
-            result = n8n_resp.json()
+                result = n8n_resp.json()
 
         # n8n returns {"output": "..."} or {"response": "..."}
         response_text = result.get("output") or result.get("response") or ""

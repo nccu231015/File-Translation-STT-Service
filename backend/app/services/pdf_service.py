@@ -2,6 +2,7 @@ import os
 import httpx
 import re
 from opencc import OpenCC
+from .gpu_live_monitor import MODULE_DOCUMENT_TRANSLATION, gpu_work_acquire, gpu_work_release
 from .pdf_layout_service import PDFLayoutPreservingService
 from .pdf_layout_detector_yolo import PDFLayoutDetectorYOLO
 
@@ -413,6 +414,7 @@ class PDFService:
         base_name = os.path.splitext(os.path.basename(input_pdf_path))[0]
         output_pdf_path = os.path.join(dir_name, f"{base_name}_translated.pdf")
         
+        gpu_work_acquire(MODULE_DOCUMENT_TRANSLATION)
         try:
             # AWAIT the async translation process
             await self.layout_translator.translate_pdf(
@@ -435,6 +437,8 @@ class PDFService:
         except Exception as e:
             print(f"[PDF] Processing error: {e}")
             raise e
+        finally:
+            gpu_work_release(MODULE_DOCUMENT_TRANSLATION)
 
 # Global instance
 pdf_service = PDFService(engine="ollama")
