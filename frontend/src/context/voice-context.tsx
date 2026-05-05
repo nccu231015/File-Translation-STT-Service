@@ -29,6 +29,8 @@ export interface ProcessedRecord {
 interface VoiceContextType {
     isProcessing: boolean;
     processingFilename: string | null;
+    /** Files waiting behind the current job (FIFO). */
+    queuedCount: number;
     records: ProcessedRecord[];
     processAudio: (file: File) => Promise<void>;
     removeRecord: (id: string) => void;
@@ -42,6 +44,10 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
 
     const [isProcessing, setIsProcessing] = useState(false);
     const [processingFilename, setProcessingFilename] = useState<string | null>(null);
+    const [queuedCount, setQueuedCount] = useState(0);
+
+    const audioQueueRef = useRef<File[]>([]);
+    const processingLockRef = useRef(false);
 
     // Always start with empty array to prevent SSR/CSR hydration mismatch (React #418).
     // localStorage is only available in the browser, so we load it in useEffect after mount.
@@ -110,8 +116,16 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
         }
     }, [storageKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    // ─── Process audio file ───────────────────────────────────────────────────────
+    // ─── Process audio file (queue another call while busy) ───────────────────────
     const processAudio = async (file: File) => {
+        if (processingLockRef.current) {
+            audioQueueRef.current.push(file);
+            setQueuedCount(audioQueueRef.current.length);
+            toast.info(`已加入排隊：${file.name}（等候 ${audioQueueRef.current.length} 個）`);
+            return;
+        }
+
+        processingLockRef.current = true;
         setIsProcessing(true);
         setProcessingFilename(file.name);
         try {
@@ -191,6 +205,15 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
         } finally {
             setIsProcessing(false);
             setProcessingFilename(null);
+            processingLockRef.current = false;
+
+            const next = audioQueueRef.current.shift();
+            setQueuedCount(audioQueueRef.current.length);
+            if (next) {
+                queueMicrotask(() => {
+                    void processAudio(next);
+                });
+            }
         }
     };
 
@@ -204,7 +227,7 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
     };
 
     return (
-        <VoiceContext.Provider value={{ isProcessing, processingFilename, records, processAudio, removeRecord }}>
+        <VoiceContext.Provider value={{ isProcessing, processingFilename, queuedCount, records, processAudio, removeRecord }}>
             {children}
         </VoiceContext.Provider>
     );

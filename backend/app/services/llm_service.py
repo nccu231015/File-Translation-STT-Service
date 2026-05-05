@@ -378,6 +378,68 @@ class LLMService:
 
         return cleaned
 
+    def _parse_meeting_analysis_json(self, raw: str) -> dict | None:
+        """
+        Parse model output as JSON. Handles markdown fences and embedded JSON objects.
+        """
+        if not raw or not str(raw).strip():
+            return None
+        s = str(raw).strip()
+
+        def _try_load(candidate: str) -> dict | None:
+            c = candidate.strip()
+            if not c:
+                return None
+            try:
+                out = json.loads(c)
+                return out if isinstance(out, dict) else None
+            except json.JSONDecodeError:
+                return None
+
+        if r := _try_load(s):
+            return r
+
+        # Markdown code fence ```json ... ```
+        m = re.search(r"```(?:json)?\s*([\s\S]*?)```", s, re.I)
+        if m and (r := _try_load(m.group(1))):
+            return r
+
+        # First balanced {...} substring (handles preamble before JSON)
+        start = s.find("{")
+        if start != -1:
+            depth = 0
+            for i in range(start, len(s)):
+                if s[i] == "{":
+                    depth += 1
+                elif s[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        if r := _try_load(s[start : i + 1]):
+                            return r
+                        break
+
+        return None
+
+    def _meeting_analysis_fallback_payload(self, raw_content: str) -> dict:
+        """
+        When JSON parsing fails, still return keys consumed by minutes API / n8n.
+        Puts cleaned text into discussion_summary (same consumer path as success JSON).
+        """
+        text = (raw_content or "").strip()
+        if text:
+            text = self.s2tw.convert(text)
+        else:
+            text = "（模型未產出可解析的 JSON；可嘗試調高 num_predict 或重試。）"
+        return {
+            "attendees": "",
+            "meeting_objective": "",
+            "discussion_summary": text,
+            "schedule_notes": "",
+            "summary": text,
+            "decisions": [],
+            "action_items": [],
+        }
+
     def analyze_meeting_transcript(
         self,
         text: str,
@@ -512,40 +574,44 @@ class LLMService:
             # Clean and Parse JSON
             # Sometimes models output text before JSON despite format="json"
             content = self._clean_llm_response(content)
-            
-            try:
-                data = json.loads(content)
-                # Convert to Traditional Chinese
-                if isinstance(data.get("summary"), str):
-                    data["summary"] = self.s2tw.convert(data["summary"])
-                if isinstance(data.get("decisions"), list):
-                    data["decisions"] = [self.s2tw.convert(str(d)) for d in data["decisions"]]
-                if isinstance(data.get("action_items"), list):
-                    new_actions = []
-                    for item in data["action_items"]:
-                        if isinstance(item, dict):
-                            # Convert fields inside dict
-                            new_item = item.copy()
-                            if "task" in item: new_item["task"] = self.s2tw.convert(item["task"])
-                            if "owner" in item: new_item["owner"] = self.s2tw.convert(item["owner"])
-                            if "deadline" in item:  new_item["deadline"] = self.s2tw.convert(item["deadline"])
-                            new_actions.append(new_item)
-                        else:
-                            # Fallback for string items
-                            new_actions.append(self.s2tw.convert(str(item)))
-                    data["action_items"] = new_actions
-                return data
-            except json.JSONDecodeError:
-                print(f"[LLM] JSON Parse Error: {content[:100]}...")
-                return {
-                    "summary": self.s2tw.convert(content), 
-                    "decisions": [], 
-                    "action_items": []
-                }
+
+            data = self._parse_meeting_analysis_json(content)
+            if data is None:
+                print(
+                    f"[LLM] JSON Parse Error (could not extract JSON). "
+                    f"Raw length={len(content)} preview={content[:500]!r}...",
+                    flush=True,
+                )
+                return self._meeting_analysis_fallback_payload(content)
+
+            # Convert string fields to Traditional Chinese where applicable
+            if isinstance(data.get("summary"), str):
+                data["summary"] = self.s2tw.convert(data["summary"])
+            for key in ("meeting_objective", "discussion_summary", "attendees", "schedule_notes"):
+                if isinstance(data.get(key), str):
+                    data[key] = self.s2tw.convert(data[key])
+            if isinstance(data.get("decisions"), list):
+                data["decisions"] = [self.s2tw.convert(str(d)) for d in data["decisions"]]
+            if isinstance(data.get("action_items"), list):
+                new_actions = []
+                for item in data["action_items"]:
+                    if isinstance(item, dict):
+                        new_item = item.copy()
+                        if "task" in item:
+                            new_item["task"] = self.s2tw.convert(item["task"])
+                        if "owner" in item:
+                            new_item["owner"] = self.s2tw.convert(item["owner"])
+                        if "deadline" in item:
+                            new_item["deadline"] = self.s2tw.convert(item["deadline"])
+                        new_actions.append(new_item)
+                    else:
+                        new_actions.append(self.s2tw.convert(str(item)))
+                data["action_items"] = new_actions
+            return data
 
         except Exception as e:
             print(f"[LLM] Analysis error: {e}")
-            return {"summary": "分析失敗", "decisions": [], "action_items": []}
+            return self._meeting_analysis_fallback_payload(f"分析過程發生錯誤：{e}")
 
 
     def translate_analysis(self, analysis: dict, model: str = None) -> dict:

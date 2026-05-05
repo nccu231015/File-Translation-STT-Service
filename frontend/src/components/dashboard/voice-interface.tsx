@@ -21,20 +21,22 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useVoice } from '@/context/voice-context';
 
 export function VoiceInterface() {
-    const { isProcessing, processingFilename, records, processAudio, removeRecord } = useVoice();
+    const { isProcessing, processingFilename, queuedCount, records, processAudio, removeRecord } = useVoice();
     const [selectedFile, setSelectedFile] = useState<File | null>(null);
     const [isDragging, setIsDragging] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
-        if (file) {
-            setSelectedFile(file);
-        }
-        // Reset input value so the same file can be selected again if needed
+        if (!file) return;
         if (fileInputRef.current) {
             fileInputRef.current.value = '';
         }
+        if (isProcessing) {
+            void processAudio(file);
+            return;
+        }
+        setSelectedFile(file);
     };
 
     const handleUploadAndProcess = async () => {
@@ -57,17 +59,22 @@ export function VoiceInterface() {
         e.preventDefault();
         setIsDragging(false);
         const file = e.dataTransfer.files[0];
-        if (file && file.type.startsWith('audio/')) {
-            setSelectedFile(file);
-        } else if (file) {
-            // Try accepting by extension for formats browsers may not type correctly
-            const ext = file.name.split('.').pop()?.toLowerCase();
-            if (['mp3', 'wav', 'm4a', 'ogg', 'flac', 'aac', 'webm'].includes(ext || '')) {
-                setSelectedFile(file);
+        if (!file) return;
+
+        const ext = file.name.split('.').pop()?.toLowerCase();
+        const allowedExt = ['mp3', 'wav', 'm4a', 'ogg', 'flac', 'aac', 'webm'];
+        const okByMime = file.type.startsWith('audio/');
+        const okByExt = ext ? allowedExt.includes(ext) : false;
+
+        if (okByMime || okByExt) {
+            if (isProcessing) {
+                void processAudio(file);
             } else {
-                alert('請上傳音訊檔案（WAV, MP3, M4A 等）');
+                setSelectedFile(file);
             }
+            return;
         }
+        alert('請上傳音訊檔案（WAV, MP3, M4A, AAC 等）');
     };
 
     const deleteRecord = (id: string) => {
@@ -111,7 +118,7 @@ export function VoiceInterface() {
                         <Upload className="size-5" />
                         上傳會議錄音
                     </CardTitle>
-                    <CardDescription>支援 WAV, MP3, M4A 格式</CardDescription>
+                    <CardDescription>支援 WAV, MP3, M4A, AAC, OGG, FLAC, WEBM</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
                     <div
@@ -128,14 +135,19 @@ export function VoiceInterface() {
                         <input
                             ref={fileInputRef}
                             type="file"
-                            accept="audio/*"
+                            accept=".mp3,.wav,.m4a,.aac,.ogg,.flac,.webm,audio/*,audio/aac,audio/x-aac"
                             onChange={handleFileSelect}
                             className="hidden"
                             id="audio-upload"
                         />
                         <FileAudio className={`size-12 mx-auto mb-3 ${isDragging ? 'text-blue-500' : 'text-slate-400'}`} />
                         <p className="font-medium mb-1">點擊上傳或拖放音訊檔案</p>
-                        <p className="text-xs text-slate-400 mt-1">WAV &bull; MP3 &bull; M4A &bull; OGG &bull; FLAC</p>
+                        <p className="text-xs text-slate-400 mt-1">WAV &bull; MP3 &bull; M4A &bull; AAC &bull; OGG &bull; FLAC</p>
+                        {isProcessing && (
+                            <p className="text-xs text-amber-800 mt-3 font-medium">
+                                處理中仍可點擊或拖放加入下一個檔案（自動排隊處理）
+                            </p>
+                        )}
                     </div>
 
                     {/* Show selected file ready for upload */}
@@ -159,6 +171,11 @@ export function VoiceInterface() {
                                 <div className="flex flex-col">
                                     <span className="font-medium">{processingFilename || 'Processing...'}</span>
                                     <span className="text-xs text-slate-500">正在進行 AI 會議分析...</span>
+                                    {queuedCount > 0 && (
+                                        <span className="text-xs text-amber-700 mt-1">
+                                            排隊中 {queuedCount} 個檔案（完成後會自動處理）
+                                        </span>
+                                    )}
                                 </div>
                             </div>
                             <Button disabled>
