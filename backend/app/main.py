@@ -484,22 +484,10 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                     doc, content_list, cell_texts = None, [], {}
                 
                 translation_cache = {}
-                if content_list:
-                    print(f"[PDF-DOCX] Batch translating {len(content_list)} table cell strings...", flush=True)
-                    batch_size = 50
-                    
-                    async def process_batch(batch):
-                        translated = await pdf_service._translate_batch_ollama(batch, target_lang=target_lang)
-                        for orig, trans in zip(batch, translated):
-                            if trans and "<SKIP>" not in trans:
-                                translation_cache[orig] = trans
-
-                    tasks = []
-                    for i in range(0, len(content_list), batch_size):
-                        tasks.append(process_batch(content_list[i : i + batch_size]))
-                    
-                    await asyncio.gather(*tasks)
-                    
+                # Define apply step whenever complex-table mode runs. If `_apply_docx_tables` were only defined
+                # inside `if content_list`, requests with zero translatable cells would skip the definition but
+                # still invoke `run_in_threadpool(_apply_docx_tables)` → UnboundLocalError.
+                if is_complex_table_bool:
                     def _apply_docx_tables():
                         # === DIAGNOSTIC: dump DOCX table structure before any changes ===
                         print("[DOCX-DIAG] ==== Table Structure Diagnosis ====", flush=True)
@@ -703,7 +691,23 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
                         
                         apply_style(doc)
                         doc.save(docx_path)
-                        
+
+                if content_list:
+                    print(f"[PDF-DOCX] Batch translating {len(content_list)} table cell strings...", flush=True)
+                    batch_size = 50
+
+                    async def process_batch(batch):
+                        translated = await pdf_service._translate_batch_ollama(batch, target_lang=target_lang)
+                        for orig, trans in zip(batch, translated):
+                            if trans and "<SKIP>" not in trans:
+                                translation_cache[orig] = trans
+
+                    tasks = []
+                    for i in range(0, len(content_list), batch_size):
+                        tasks.append(process_batch(content_list[i : i + batch_size]))
+
+                    await asyncio.gather(*tasks)
+
                 if is_complex_table_bool:
                     # Complex mode: apply table translations then convert DOCX -> PDF (overwrites the layout-preserved PDF)
                     await run_in_threadpool(_apply_docx_tables)
