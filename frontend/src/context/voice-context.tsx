@@ -26,11 +26,17 @@ export interface ProcessedRecord {
     translatedSegments?: { start: number, end: number, original: string, translated: string }[];
 }
 
+/** In-flight STT job (parallel runs; independent from document translation or other tabs). */
+export interface VoiceActiveJob {
+    id: string;
+    fileName: string;
+}
+
 interface VoiceContextType {
+    /** True while one or more audio jobs are in flight. */
     isProcessing: boolean;
-    processingFilename: string | null;
-    /** Files waiting behind the current job (FIFO). */
-    queuedCount: number;
+    /** Currently running jobs (each file tracks separately; no FIFO queue). */
+    activeJobs: VoiceActiveJob[];
     records: ProcessedRecord[];
     processAudio: (file: File) => Promise<void>;
     removeRecord: (id: string) => void;
@@ -38,16 +44,19 @@ interface VoiceContextType {
 
 const VoiceContext = createContext<VoiceContextType | undefined>(undefined);
 
+function newUniqueId(): string {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+        return crypto.randomUUID();
+    }
+    return `${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
+}
+
 export function VoiceProvider({ children }: { children: ReactNode }) {
     const { user } = useUser();
     const storageKey = `meeting_records_${user?.username ?? 'guest'}`;
 
-    const [isProcessing, setIsProcessing] = useState(false);
-    const [processingFilename, setProcessingFilename] = useState<string | null>(null);
-    const [queuedCount, setQueuedCount] = useState(0);
-
-    const audioQueueRef = useRef<File[]>([]);
-    const processingLockRef = useRef(false);
+    const [activeJobs, setActiveJobs] = useState<VoiceActiveJob[]>([]);
+    const isProcessing = activeJobs.length > 0;
 
     // Always start with empty array to prevent SSR/CSR hydration mismatch (React #418).
     // localStorage is only available in the browser, so we load it in useEffect after mount.
@@ -114,24 +123,17 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
         } catch {
             setRecords([]);
         }
-    }, [storageKey]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [storageKey]); // eslint-disable-next-line react-hooks/exhaustive-deps
 
-    // ─── Process audio file (queue another call while busy) ───────────────────────
+    // ─── Process audio file (parallel: each call is independent; no shared lock with translation) ──
     const processAudio = async (file: File) => {
-        if (processingLockRef.current) {
-            audioQueueRef.current.push(file);
-            setQueuedCount(audioQueueRef.current.length);
-            toast.info(`已加入排隊：${file.name}（等候 ${audioQueueRef.current.length} 個）`);
-            return;
-        }
+        const jobId = newUniqueId();
+        setActiveJobs(prev => [...prev, { id: jobId, fileName: file.name }]);
 
-        processingLockRef.current = true;
-        setIsProcessing(true);
-        setProcessingFilename(file.name);
         try {
             // analyzeMeetingAudio now returns N8nSTTResponse (via n8n microservice)
             const data = await analyzeMeetingAudio(file);
-            const recordId = Date.now().toString();
+            const recordId = newUniqueId();
 
             // n8n Microservice Version: Results are at the top level.
             // Word documents are returned as base64, saved to IndexedDB for persistence across refreshes.
@@ -171,7 +173,7 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
             };
 
             setRecords(prev => [newRecord, ...prev]);
-            toast.success('Meeting analysis complete');
+            toast.success(`分析完成：${file.name}`);
 
             // ── Push metadata to backend for manager preview (non-blocking) ──
             if (user?.username) {
@@ -201,19 +203,9 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
             }
         } catch (error) {
             console.error(error);
-            toast.error('處理失敗');
+            toast.error(`處理失敗：${file.name}`);
         } finally {
-            setIsProcessing(false);
-            setProcessingFilename(null);
-            processingLockRef.current = false;
-
-            const next = audioQueueRef.current.shift();
-            setQueuedCount(audioQueueRef.current.length);
-            if (next) {
-                queueMicrotask(() => {
-                    void processAudio(next);
-                });
-            }
+            setActiveJobs(prev => prev.filter(j => j.id !== jobId));
         }
     };
 
@@ -227,7 +219,7 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
     };
 
     return (
-        <VoiceContext.Provider value={{ isProcessing, processingFilename, queuedCount, records, processAudio, removeRecord }}>
+        <VoiceContext.Provider value={{ isProcessing, activeJobs, records, processAudio, removeRecord }}>
             {children}
         </VoiceContext.Provider>
     );

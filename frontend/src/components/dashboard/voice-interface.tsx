@@ -9,40 +9,47 @@ import {
     FileAudio,
     CheckCircle2,
     Download,
-    Play,
-    Pause,
-    AlertCircle,
-    Trash2,
     FileText,
-    ClipboardList,
-    ListTodo
+    ListTodo,
+    AlertCircle,
+    Trash2
 } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { useVoice } from '@/context/voice-context';
+import { toast } from 'sonner';
+
+const AUDIO_EXTENSIONS = ['mp3', 'wav', 'm4a', 'ogg', 'flac', 'aac', 'webm'];
+
+function isAudioFile(file: File): boolean {
+    const ext = file.name.split('.').pop()?.toLowerCase();
+    const okByMime = file.type.startsWith('audio/');
+    const okByExt = ext ? AUDIO_EXTENSIONS.includes(ext) : false;
+    return okByMime || okByExt;
+}
 
 export function VoiceInterface() {
-    const { isProcessing, processingFilename, queuedCount, records, processAudio, removeRecord } = useVoice();
-    const [selectedFile, setSelectedFile] = useState<File | null>(null);
+    const { isProcessing, activeJobs, records, processAudio, removeRecord } = useVoice();
     const [isDragging, setIsDragging] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
+    const runParallelForFiles = (fileList: File[]) => {
+        const audios = fileList.filter(isAudioFile);
+        if (audios.length === 0 && fileList.length > 0) {
+            toast.error('請上傳音訊檔案（WAV, MP3, M4A, AAC 等）');
+            return;
+        }
+        for (const f of audios) {
+            void processAudio(f);
+        }
+    };
+
     const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
+        const list = e.target.files;
+        if (!list?.length) return;
+        runParallelForFiles(Array.from(list));
         if (fileInputRef.current) {
             fileInputRef.current.value = '';
         }
-        if (isProcessing) {
-            void processAudio(file);
-            return;
-        }
-        setSelectedFile(file);
-    };
-
-    const handleUploadAndProcess = async () => {
-        if (!selectedFile) return;
-        await processAudio(selectedFile);
-        setSelectedFile(null);
     };
 
     const handleDragOver = (e: React.DragEvent) => {
@@ -58,49 +65,15 @@ export function VoiceInterface() {
     const handleDrop = (e: React.DragEvent) => {
         e.preventDefault();
         setIsDragging(false);
-        const file = e.dataTransfer.files[0];
-        if (!file) return;
-
-        const ext = file.name.split('.').pop()?.toLowerCase();
-        const allowedExt = ['mp3', 'wav', 'm4a', 'ogg', 'flac', 'aac', 'webm'];
-        const okByMime = file.type.startsWith('audio/');
-        const okByExt = ext ? allowedExt.includes(ext) : false;
-
-        if (okByMime || okByExt) {
-            if (isProcessing) {
-                void processAudio(file);
-            } else {
-                setSelectedFile(file);
-            }
-            return;
-        }
-        alert('請上傳音訊檔案（WAV, MP3, M4A, AAC 等）');
+        const dropped = Array.from(e.dataTransfer.files);
+        if (!dropped.length) return;
+        runParallelForFiles(dropped);
     };
 
     const deleteRecord = (id: string) => {
         if (confirm('確定要刪除此筆會議記錄嗎？')) {
             removeRecord(id);
         }
-    };
-
-    // Helper to extract action item fields flexibly
-    const parseActionItem = (item: any) => {
-        let data = item;
-        if (typeof item === 'string') {
-            try {
-                // Try to parse if it's a JSON string
-                const cleaned = item.replace(/'/g, '"'); // Handle single quotes common in LLM output
-                data = JSON.parse(cleaned);
-            } catch {
-                return { task: item, owner: '', date: '' };
-            }
-        }
-
-        return {
-            task: data.task || data.description || data.content || '',
-            owner: data.owner || data.assignee || data.who || '',
-            date: data.deadline || data.due_date || data.date || ''
-        };
     };
 
     return (
@@ -118,7 +91,7 @@ export function VoiceInterface() {
                         <Upload className="size-5" />
                         上傳會議錄音
                     </CardTitle>
-                    <CardDescription>支援 WAV, MP3, M4A, AAC, OGG, FLAC, WEBM</CardDescription>
+                    <CardDescription>支援 WAV, MP3, M4A, AAC, OGG, FLAC, WEBM（可多選，會同時分析）</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
                     <div
@@ -135,6 +108,7 @@ export function VoiceInterface() {
                         <input
                             ref={fileInputRef}
                             type="file"
+                            multiple
                             accept=".mp3,.wav,.m4a,.aac,.ogg,.flac,.webm,audio/*,audio/aac,audio/x-aac"
                             onChange={handleFileSelect}
                             className="hidden"
@@ -142,46 +116,35 @@ export function VoiceInterface() {
                         />
                         <FileAudio className={`size-12 mx-auto mb-3 ${isDragging ? 'text-blue-500' : 'text-slate-400'}`} />
                         <p className="font-medium mb-1">點擊上傳或拖放音訊檔案</p>
-                        <p className="text-xs text-slate-400 mt-1">WAV &bull; MP3 &bull; M4A &bull; AAC &bull; OGG &bull; FLAC</p>
+                        <p className="text-xs text-slate-400 mt-1">WAV &bull; MP3 &bull; M4A &bull; AAC &bull; OGG &bull; FLAC（可一次多個）</p>
                         {isProcessing && (
                             <p className="text-xs text-amber-800 mt-3 font-medium">
-                                處理中仍可點擊或拖放加入下一個檔案（自動排隊處理）
+                                目前正同時處理 {activeJobs.length} 個檔案；仍可繼續加入，與文件翻譯等其他功能並行、互不影響
                             </p>
                         )}
                     </div>
 
-                    {/* Show selected file ready for upload */}
-                    {!isProcessing && selectedFile && (
-                        <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg flex justify-between items-center">
-                            <div className="flex items-center gap-3">
-                                <FileAudio className="size-6 text-blue-600" />
-                                <span className="font-medium">{selectedFile.name}</span>
-                            </div>
-                            <Button onClick={handleUploadAndProcess}>
-                                開始分析
-                            </Button>
-                        </div>
-                    )}
-
-                    {/* Show processing state */}
-                    {isProcessing && (
-                        <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg flex justify-between items-center">
-                            <div className="flex items-center gap-3">
-                                <FileAudio className="size-6 text-blue-600" />
-                                <div className="flex flex-col">
-                                    <span className="font-medium">{processingFilename || 'Processing...'}</span>
-                                    <span className="text-xs text-slate-500">正在進行 AI 會議分析...</span>
-                                    {queuedCount > 0 && (
-                                        <span className="text-xs text-amber-700 mt-1">
-                                            排隊中 {queuedCount} 個檔案（完成後會自動處理）
-                                        </span>
-                                    )}
+                    {/* Active parallel jobs */}
+                    {isProcessing && activeJobs.length > 0 && (
+                        <div className="space-y-2">
+                            {activeJobs.map(job => (
+                                <div
+                                    key={job.id}
+                                    className="p-4 bg-blue-50 border border-blue-200 rounded-lg flex justify-between items-center"
+                                >
+                                    <div className="flex items-center gap-3 min-w-0">
+                                        <FileAudio className="size-6 text-blue-600 shrink-0" />
+                                        <div className="flex flex-col min-w-0">
+                                            <span className="font-medium truncate">{job.fileName}</span>
+                                            <span className="text-xs text-slate-500">進行 AI 會議分析…</span>
+                                        </div>
+                                    </div>
+                                    <Button disabled className="shrink-0">
+                                        <Loader2 className="animate-spin mr-2 size-4" />
+                                        處理中
+                                    </Button>
                                 </div>
-                            </div>
-                            <Button disabled>
-                                <Loader2 className="animate-spin mr-2" />
-                                處理中
-                            </Button>
+                            ))}
                         </div>
                     )}
                 </CardContent>
