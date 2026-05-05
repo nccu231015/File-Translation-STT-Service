@@ -6,6 +6,15 @@ from .gpu_live_monitor import MODULE_DOCUMENT_TRANSLATION, gpu_work_acquire, gpu
 from .pdf_layout_service import PDFLayoutPreservingService
 from .pdf_layout_detector_yolo import PDFLayoutDetectorYOLO
 
+
+def _env_int_bounded(key: str, default: int, lo: int, hi: int) -> int:
+    try:
+        v = int(os.getenv(key, str(default)))
+    except ValueError:
+        v = default
+    return max(lo, min(v, hi))
+
+
 class PDFService:
     def __init__(self, engine="ollama", target_lang="zh-TW"):
         self.engine = "ollama"
@@ -15,7 +24,9 @@ class PDFService:
         # Translation temperature (can be overridden at runtime by n8n endpoint)
         self.temperature = 0.1
         self.s2tw = OpenCC("s2tw")
-        
+        # Match llm_service: per-request num_ctx for direct /api/chat calls (avoids huge Ollama defaults).
+        self.ollama_num_ctx = _env_int_bounded("OLLAMA_NUM_CTX", 32768, 4096, 131072)
+
         # Initialize with DocLayout-YOLO detector
         print("[PDF Service] Initializing with DocLayout-YOLO...", flush=True)
         self.layout_translator = PDFLayoutPreservingService(
@@ -23,6 +34,13 @@ class PDFService:
             translate_batch_func=self._translate_batch_ollama,
             layout_detector=PDFLayoutDetectorYOLO()
         )
+
+    def _ollama_chat_options(self, **kwargs):
+        opts = {"num_ctx": self.ollama_num_ctx}
+        for k, v in kwargs.items():
+            if v is not None:
+                opts[k] = v
+        return opts
 
     def _clean_llm_response(self, text: str) -> str:
         """
@@ -133,11 +151,11 @@ class PDFService:
                             "model": self.ollama_model,
                             "messages": messages,
                             "stream": False,
-                            "options": {
-                                "temperature": self.temperature,
-                                "num_predict": 4096,
-                                "top_p": 0.9,
-                            },
+                            "options": self._ollama_chat_options(
+                                temperature=self.temperature,
+                                num_predict=4096,
+                                top_p=0.9,
+                            ),
                         }
                     )
 
@@ -238,7 +256,11 @@ class PDFService:
                             "model": self.ollama_model,
                             "messages": messages,
                             "stream": False,
-                            "options": {"temperature": self.temperature, "num_predict": 8192, "top_p": 0.9},
+                            "options": self._ollama_chat_options(
+                                temperature=self.temperature,
+                                num_predict=8192,
+                                top_p=0.9,
+                            ),
                         }
                     )
                     if r.status_code == 200:
@@ -363,11 +385,11 @@ class PDFService:
                                 "model": self.ollama_model,
                                 "messages": messages,
                                 "stream": False,
-                                "options": {
-                                    "temperature": self.temperature,
-                                    "num_predict": 4096,
-                                    "top_p": 0.9,
-                                },
+                                "options": self._ollama_chat_options(
+                                    temperature=self.temperature,
+                                    num_predict=4096,
+                                    top_p=0.9,
+                                ),
                             }
                         )
 
