@@ -13,6 +13,9 @@ services:
       # Ollama is now on the same host (AI host)
       # host.docker.internal allows container to access host's Ollama service
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      # Per API request options (sent from this container to host Ollama). Does NOT change ollama.service on the host.
+      - OLLAMA_NUM_CTX=32768
+      - OLLAMA_TRANSLATE_MAX_PARALLEL=8
       # FORCE override model to avoid OOM
       - OLLAMA_MODEL=gpt-oss:20b
       # Enable GPU for Faster Whisper and LayoutParser
