@@ -1,12 +1,22 @@
+import asyncio
 import ollama
 import os
 import json
 from dotenv import load_dotenv
 from opencc import OpenCC
 import re
+
 from typing import Any
 
 load_dotenv()
+
+
+def _env_int_bounded(key: str, default: int, lo: int, hi: int) -> int:
+    try:
+        v = int(os.getenv(key, str(default)))
+    except ValueError:
+        v = default
+    return max(lo, min(v, hi))
 
 
 class LLMService:
@@ -38,7 +48,24 @@ class LLMService:
             timeout=300.0
         )
 
+        # Per-request caps (backend .env). Does not replace host systemd OLLAMA_*; prevents huge default num_ctx from crashing ggml_cuda.
+        self.ollama_num_ctx = _env_int_bounded("OLLAMA_NUM_CTX", 32768, 4096, 131072)
+        _tp = _env_int_bounded("OLLAMA_TRANSLATE_MAX_PARALLEL", 8, 1, 32)
+        self._translate_batch_sem = asyncio.Semaphore(_tp)
+        print(
+            f"[LLM] Ollama request options: num_ctx={self.ollama_num_ctx} | "
+            f"translate_max_parallel={_tp}",
+            flush=True,
+        )
+
         self._ensure_model_exists()
+
+    def _chat_options(self, **kwargs: Any) -> dict[str, Any]:
+        opts: dict[str, Any] = {"num_ctx": self.ollama_num_ctx}
+        for k, v in kwargs.items():
+            if v is not None:
+                opts[k] = v
+        return opts
 
     def _ensure_model_exists(self):
         """
@@ -130,9 +157,11 @@ class LLMService:
             print(f"[LLM] Chat request (model: {self.model})...")
             
             response = await run_in_threadpool(
-                self.client.chat, 
-                model=self.model, 
-                messages=messages
+                lambda: self.client.chat(
+                    model=self.model,
+                    messages=messages,
+                    options=self._chat_options(),
+                )
             )
             assistant_content = response["message"]["content"]
 
@@ -160,11 +189,12 @@ class LLMService:
         try:
             from fastapi.concurrency import run_in_threadpool
             response = await run_in_threadpool(
-                self.client.chat,
-                model=self.model,
-                messages=messages,
-                format="json",
-                options={"temperature": 0} # Deterministic for routing
+                lambda: self.client.chat(
+                    model=self.model,
+                    messages=messages,
+                    format="json",
+                    options=self._chat_options(temperature=0),
+                )
             )
             content = response["message"]["content"]
             return json.loads(content)
@@ -186,10 +216,12 @@ class LLMService:
             # Step 1: LLM decides tool
             print(f"[LLM Tool] Deciding tool for {len(messages)} messages...")
             response = await run_in_threadpool(
-                self.client.chat,
-                model=self.model,
-                messages=messages,
-                tools=tools
+                lambda: self.client.chat(
+                    model=self.model,
+                    messages=messages,
+                    tools=tools,
+                    options=self._chat_options(),
+                )
             )
 
             # Check if LLM wants to call a tool
@@ -298,9 +330,11 @@ class LLMService:
                 
                 try:
                     final_response = await run_in_threadpool(
-                        self.client.chat,
-                        model=self.model,
-                        messages=synthesis_messages
+                        lambda: self.client.chat(
+                            model=self.model,
+                            messages=synthesis_messages,
+                            options=self._chat_options(),
+                        )
                     )
                     content = final_response.get("message", {}).get("content", "").strip()
                     if not content:
@@ -362,8 +396,7 @@ class LLMService:
             f"model={_effective_model} | temperature={temperature} | num_predict={num_predict}",
             flush=True,
         )
-        # DeepSeek/gpt-oss models support large context windows.
-        # We use a 15000 character chunk size to balance detail and stability.
+        # Capped prompt context via _chat_options(num_ctx); long transcripts still use map-reduce chunking below.
         chunk_size = 15000
         
         # Simple case: Short text (fits in one chunk)
@@ -471,7 +504,7 @@ class LLMService:
         try:
             # Use reasoning model for analysis (override if caller specifies a model)
             _model = model or self.analysis_model
-            _options = {"temperature": temperature, "num_predict": num_predict}
+            _options = self._chat_options(temperature=temperature, num_predict=num_predict)
             print(f"[LLM] _analyze_chunk model={_model} options={_options}", flush=True)
             response = self.client.chat(model=_model, messages=messages, format="json", options=_options)
             content = response["message"]["content"]
@@ -555,7 +588,12 @@ class LLMService:
             # Use translation model for speed (override if caller specifies a model)
             _model = model or self.translation_model
             print(f"[LLM] translate_analysis model={_model}", flush=True)
-            response = self.client.chat(model=_model, messages=messages, format="json")
+            response = self.client.chat(
+                model=_model,
+                messages=messages,
+                format="json",
+                options=self._chat_options(),
+            )
             content = self._clean_llm_response(response["message"]["content"])
             translated = json.loads(content)
             print("[LLM] Analysis translation complete.", flush=True)
@@ -627,7 +665,11 @@ class LLMService:
             translated_lines: list[str] = [""] * len(batch)
             try:
                 # Use translation model for speed
-                response = self.client.chat(model=self.translation_model, messages=messages)
+                response = self.client.chat(
+                    model=self.translation_model,
+                    messages=messages,
+                    options=self._chat_options(),
+                )
                 raw = response["message"]["content"].strip()
 
                 # Parse "N. translated text" lines
@@ -697,7 +739,12 @@ class LLMService:
 
             translated_lines: list[str] = [""] * len(batch)
             try:
-                response = await self.async_client.chat(model=_model, messages=messages)
+                async with self._translate_batch_sem:
+                    response = await self.async_client.chat(
+                        model=_model,
+                        messages=messages,
+                        options=self._chat_options(),
+                    )
                 raw = response["message"]["content"].strip()
 
                 for line in raw.splitlines():
