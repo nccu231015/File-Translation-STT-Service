@@ -677,44 +677,16 @@ class LLMService:
 
     def _segment_translation_labels(self, detected_language: str) -> tuple[str, str, bool]:
         """
-        Route segment translation by Whisper language code.
-        - zh*: Traditional Chinese → English (bilingual transcript pairing).
-        - All other codes (en, ja, ko, …): source language → Traditional Chinese (Taiwan),
-          same numbered-line pipeline and output format as English → zh-TW.
-
-        Returns (src_label, tgt_label, source_is_chinese) where source_is_chinese
-        controls post-processing (s2tw only when target is Chinese).
+        Bilingual transcript: zh* <-> English pairing only.
+        - zh*: source column = Traditional Chinese, target = English.
+        - Any other Whisper code: English-side column -> Traditional Chinese (same prompts as en->zh).
+        Returns (src_label, tgt_label, source_is_chinese).
         """
         raw = (detected_language or "").strip().lower()
         base = raw.split("-")[0] if raw else "en"
         if base.startswith("zh"):
             return ("Traditional Chinese", "English", True)
-        if base == "en":
-            return ("English", "Traditional Chinese (Taiwan)", False)
-        # Same target and rules as en→zh; only the stated source language changes.
-        src_map: dict[str, str] = {
-            "ja": "Japanese",
-            "ko": "Korean",
-            "vi": "Vietnamese",
-            "th": "Thai",
-            "id": "Indonesian",
-            "ms": "Malay",
-            "tl": "Tagalog",
-            "fil": "Filipino",
-            "fr": "French",
-            "de": "German",
-            "es": "Spanish",
-            "it": "Italian",
-            "pt": "Portuguese",
-            "ru": "Russian",
-            "ar": "Arabic",
-            "hi": "Hindi",
-            "pl": "Polish",
-            "nl": "Dutch",
-            "tr": "Turkish",
-        }
-        src_label = src_map.get(base, f"the source language of the transcript (language code: {base})")
-        return (src_label, "Traditional Chinese (Taiwan)", False)
+        return ("English", "Traditional Chinese (Taiwan)", False)
 
     def translate_segments(
         self,
@@ -722,10 +694,8 @@ class LLMService:
         detected_language: str,
     ) -> list[dict]:
         """
-        Translate Whisper segments to the paired language:
-          Chinese (zh / zh-TW / zh-CN)  →  English
-          English (en)                   →  Chinese (Traditional, Taiwan)
-          Other (ja, ko, vi, …)          →  Chinese (Traditional, Taiwan), same pipeline as en→zh
+        Translate segments for bilingual DOCX: Chinese (zh*) <-> English only.
+        Non-Chinese Whisper codes use the same EN->zh-TW prompt as English.
 
         Each segment dict has: {start, end, text}
         Returns a list of {start, end, original, translated}.

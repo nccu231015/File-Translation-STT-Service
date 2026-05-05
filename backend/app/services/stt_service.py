@@ -55,7 +55,7 @@ class STTService:
 
     def transcribe(self, audio_path: str):
         """
-        Transcribes the given audio file using faster-whisper.
+        Transcribes the given audio file using faster-whisper (single pass, auto language).
         """
         start_time = time.time()
 
