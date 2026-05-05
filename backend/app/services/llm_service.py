@@ -609,6 +609,47 @@ class LLMService:
                 "action_items": [],
             }
 
+    def _segment_translation_labels(self, detected_language: str) -> tuple[str, str, bool]:
+        """
+        Route segment translation by Whisper language code.
+        - zh*: Traditional Chinese → English (bilingual transcript pairing).
+        - All other codes (en, ja, ko, …): source language → Traditional Chinese (Taiwan),
+          same numbered-line pipeline and output format as English → zh-TW.
+
+        Returns (src_label, tgt_label, source_is_chinese) where source_is_chinese
+        controls post-processing (s2tw only when target is Chinese).
+        """
+        raw = (detected_language or "").strip().lower()
+        base = raw.split("-")[0] if raw else "en"
+        if base.startswith("zh"):
+            return ("Traditional Chinese", "English", True)
+        if base == "en":
+            return ("English", "Traditional Chinese (Taiwan)", False)
+        # Same target and rules as en→zh; only the stated source language changes.
+        src_map: dict[str, str] = {
+            "ja": "Japanese",
+            "ko": "Korean",
+            "vi": "Vietnamese",
+            "th": "Thai",
+            "id": "Indonesian",
+            "ms": "Malay",
+            "tl": "Tagalog",
+            "fil": "Filipino",
+            "fr": "French",
+            "de": "German",
+            "es": "Spanish",
+            "it": "Italian",
+            "pt": "Portuguese",
+            "ru": "Russian",
+            "ar": "Arabic",
+            "hi": "Hindi",
+            "pl": "Polish",
+            "nl": "Dutch",
+            "tr": "Turkish",
+        }
+        src_label = src_map.get(base, f"the source language of the transcript (language code: {base})")
+        return (src_label, "Traditional Chinese (Taiwan)", False)
+
     def translate_segments(
         self,
         segments: list[dict],
@@ -618,7 +659,7 @@ class LLMService:
         Translate Whisper segments to the paired language:
           Chinese (zh / zh-TW / zh-CN)  →  English
           English (en)                   →  Chinese (Traditional, Taiwan)
-          Other                          →  Chinese (Traditional, Taiwan)
+          Other (ja, ko, vi, …)          →  Chinese (Traditional, Taiwan), same pipeline as en→zh
 
         Each segment dict has: {start, end, text}
         Returns a list of {start, end, original, translated}.
@@ -626,13 +667,12 @@ class LLMService:
         Strategy: batch segments (≤30 per call) and use numbered lines so
         the LLM output can be mapped 1-to-1 back to the original segments.
         """
-        is_chinese = detected_language.lower().startswith("zh")
-        if is_chinese:
-            src_label = "Traditional Chinese"
-            tgt_label = "English"
-        else:
-            src_label = "English"
-            tgt_label = "Traditional Chinese (Taiwan)"
+        src_label, tgt_label, is_chinese = self._segment_translation_labels(detected_language)
+        print(
+            f"[LLM] translate_segments route: lang={detected_language!r} "
+            f"-> {src_label} -> {tgt_label}",
+            flush=True,
+        )
 
         BATCH = 30
         results: list[dict] = []
@@ -705,13 +745,12 @@ class LLMService:
         detected_language: str,
         model: str = None,
     ) -> list[dict]:
-        is_chinese = detected_language.lower().startswith("zh")
-        if is_chinese:
-            src_label = "Traditional Chinese"
-            tgt_label = "English"
-        else:
-            src_label = "English"
-            tgt_label = "Traditional Chinese (Taiwan)"
+        src_label, tgt_label, is_chinese = self._segment_translation_labels(detected_language)
+        print(
+            f"[LLM] translate_segments_async route: lang={detected_language!r} "
+            f"-> {src_label} -> {tgt_label}",
+            flush=True,
+        )
 
         BATCH = 30
         _model = model or self.translation_model
