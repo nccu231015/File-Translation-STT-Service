@@ -44,7 +44,7 @@ class STTService:
     def __init__(self, model_size="tiny"):
         self.model_size = model_size
         self.model = None
-        self.lock = threading.Lock()  # Protect model inference
+        self._init_lock = threading.Lock()  # Protect model initialization only (not inference)
         # Set in _ensure_model_loaded: "cuda" or "cpu"
         self.whisper_device = "cpu"
 
@@ -56,7 +56,7 @@ class STTService:
         print(f"[STT] Pre-warming {model_size} model in background thread...", flush=True)
 
     def _ensure_model_loaded(self):
-        with self.lock:
+        with self._init_lock:
             if self.model:
                 return
 
@@ -205,8 +205,7 @@ class STTService:
         with mgr:
             print(f"[STT] Starting transcription for {audio_path}...", flush=True)
 
-            with self.lock:
-                segment_list, full_text, info = self._run_transcribe_collect(audio_path, language=None)
+            segment_list, full_text, info = self._run_transcribe_collect(audio_path, language=None)
 
             lang0 = info.language
 
@@ -236,8 +235,7 @@ class STTService:
                             audio_path, slice_path, start_sec=offset_sec, duration_sec=window_sec
                         )
                         if ok:
-                            with self.lock:
-                                _, _txt, info_slice = self._run_transcribe_collect(slice_path, language=None)
+                            _, _txt, info_slice = self._run_transcribe_collect(slice_path, language=None)
                             alt = info_slice.language
                             print(
                                 f"[STT] Delayed sample language={alt!r} p={info_slice.language_probability}",
@@ -250,10 +248,9 @@ class STTService:
                                     f"(first pass was {lang0!r}).",
                                     flush=True,
                                 )
-                                with self.lock:
-                                    segment_list, full_text, info = self._run_transcribe_collect(
-                                        audio_path, language=forced
-                                    )
+                                segment_list, full_text, info = self._run_transcribe_collect(
+                                    audio_path, language=forced
+                                )
                             else:
                                 print(
                                     f"[STT] Delayed sample still not zh/en/yue ({alt!r}); "
