@@ -260,7 +260,7 @@ async def stt_process_for_n8n(
 
             # ── minutes mode: Full analysis + bilingual Word document generation ────
 
-            # Step 4: LLM analysis (Traditional Chinese output)
+            # Step 4a: LLM analysis (Traditional Chinese output)
             llm_options = {"temperature": temperature, "num_predict": num_predict}
             model_override = model.strip() or None
             print(f"[n8n STT] Running LLM analysis | model={model_override or 'default'} options={llm_options}", flush=True)
@@ -268,6 +268,34 @@ async def stt_process_for_n8n(
                 llm_service.analyze_meeting_transcript, transcript_text,
                 model_override, temperature, num_predict
             )
+
+            # Step 4b: Validity check — if key fields are all empty, the LLM JSON parse
+            # likely failed and triggered fallback. Retry once with a larger num_predict
+            # to give the model more room to output complete JSON.
+            _is_analysis_empty = (
+                not analysis.get("meeting_objective", "").strip()
+                and not analysis.get("decisions", [])
+                and not analysis.get("action_items", [])
+                and not analysis.get("attendees", "")
+            )
+            if _is_analysis_empty:
+                _retry_num_predict = max(num_predict * 2, 2048)
+                print(
+                    f"[n8n STT] Analysis key fields are all empty (likely JSON parse fallback). "
+                    f"Retrying with num_predict={_retry_num_predict} ...",
+                    flush=True,
+                )
+                analysis = await run_in_threadpool(
+                    llm_service.analyze_meeting_transcript, transcript_text,
+                    model_override, temperature, _retry_num_predict
+                )
+                print(
+                    f"[n8n STT] Retry analysis complete. "
+                    f"meeting_objective={bool(analysis.get('meeting_objective'))} "
+                    f"decisions={len(analysis.get('decisions', []))} "
+                    f"action_items={len(analysis.get('action_items', []))}",
+                    flush=True,
+                )
 
             # Step 5: Translate analysis to English (for bilingual minutes)
             try:
