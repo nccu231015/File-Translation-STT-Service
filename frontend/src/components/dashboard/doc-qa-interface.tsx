@@ -212,24 +212,42 @@ export function DocQAInterface() {
         // because the React state (currentSessionId) won't update mid-loop.
         let activeSessionId = currentSessionId;
 
-        for (const f of pdfs) {
-            const id = `${f.name}-${Date.now()}`;
-            setUploadingFiles(prev => [...prev, { id, name: f.name, size: f.size, status: 'uploading' }]);
+        // 1. Immediately add all selected files to the uploading UI state
+        const filesWithIds = pdfs.map(f => ({
+            file: f,
+            id: `${f.name}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+        }));
+        
+        setUploadingFiles(prev => [
+            ...prev,
+            ...filesWithIds.map(({ file, id }) => ({
+                id,
+                name: file.name,
+                size: file.size,
+                status: 'uploading' as FileStatus
+            }))
+        ]);
+
+        // 2. Process them sequentially
+        for (const { file, id } of filesWithIds) {
             try {
-                const data = await uploadDocument(f, activeSessionId);
+                const data = await uploadDocument(file, activeSessionId);
+                // Remove from uploading list upon success
                 setUploadingFiles(prev => prev.filter(u => u.id !== id));
                 if (data.session_id) {
                     activeSessionId = data.session_id;
                     setCurrentSessionId(data.session_id);
                 }
-                toast.success(`${f.name} 已成功寫入知識庫`);
+                toast.success(`${file.name} 已成功寫入知識庫`);
             } catch (err: unknown) {
                 const msg = err instanceof Error ? err.message : '未知錯誤';
+                // Mark as error
                 setUploadingFiles(prev => prev.map(u => u.id === id ? { ...u, status: 'error', errorMsg: msg } : u));
-                toast.error(`${f.name} 上傳失敗`);
+                toast.error(`${file.name} 上傳失敗`);
             }
         }
-        // Refresh both session list and file list once after all uploads complete
+
+        // 3. Refresh both session list and file list once after all uploads complete
         await loadSessions();
         if (activeSessionId) {
             try {
