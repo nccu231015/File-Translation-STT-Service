@@ -1091,7 +1091,7 @@ async def document_ingest(
         print(f"[Document Ingest] Received: {file.filename} ({file.content_type}) session={sid}", flush=True)
         content = await file.read()
         async with httpx.AsyncClient(
-            timeout=httpx.Timeout(connect=10.0, read=120.0, write=60.0, pool=10.0)
+            timeout=httpx.Timeout(connect=10.0, read=300.0, write=60.0, pool=10.0)
         ) as client:
             n8n_resp = await client.post(
                 N8N_DOC_INGEST,
