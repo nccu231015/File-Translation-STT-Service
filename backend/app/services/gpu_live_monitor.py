@@ -167,3 +167,13 @@ def gpu_work_scope(module: str):
         yield
     finally:
         gpu_work_release(module)
+
+
+def get_active_modules() -> dict[str, int]:
+    """Return a snapshot of modules currently holding GPU work refcounts.
+
+    Keys are module label strings; values are the refcount (concurrent tasks).
+    Safe to call from async context — only acquires a short threading lock.
+    """
+    with _lock:
+        return {k: v for k, v in _refs.items() if v > 0}

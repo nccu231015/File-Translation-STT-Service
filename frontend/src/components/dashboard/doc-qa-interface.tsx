@@ -64,6 +64,24 @@ export function DocQAInterface() {
     const [isDragging, setIsDragging] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
+    // ── System load indicator ─────────────────────────────────────────────────
+    const [systemBusy, setSystemBusy] = useState(false);
+    useEffect(() => {
+        const backendUrl = `http://${window.location.hostname}:8000`;
+        const check = async () => {
+            try {
+                const res = await fetch(`${backendUrl}/system-status`);
+                if (res.ok) {
+                    const data = await res.json();
+                    setSystemBusy(!!data.busy);
+                }
+            } catch { /* ignore network errors */ }
+        };
+        check();
+        const timer = setInterval(check, 15000); // poll every 15s
+        return () => clearInterval(timer);
+    }, []);
+
     // Voice Input
     const [isRecording, setIsRecording] = useState(false);
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -425,6 +443,16 @@ export function DocQAInterface() {
                     </p>
                 </div>
                 <input ref={fileInputRef} type="file" accept=".pdf" multiple className="hidden" onChange={handleFileChange} />
+
+                {/* System busy warning */}
+                {systemBusy && (
+                    <div className="mx-3 mb-1 flex items-start gap-1.5 rounded-lg bg-amber-50 border border-amber-200 px-2.5 py-1.5">
+                        <span className="text-amber-500 mt-0.5 text-xs">⚠</span>
+                        <p className="text-[11px] text-amber-700 leading-snug">
+                            系統目前運算負載較高，文件處理可能需要較長時間，請耐心等候。
+                        </p>
+                    </div>
+                )}
 
                 {/* File list */}
                 <div className="overflow-y-auto px-3 pb-2 space-y-1 max-h-48">

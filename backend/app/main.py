@@ -17,6 +17,7 @@ from app.services.gpu_live_monitor import (
     gpu_work_acquire,
     gpu_work_release,
     gpu_work_scope,
+    get_active_modules,
 )
 from app.services.meeting_minutes_docx import MeetingMinutesDocxService
 from app.services.transcript_docx_service import TranscriptDocxService
@@ -98,6 +99,38 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ── System Status ─────────────────────────────────────────────────────────────
+@app.get("/system-status")
+async def system_status():
+    """Return a lightweight system load snapshot for the frontend.
+
+    - active_modules: which GPU-heavy modules are currently running and how many tasks.
+    - translate_slots_used: how many PDF translation parallel slots are currently occupied.
+    - translate_slots_total: the configured max parallel slots for translation.
+    - busy: True when translation is near full capacity (>= 80% of slots used).
+    """
+    active = get_active_modules()
+    translate_total = llm_service._translate_batch_sem._value + (
+        # _value decreases as slots are acquired; compute used = total - available
+        # asyncio.Semaphore stores current available count in _value
+        0  # placeholder; real computation below
+    )
+    sem = llm_service._translate_batch_sem
+    # asyncio.Semaphore._value = remaining available slots
+    translate_available = sem._value
+    translate_total_cfg = int(os.getenv("OLLAMA_TRANSLATE_MAX_PARALLEL", "15"))
+    translate_used = max(0, translate_total_cfg - translate_available)
+
+    busy = translate_used >= int(translate_total_cfg * 0.8)
+
+    return {
+        "busy": busy,
+        "active_modules": active,
+        "translate_slots_used": translate_used,
+        "translate_slots_total": translate_total_cfg,
+    }
+
 
 class LoginRequest(BaseModel):
     username: str
@@ -1079,50 +1112,67 @@ async def document_ingest(
     if file.content_type not in allowed and not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported")
 
+    # Temporarily throttle PDF translation to free up GPU compute for the embedding router.
+    # We acquire extra slots from the translation semaphore so that at most
+    # (total - INGEST_RESERVED) translation tasks can run while this upload is active.
+    INGEST_RESERVED = int(os.getenv("INGEST_GPU_RESERVED_SLOTS", "10"))
+    _throttle_holders: list[bool] = []
+    sem = llm_service._translate_batch_sem
+    for _ in range(INGEST_RESERVED):
+        acquired = await asyncio.wait_for(asyncio.shield(sem.acquire()), timeout=2.0) if sem._value > 0 else None
+        if acquired is not None:
+            _throttle_holders.append(True)
+
     try:
-        sid = (session_id or "").strip() or None
-        if not sid:
-            new_sess = await doc_store.create_empty_session("新對話")
-            sid = new_sess["session_id"]
-        else:
-            if not await doc_store.get_session(sid):
-                raise HTTPException(status_code=404, detail="Session not found")
-
-        print(f"[Document Ingest] Received: {file.filename} ({file.content_type}) session={sid}", flush=True)
-        content = await file.read()
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(connect=10.0, read=300.0, write=60.0, pool=10.0)
-        ) as client:
-            n8n_resp = await client.post(
-                N8N_DOC_INGEST,
-                files={"file": (file.filename, content, file.content_type or "application/pdf")}
-            )
-            n8n_resp.raise_for_status()
-            raw = n8n_resp.text.strip()
-            if not raw:
-                try:
-                    await doc_store.add_file(sid, file.filename, len(content))
-                except Exception as fe:
-                    print(f"[Document Ingest] Warning: failed to persist file metadata: {fe}", flush=True)
-                return {
-                    "status": "ok",
-                    "filename": file.filename,
-                    "message": "Ingested (no detail returned)",
-                    "session_id": sid,
-                }
-            result = n8n_resp.json()
-
-        print(f"[Document Ingest] Done: {file.filename}", flush=True)
         try:
-            await doc_store.add_file(sid, file.filename, len(content))
-        except Exception as fe:
-            print(f"[Document Ingest] Warning: failed to persist file metadata: {fe}", flush=True)
-        return {"status": "ok", "filename": file.filename, "session_id": sid, **result}
+            sid = (session_id or "").strip() or None
+            if not sid:
+                new_sess = await doc_store.create_empty_session("新對話")
+                sid = new_sess["session_id"]
+            else:
+                if not await doc_store.get_session(sid):
+                    raise HTTPException(status_code=404, detail="Session not found")
 
-    except Exception as e:
-        print(f"[Document Ingest Error] {e}", flush=True)
-        print(traceback.format_exc(), flush=True)
-        raise HTTPException(status_code=500, detail=str(e))
+            print(f"[Document Ingest] Received: {file.filename} ({file.content_type}) session={sid}", flush=True)
+            content = await file.read()
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(connect=10.0, read=300.0, write=60.0, pool=10.0)
+            ) as client:
+                n8n_resp = await client.post(
+                    N8N_DOC_INGEST,
+                    files={"file": (file.filename, content, file.content_type or "application/pdf")}
+                )
+                n8n_resp.raise_for_status()
+                raw = n8n_resp.text.strip()
+                if not raw:
+                    try:
+                        await doc_store.add_file(sid, file.filename, len(content))
+                    except Exception as fe:
+                        print(f"[Document Ingest] Warning: failed to persist file metadata: {fe}", flush=True)
+                    return {
+                        "status": "ok",
+                        "filename": file.filename,
+                        "message": "Ingested (no detail returned)",
+                        "session_id": sid,
+                    }
+                result = n8n_resp.json()
+
+            print(f"[Document Ingest] Done: {file.filename}", flush=True)
+            try:
+                await doc_store.add_file(sid, file.filename, len(content))
+            except Exception as fe:
+                print(f"[Document Ingest] Warning: failed to persist file metadata: {fe}", flush=True)
+            return {"status": "ok", "filename": file.filename, "session_id": sid, **result}
+
+        except Exception as e:
+            print(f"[Document Ingest Error] {e}", flush=True)
+            print(traceback.format_exc(), flush=True)
+            raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        # Always release throttle slots back to the translation semaphore
+        for _ in _throttle_holders:
+            sem.release()
+
 
 
 @app.get("/document-files")
