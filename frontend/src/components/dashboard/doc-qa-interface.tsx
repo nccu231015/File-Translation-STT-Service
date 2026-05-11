@@ -207,21 +207,35 @@ export function DocQAInterface() {
     const processFiles = useCallback(async (files: File[]) => {
         const pdfs = files.filter(f => f.name.toLowerCase().endsWith('.pdf'));
         if (pdfs.length === 0) { toast.error('請上傳 PDF 格式的文件'); return; }
+
+        // Use a local variable to track the session ID across sequential uploads,
+        // because the React state (currentSessionId) won't update mid-loop.
+        let activeSessionId = currentSessionId;
+
         for (const f of pdfs) {
             const id = `${f.name}-${Date.now()}`;
             setUploadingFiles(prev => [...prev, { id, name: f.name, size: f.size, status: 'uploading' }]);
             try {
-                const data = await uploadDocument(f, currentSessionId);
+                const data = await uploadDocument(f, activeSessionId);
                 setUploadingFiles(prev => prev.filter(u => u.id !== id));
                 if (data.session_id) {
+                    activeSessionId = data.session_id;
                     setCurrentSessionId(data.session_id);
                 }
-                await loadSessions();
                 toast.success(`${f.name} 已成功寫入知識庫`);
             } catch (err: unknown) {
                 const msg = err instanceof Error ? err.message : '未知錯誤';
                 setUploadingFiles(prev => prev.map(u => u.id === id ? { ...u, status: 'error', errorMsg: msg } : u));
                 toast.error(`${f.name} 上傳失敗`);
+            }
+        }
+        // Refresh both session list and file list once after all uploads complete
+        await loadSessions();
+        if (activeSessionId) {
+            try {
+                setPersistedFiles(await listDocFiles(activeSessionId));
+            } catch (e) {
+                console.error('Failed to reload doc files after upload', e);
             }
         }
     // eslint-disable-next-line react-hooks/exhaustive-deps
