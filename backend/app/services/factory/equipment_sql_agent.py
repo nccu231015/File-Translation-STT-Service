@@ -372,7 +372,7 @@ class EquipmentSqlAgent:
         """Alias for compatibility with router agent."""
         return await self.chat(question)
 
-    async def chat(self, question: str, history: List[Dict[str, str]] = None) -> Dict[str, Any]:
+    async def chat(self, question: str, history: List[Dict[str, str]] = None, num_ctx: int = None) -> Dict[str, Any]:
         """支援上下文記憶的聊天接口，回傳與 SqlAgent 格式一致的 dict。"""
         today_str = datetime.date.today().isoformat()
         current_date_info = f"目前的系統日期是 {today_str}。\n\n{self._get_period_info()}"
@@ -484,7 +484,8 @@ class EquipmentSqlAgent:
             result = await self.llm.chat_with_tools(
                 messages=messages,
                 tools=self._get_tool_schemas(),
-                tool_executor_obj=self.tools
+                tool_executor_obj=self.tools,
+                num_ctx=num_ctx
             )
             response_text = self.llm.s2tw.convert(result["response"])
             return {"response": response_text, "chart_config": result.get("chart_config")}

@@ -207,7 +207,7 @@ class LLMService:
             print(f"[LLM JSON Error] {e}")
             return {}
 
-    async def chat_with_tools(self, messages: list, tools: list, tool_executor_obj: Any) -> dict:
+    async def chat_with_tools(self, messages: list, tools: list, tool_executor_obj: Any, num_ctx: int = None) -> dict:
         """
         Full tool calling loop:
         1. AI decides which tool to use
@@ -225,7 +225,7 @@ class LLMService:
                     model=self.model,
                     messages=messages,
                     tools=tools,
-                    options=self._chat_options(),
+                    options=self._chat_options(num_ctx=num_ctx),
                 )
             )
 
@@ -338,7 +338,7 @@ class LLMService:
                         lambda: self.client.chat(
                             model=self.model,
                             messages=synthesis_messages,
-                            options=self._chat_options(),
+                            options=self._chat_options(num_ctx=num_ctx),
                         )
                     )
                     content = final_response.get("message", {}).get("content", "").strip()
@@ -451,6 +451,7 @@ class LLMService:
         model: str = None,
         temperature: float = 0.2,
         num_predict: int = 1024,
+        num_ctx: int = None,
     ) -> dict:
         """
         Analyzes a meeting transcript to extract summary, decisions, and action items.
@@ -468,7 +469,7 @@ class LLMService:
         
         # Simple case: Short text (fits in one chunk)
         if len(text) <= chunk_size:
-            return self._analyze_chunk(text, final=True, model=model, temperature=temperature, num_predict=num_predict)
+            return self._analyze_chunk(text, final=True, model=model, temperature=temperature, num_predict=num_predict, num_ctx=num_ctx)
 
         # Long text: Map-Reduce
         print("[LLM] Transcript is long. Starting Map-Reduce analysis...")
@@ -494,14 +495,14 @@ class LLMService:
         
         for idx, chunk in enumerate(chunks):
             print(f"[LLM] Analyzing chunk {idx + 1}/{len(chunks)} (Length: {len(chunk)})...")
-            partial = self._analyze_chunk(chunk, final=False, model=model, temperature=temperature, num_predict=num_predict)
+            partial = self._analyze_chunk(chunk, final=False, model=model, temperature=temperature, num_predict=num_predict, num_ctx=num_ctx)
             if partial:
                 partial_results.append(partial)
 
         # Reduce
         print("[LLM] Synthesizing final meeting minutes...")
         combined_text = "\n\n".join([json.dumps(p, ensure_ascii=False) for p in partial_results])
-        final_result = self._analyze_chunk(combined_text, final=True, is_reduce_step=True, model=model, temperature=temperature, num_predict=num_predict)
+        final_result = self._analyze_chunk(combined_text, final=True, is_reduce_step=True, model=model, temperature=temperature, num_predict=num_predict, num_ctx=num_ctx)
         
         return final_result
 
@@ -513,6 +514,7 @@ class LLMService:
         model: str = None,
         temperature: float = 0.2,
         num_predict: int = 1024,
+        num_ctx: int = None,
     ) -> dict:
         """
         Helper to call LLM for meeting analysis.
@@ -571,7 +573,7 @@ class LLMService:
         try:
             # Use reasoning model for analysis (override if caller specifies a model)
             _model = model or self.analysis_model
-            _options = self._chat_options(temperature=temperature, num_predict=num_predict)
+            _options = self._chat_options(temperature=temperature, num_predict=num_predict, num_ctx=num_ctx)
             print(f"[LLM] _analyze_chunk model={_model} options={_options}", flush=True)
             response = self.client.chat(model=_model, messages=messages, format="json", options=_options)
             content = response["message"]["content"]

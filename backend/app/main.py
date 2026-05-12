@@ -294,12 +294,12 @@ async def stt_process_for_n8n(
             # ── minutes mode: Full analysis + bilingual Word document generation ────
 
             # Step 4a: LLM analysis (Traditional Chinese output)
-            llm_options = {"temperature": temperature, "num_predict": num_predict}
+            llm_options = {"temperature": temperature, "num_predict": num_predict, "num_ctx": num_ctx}
             model_override = model.strip() or None
             print(f"[n8n STT] Running LLM analysis | model={model_override or 'default'} options={llm_options}", flush=True)
             analysis = await run_in_threadpool(
                 llm_service.analyze_meeting_transcript, transcript_text,
-                model_override, temperature, num_predict
+                model_override, temperature, num_predict, num_ctx
             )
 
             # Step 4b: Validity check — if key fields are all empty, the LLM JSON parse
@@ -459,7 +459,7 @@ async def stt_process_for_n8n(
         raise HTTPException(status_code=500, detail=f"STT processing failed: {str(e)}")
 
 @app.post("/pdf-translation")
-async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = File(...), target_lang: str = Form(None), debug: str = Form("false"), is_complex_table: str = Form("false")):
+async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = File(...), target_lang: str = Form(None), debug: str = Form("false"), is_complex_table: str = Form("false"), num_ctx: int = Form(None)):
     debug_mode = str(debug).lower() in ("true", "1", "t", "yes", "on")
     is_complex_table_bool = str(is_complex_table).lower() in ("true", "1", "t", "yes", "on")
     temp_input_path = ""
@@ -477,7 +477,7 @@ async def translate_pdf(background_tasks: BackgroundTasks, file: UploadFile = Fi
             f"[PDF] translate_pdf temp_saved bytes={_psz} debug={debug_mode} complex_table={is_complex_table_bool}",
             flush=True,
         )
-        result_list = await pdf_service.process_pdf(temp_input_path, force_target_lang=target_lang, debug_mode=debug_mode, is_complex_table=is_complex_table_bool)
+        result_list = await pdf_service.process_pdf(temp_input_path, force_target_lang=target_lang, debug_mode=debug_mode, is_complex_table=is_complex_table_bool, num_ctx=num_ctx)
         output_pdf_path = result_list[0]["file_path"]
         
         with open(output_pdf_path, 'rb') as f:
@@ -850,6 +850,11 @@ async def document_process_for_n8n(
     if model_override:
         pdf_service.ollama_model = model_override
     pdf_service.temperature = temperature
+    
+    # Store original and set new num_ctx if provided
+    original_num_ctx = pdf_service.ollama_num_ctx
+    if num_ctx:
+        pdf_service.ollama_num_ctx = num_ctx
 
     print(
         f"[n8n Document] model={pdf_service.ollama_model} | "
@@ -865,12 +870,14 @@ async def document_process_for_n8n(
             target_lang=target_lang,
             debug="false",
             is_complex_table=is_complex_table,
+            num_ctx=num_ctx,
         )
         return result
     finally:
         # Always restore original settings to avoid affecting other concurrent requests
         pdf_service.ollama_model = original_model
         pdf_service.temperature = original_temperature
+        pdf_service.ollama_num_ctx = original_num_ctx
 
 @app.post("/chat")
 async def chat_text(payload: dict):

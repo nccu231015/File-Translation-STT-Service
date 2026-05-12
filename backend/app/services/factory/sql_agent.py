@@ -300,7 +300,7 @@ class SqlAgent:
         ]
         return "\n".join(lines)
 
-    async def chat(self, question: str, history: List[Dict[str, str]] = None) -> dict:
+    async def chat(self, question: str, history: List[Dict[str, str]] = None, num_ctx: int = None) -> dict:
         """
         支援上下文記憶的聊天接口。
         Returns: {"response": str, "chart_config": dict | None}
@@ -391,7 +391,8 @@ class SqlAgent:
             result = await self.llm.chat_with_tools(
                 messages=messages,
                 tools=self._get_tool_schemas(),
-                tool_executor_obj=self.tools
+                tool_executor_obj=self.tools,
+                num_ctx=num_ctx
             )
             response_text = self.llm.s2tw.convert(result["response"])
             return {"response": response_text, "chart_config": result.get("chart_config")}

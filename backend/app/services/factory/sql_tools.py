@@ -512,7 +512,7 @@ class FactorySqlTools:
         from datetime import datetime as dt, timedelta
 
         # Current state: classify latest CODE per device using confirmed code mapping
-        # Source: CIM_MQTTCOLLECT_AM_PM; DATETIMES format = YYYYMMDDTHHMMSS.xxxxx
+        # Source: CIM_MQTTCOLLECT; DATETIMES format = YYYYMMDDTHHMMSS.xxxxx
         seven_days_ago_ymd = (dt.strptime(target_date, "%Y-%m-%d") - timedelta(days=7)).strftime("%Y%m%d")
         query_state = f"""
             SELECT
@@ -879,7 +879,7 @@ class FactorySqlTools:
                     "GDHM" DESC NULLS LAST
             ),
             -- LAG within each (TOPIC, date) to avoid cross-day bleeding
-            -- Source: CIM_MQTTCOLLECT_AM_PM; DATETIMES format = YYYYMMDDTHHMMSS.xxxxx
+            -- Source: CIM_MQTTCOLLECT; DATETIMES format = YYYYMMDDTHHMMSS.xxxxx
             deltas AS (
                 SELECT
                     "TOPIC" AS "SBMC",
@@ -893,7 +893,7 @@ class FactorySqlTools:
                         + SUBSTRING("DATETIMES", 12, 2)::INT * 60
                         + SUBSTRING("DATETIMES", 14, 2)::INT
                     ) OVER (PARTITION BY "TOPIC", SUBSTRING("DATETIMES", 1, 8) ORDER BY "DATETIMES") AS duration_sec
-                FROM "public"."CIM_MQTTCOLLECT_AM_PM"
+                FROM "public"."CIM_MQTTCOLLECT"
                 WHERE SUBSTRING("DATETIMES", 1, 8) BETWEEN '{start_ymd}' AND '{end_ymd}'
                   AND LENGTH("DATETIMES") >= 14
             ),
@@ -948,14 +948,14 @@ class FactorySqlTools:
                             PARTITION BY b."TOPIC"
                             ORDER BY COUNT(*) DESC
                         ) AS "RN"
-                    FROM "public"."CIM_MQTTCOLLECT_AM_PM" b
+                    FROM "public"."CIM_MQTTCOLLECT" b
                     JOIN "public"."CIM_MQTTCODEERR" err
                         ON b."CODE" = err."PLCCODE"
                     WHERE b."CODE" LIKE 'B%'
                       AND SUBSTRING(b."DATETIMES", 1, 8) BETWEEN '{start_ymd}' AND '{end_ymd}'
                       AND b."TOPIC" IN ({topics_in})
                       AND EXISTS (
-                          SELECT 1 FROM "public"."CIM_MQTTCOLLECT_AM_PM" a
+                          SELECT 1 FROM "public"."CIM_MQTTCOLLECT" a
                           WHERE a."TOPIC" = b."TOPIC"
                             AND a."CODE" IN ('A001','A006','A007','A008','A009')
                             AND SUBSTRING(a."DATETIMES", 1, 15) = SUBSTRING(b."DATETIMES", 1, 15)
@@ -981,14 +981,14 @@ class FactorySqlTools:
                                 PARTITION BY b."TOPIC"
                                 ORDER BY COUNT(*) DESC
                             ) AS "RN"
-                        FROM "public"."CIM_MQTTCOLLECT_AM_PM" b
+                        FROM "public"."CIM_MQTTCOLLECT" b
                         JOIN "public"."CIM_MQTTCODEERR" err
                             ON b."CODE" = err."PLCCODE"
                         WHERE b."CODE" LIKE 'B%'
                           AND SUBSTRING(b."DATETIMES", 1, 8) BETWEEN '{start_ymd}' AND '{end_ymd}'
                           AND b."TOPIC" IN ({missing_in})
                           AND EXISTS (
-                              SELECT 1 FROM "public"."CIM_MQTTCOLLECT_AM_PM" a
+                              SELECT 1 FROM "public"."CIM_MQTTCOLLECT" a
                               WHERE a."TOPIC" = b."TOPIC"
                                 AND a."CODE" IN ('A001','A006','A007','A008','A009')
                                 AND SUBSTRING(a."DATETIMES", 1, 13) = SUBSTRING(b."DATETIMES", 1, 13)
@@ -1112,8 +1112,8 @@ class FactorySqlTools:
                 eq_label = info_rows[0].get("EQUIPMENT_NAME") or info_rows[0].get("EQUIPMENT_CODE") or safe_kw
             else:
                 eq_label = safe_kw
-            # AM_PM.TOPIC = EQUIPMENT_CODE (short name, e.g. 'Sonic_501')
-            # EQUIPMENT_INFO_DICT.TOPIC is MQTT path, never matches AM_PM.TOPIC.
+            # COLLECT.TOPIC = EQUIPMENT_CODE (short name, e.g. 'Sonic_501')
+            # EQUIPMENT_INFO_DICT.TOPIC is MQTT path, never matches COLLECT.TOPIC.
             # Match EQUIPMENT_CODE only, with ILIKE fallback for safety.
             topic_filter = f"""AND (
                 b."TOPIC" IN (
@@ -1125,7 +1125,7 @@ class FactorySqlTools:
             )"""
         elif floor:
             safe_floor = floor.replace("'", "''")
-            # AM_PM.TOPIC = EQUIPMENT_CODE; filter by floor via EQUIPMENT_INFO_DICT
+            # COLLECT.TOPIC = EQUIPMENT_CODE; filter by floor via EQUIPMENT_INFO_DICT
             topic_filter = f"""
                 AND b."TOPIC" IN (
                     SELECT DISTINCT "EQUIPMENT_CODE" FROM "public"."EQUIPMENT_INFO_DICT"
@@ -1141,7 +1141,7 @@ class FactorySqlTools:
                 SELECT
                     err."NOTE",
                     COUNT(*) AS cnt
-                FROM "public"."CIM_MQTTCOLLECT_AM_PM" b
+                FROM "public"."CIM_MQTTCOLLECT" b
                 JOIN "public"."CIM_MQTTCODEERR" err
                     ON b."CODE" = err."PLCCODE"
                 WHERE b."CODE" LIKE 'B%'
@@ -1149,7 +1149,7 @@ class FactorySqlTools:
                   AND LENGTH(b."DATETIMES") >= 14
                   {topic_filter}
                   AND EXISTS (
-                      SELECT 1 FROM "public"."CIM_MQTTCOLLECT_AM_PM" a
+                      SELECT 1 FROM "public"."CIM_MQTTCOLLECT" a
                       WHERE a."TOPIC" = b."TOPIC"
                         AND a."CODE" IN ('A001','A006','A007','A008','A009')
                         AND SUBSTRING(a."DATETIMES", 1, 15) = SUBSTRING(b."DATETIMES", 1, 15)
@@ -1273,8 +1273,8 @@ class FactorySqlTools:
                 scope_label = info_rows[0].get("EQUIPMENT_NAME") or info_rows[0].get("EQUIPMENT_CODE") or safe_kw
             else:
                 scope_label = safe_kw
-            # AM_PM.TOPIC = EQUIPMENT_CODE (short name, e.g. 'Sonic_501')
-            # EQUIPMENT_INFO_DICT.TOPIC is MQTT path, never matches AM_PM.TOPIC.
+            # COLLECT.TOPIC = EQUIPMENT_CODE (short name, e.g. 'Sonic_501')
+            # EQUIPMENT_INFO_DICT.TOPIC is MQTT path, never matches COLLECT.TOPIC.
             # Match EQUIPMENT_CODE only, with ILIKE fallback for safety.
             scope_filter = f"""AND (
                 b."TOPIC" IN (
@@ -1289,20 +1289,20 @@ class FactorySqlTools:
             top_m_notes = 30
         elif floor:
             safe_floor = floor.replace("'", "''")
-            # AM_PM.TOPIC = EQUIPMENT_CODE; filter by floor via EQUIPMENT_INFO_DICT
+            # COLLECT.TOPIC = EQUIPMENT_CODE; filter by floor via EQUIPMENT_INFO_DICT
             scope_filter = f'AND ei."EQUIP_INSTALL_POSITION" ILIKE \'%{safe_floor}%\''
 
         # Join B-codes (fault reason) with co-occurring DOWN events (A001/A006-A009)
         # B-codes appear within the same second as DOWN A-codes (co-occurrence pattern confirmed)
         # No CATE filter needed - B-code CATE is mostly IDEL/IDEL1, not DOWN
         # IMPORTANT: LEFT JOIN EQUIPMENT_INFO_DICT must use deduplicated subquery (DISTINCT ON EQUIPMENT_CODE)
-        # AM_PM.TOPIC = EQUIPMENT_CODE (short name); EQUIPMENT_INFO_DICT.TOPIC is MQTT path (different format)
+        # COLLECT.TOPIC = EQUIPMENT_CODE (short name); EQUIPMENT_INFO_DICT.TOPIC is MQTT path (different format)
         query = f"""
             SELECT
                 COALESCE(ei."EQUIPMENT_NAME", b."TOPIC") AS "設備名稱",
                 err."NOTE"                                AS "故障原因",
                 COUNT(*)                                  AS "發生次數"
-            FROM "public"."CIM_MQTTCOLLECT_AM_PM" b
+            FROM "public"."CIM_MQTTCOLLECT" b
             JOIN "public"."CIM_MQTTCODEERR" err
                 ON b."CODE" = err."PLCCODE"
             LEFT JOIN (
@@ -1317,7 +1317,7 @@ class FactorySqlTools:
               AND err."NOTE" IS NOT NULL
               AND SUBSTRING(b."DATETIMES", 1, 8) BETWEEN '{start_ymd}' AND '{end_ymd}'
               AND EXISTS (
-                  SELECT 1 FROM "public"."CIM_MQTTCOLLECT_AM_PM" a
+                  SELECT 1 FROM "public"."CIM_MQTTCOLLECT" a
                   WHERE a."TOPIC" = b."TOPIC"
                     AND a."CODE" IN ('A001','A006','A007','A008','A009')
                     AND SUBSTRING(a."DATETIMES", 1, 15) = SUBSTRING(b."DATETIMES", 1, 15)
