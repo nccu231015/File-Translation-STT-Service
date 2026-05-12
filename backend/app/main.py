@@ -242,6 +242,7 @@ async def stt_process_for_n8n(
     mode: str = Form("stt_only"),          # "stt_only" or "minutes"
     temperature: float = Form(0.2),        # LLM temperature (0.0 strict ~ 1.0 creative)
     num_predict: int = Form(1024),         # Max tokens for LLM response
+    num_ctx: int = Form(4096),             # Context window size (override from n8n)
     model: str = Form(""),                 # Ollama model override (empty = use service default)
     initial_prompt: str = Form(""),        # Whisper initial prompt for terminology/style
     language: str = Form("zh"),            # Designated language for Whisper
