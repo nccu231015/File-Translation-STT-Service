@@ -49,7 +49,7 @@ class LLMService:
         )
 
         # Per-request caps (backend .env). Does not replace host systemd OLLAMA_*; prevents huge default num_ctx from crashing ggml_cuda.
-        self.ollama_num_ctx = _env_int_bounded("OLLAMA_NUM_CTX", 24576, 4096, 131072)
+        self.ollama_num_ctx = _env_int_bounded("OLLAMA_NUM_CTX", 4096, 4096, 131072)
         _tp = _env_int_bounded("OLLAMA_TRANSLATE_MAX_PARALLEL", 15, 1, 32)
         self._translate_batch_sem = asyncio.Semaphore(_tp)
         print(
