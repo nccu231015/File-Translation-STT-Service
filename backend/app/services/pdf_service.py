@@ -88,7 +88,7 @@ class PDFService:
 
         return cleaned
 
-    async def _translate_ollama(self, text: str, target_lang: str = "zh-TW", context: str = "") -> str:
+    async def _translate_ollama(self, text: str, target_lang: str = "zh-TW", context: str = "", num_ctx: int = None) -> str:
         """
         Translates text using Ollama API (Async), handling smart chunking if necessary.
         """
@@ -154,7 +154,7 @@ class PDFService:
                             "options": self._ollama_chat_options(
                                 temperature=self.temperature,
                                 num_predict=4096,
-                                top_p=0.9,
+                                num_ctx=num_ctx,
                             ),
                         }
                     )
@@ -187,7 +187,7 @@ class PDFService:
         
         return text
 
-    async def _translate_batch_ollama(self, texts: list, target_lang: str = "zh-TW", context: str = "") -> list:
+    async def _translate_batch_ollama(self, texts: list, target_lang: str = "zh-TW", context: str = "", num_ctx: int = None) -> list:
         """
         Batch-translates a list of texts in a single Ollama API call.
         Returns a list of translations in the same order.
@@ -260,6 +260,7 @@ class PDFService:
                                 temperature=self.temperature,
                                 num_predict=8192,
                                 top_p=0.9,
+                                num_ctx=num_ctx
                             ),
                         }
                     )
@@ -421,7 +422,7 @@ class PDFService:
         print(f"[PDF] Chunked translation complete. Original: {len(text)} chars -> Translated: {len(final_translation)} chars", flush=True)
         return final_translation
 
-    async def process_pdf(self, input_pdf_path: str, force_target_lang: str = None, debug_mode: bool = False, is_complex_table: bool = False):
+    async def process_pdf(self, input_pdf_path: str, force_target_lang: str = None, debug_mode: bool = False, is_complex_table: bool = False, num_ctx: int = None):
         """
         Processes the PDF (Async Entry Point).
         """
@@ -444,7 +445,8 @@ class PDFService:
                 output_path=output_pdf_path,
                 target_lang=target_lang,
                 debug_mode=debug_mode,
-                is_complex_table=is_complex_table
+                is_complex_table=is_complex_table,
+                num_ctx=num_ctx
             )
             
             return [

@@ -47,6 +47,7 @@ class PDFLayoutPreservingService:
         target_lang: str = "zh-TW",
         debug_mode: bool = False,
         is_complex_table: bool = False,
+        num_ctx: int = None,
     ):
         """
         Main pipeline: detect → extract → translate (async) → render.
@@ -66,7 +67,7 @@ class PDFLayoutPreservingService:
         async def bounded(page_num: int):
             async with self.semaphore:
                 return await self._process_single_page(
-                    input_path, page_num, total_pages, target_lang, debug_mode, is_complex_table
+                    input_path, page_num, total_pages, target_lang, debug_mode, is_complex_table, num_ctx
                 )
 
         # Launch all pages; asyncio.gather preserves result order
@@ -112,6 +113,7 @@ class PDFLayoutPreservingService:
         target_lang: str,
         debug_mode: bool,
         is_complex_table: bool = False,
+        num_ctx: int = None,
     ) -> str | None:
         """
         Process one page of the PDF:
@@ -390,7 +392,7 @@ class PDFLayoutPreservingService:
                     try:
                         if n_unique <= MAX_BATCH_SIZE:
                             unique_translations = await self.translate_batch_func(
-                                unique_texts, target_lang, page_context
+                                unique_texts, target_lang, page_context, num_ctx=num_ctx
                             )
                         else:
                             # Split into sub-batches and merge results in order
@@ -403,18 +405,18 @@ class PDFLayoutPreservingService:
                             for chunk_start in range(0, n_unique, MAX_BATCH_SIZE):
                                 chunk = unique_texts[chunk_start : chunk_start + MAX_BATCH_SIZE]
                                 chunk_results = await self.translate_batch_func(
-                                    chunk, target_lang, page_context
+                                    chunk, target_lang, page_context, num_ctx=num_ctx
                                 )
                                 unique_translations.extend(chunk_results)
                     except Exception as batch_err:
                         print(f"[PDF Layout] Batch translate error, falling back: {batch_err}", flush=True)
                         unique_translations = [
-                            await self.translate_func(t, target_lang, page_context)
+                            await self.translate_func(t, target_lang, page_context, num_ctx=num_ctx)
                             for t in unique_texts
                         ]
                 else:
                     unique_translations = [
-                        await self.translate_func(t, target_lang, page_context)
+                        await self.translate_func(t, target_lang, page_context, num_ctx=num_ctx)
                         for t in unique_texts
                     ]
 
