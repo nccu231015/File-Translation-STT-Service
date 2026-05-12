@@ -835,6 +835,7 @@ async def document_process_for_n8n(
     temperature: float = Form(0.1),           # Translation temperature from n8n
     target_lang: str = Form("zh-TW"),         # Target language forwarded from frontend via n8n
     is_complex_table: str = Form("false"),    # Forwarded from frontend toggle; true = YOLO protects tables, DOCX handles cells
+    num_ctx: Optional[int] = Form(None),      # Context window size override from n8n (None = use service default)
 ):
     """
     n8n Document Translation Microservice Entrypoint.
