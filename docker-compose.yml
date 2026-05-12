@@ -14,10 +14,12 @@ services:
       # host.docker.internal allows container to access host's Ollama service
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
       # Per API request options (sent from this container to host Ollama). Does NOT change ollama.service on the host.
-      - OLLAMA_NUM_CTX=32768
-      - OLLAMA_TRANSLATE_MAX_PARALLEL=8
-      # FORCE override model to avoid OOM
-      - OLLAMA_MODEL=gpt-oss:20b
+      - OLLAMA_NUM_CTX=4096
+      - OLLAMA_TRANSLATE_MAX_PARALLEL=20
+      # Use Qwen3 for better performance/VRAM balance
+      - OLLAMA_MODEL=qwen3:latest
+      - OLLAMA_ANALYSIS_MODEL=qwen3:latest
+      - OLLAMA_TRANSLATION_MODEL=qwen3:latest
       # Enable GPU for Faster Whisper and LayoutParser
       - FORCE_CPU=false
       # ── PDF Parallel Pages ─────────────────────────────────────────────────

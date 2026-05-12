@@ -20,10 +20,15 @@ def _env_int_bounded(key: str, default: int, lo: int, hi: int) -> int:
 
 
 class LLMService:
-    def __init__(self, model="gpt-oss:20b", analysis_model="qwen3:latest", translation_model="qwen3:latest"):
-        self.model = model
-        self.analysis_model = analysis_model
-        self.translation_model = translation_model
+    def __init__(
+        self,
+        model=None,
+        analysis_model=None,
+        translation_model=None
+    ):
+        self.model = model or os.getenv("OLLAMA_MODEL", "qwen3:latest")
+        self.analysis_model = analysis_model or os.getenv("OLLAMA_ANALYSIS_MODEL", "qwen3:latest")
+        self.translation_model = translation_model or os.getenv("OLLAMA_TRANSLATION_MODEL", "qwen3:latest")
         print(f"LLM Service initialized with main model: {self.model}", flush=True)
 
         # Initialize OpenCC for simplified to traditional Chinese conversion
@@ -50,7 +55,7 @@ class LLMService:
 
         # Per-request caps (backend .env). Does not replace host systemd OLLAMA_*; prevents huge default num_ctx from crashing ggml_cuda.
         self.ollama_num_ctx = _env_int_bounded("OLLAMA_NUM_CTX", 4096, 4096, 131072)
-        _tp = _env_int_bounded("OLLAMA_TRANSLATE_MAX_PARALLEL", 15, 1, 32)
+        _tp = _env_int_bounded("OLLAMA_TRANSLATE_MAX_PARALLEL", 20, 1, 64)
         self._translate_batch_sem = asyncio.Semaphore(_tp)
         print(
             f"[LLM] Ollama request options: num_ctx={self.ollama_num_ctx} | "
